@@ -4,15 +4,17 @@ import torch
 import torch.optim as optim
 
 
-class PaLMForeachSOAP(optim.Optimizer):
+class SFPaLMForeachSOAP(optim.Optimizer):
     def __init__(self, params, lr: float = 3e-3, betas=(0.9, 0.95), shampoo_beta: float = 0.95, eps: float = 1e-8,
                  weight_decay: float = 0.01, precondition_frequency: int = 2, max_precond_dim: int = 2048,  #
                  merge_dims: bool = True, precondition_1d: bool = False, normalize_grads: bool = False,
-                 data_format: str = "channels_first", correct_bias: bool = True, warmup_steps: int = 1):
+                 data_format: str = "channels_first", correct_bias: bool = True, warmup_steps: int = 1, r=0.0,
+                 weight_lr_power=2.0):
         defaults = {"lr": lr, "betas": betas, "shampoo_beta": shampoo_beta, "eps": eps, "weight_decay": weight_decay,
                     "precondition_frequency": precondition_frequency, "max_precond_dim": max_precond_dim,
                     "merge_dims": merge_dims, "precondition_1d": precondition_1d, "normalize_grads": normalize_grads,
-                    "correct_bias": correct_bias, 'warmup_steps': warmup_steps}
+                    "correct_bias": correct_bias, 'warmup_steps': warmup_steps, 'r': r,
+                    'weight_lr_power': weight_lr_power, 'train_mode': True}
         super().__init__(params, defaults)
         self._data_format = data_format
 
@@ -45,6 +47,30 @@ class PaLMForeachSOAP(optim.Optimizer):
         new_grad = grad.reshape(new_shape)
         return new_grad
 
+    def eval(self):
+        for group in self.param_groups:
+            train_mode = group['train_mode']
+            beta1, _ = group['betas']
+            if beta1 > 0 and train_mode:
+                for p in group['params']:
+                    state = self.state[p]
+                    if 'z' in state:
+                        # Set p.data to x
+                        p.data.lerp_(end=state['z'], weight=1 - 1 / beta1)
+                group['train_mode'] = False
+
+    def train(self):
+        for group in self.param_groups:
+            train_mode = group['train_mode']
+            beta1, _ = group['betas']
+            if beta1 > 0 and not train_mode:
+                for p in group['params']:
+                    state = self.state[p]
+                    if 'z' in state:
+                        # Set p.data to y
+                        p.data.lerp_(end=state['z'], weight=1 - beta1)
+                group['train_mode'] = True
+
     @torch.no_grad()
     def step(self, closure=None):
         """
@@ -72,8 +98,8 @@ class PaLMForeachSOAP(optim.Optimizer):
                 state = self.state[p]
                 step = state['step'] = state.get("step", -1) + 1
 
-                if "exp_avg" not in state:
-                    state["exp_avg"] = torch.zeros_like(grad)
+                if "z" not in state:
+                    state["z"] = torch.clone(p.data)
                     state["exp_avg_sq"] = torch.zeros_like(grad)
                     self.init_preconditioner(grad, state, precondition_frequency=group['precondition_frequency'],
                                              precondition_1d=group['precondition_1d'], shampoo_beta=(
@@ -87,50 +113,56 @@ class PaLMForeachSOAP(optim.Optimizer):
                 # i.e. projecting to the eigenbases of matrices in state['GG']
                 grad_projected = self.project(grad, state, merge_dims=group["merge_dims"],
                                               max_precond_dim=group['max_precond_dim'])
-                exp_avg, exp_avg_sq = state["exp_avg"], state["exp_avg_sq"]
-                vals.append((p, grad, grad_projected, exp_avg, exp_avg_sq))
+                z, exp_avg_sq = state["z"], state["exp_avg_sq"]
+                vals.append((p, grad, grad_projected, z, exp_avg_sq))
 
             if not vals:
                 continue
 
-            p_list, grad, grad_projected, exp_avg, exp_avg_sq = zip(*vals)
+            p_list, grad, grad_projected, z, exp_avg_sq = zip(*vals)
             beta1, beta2 = group["betas"]
 
             beta2 = 1 - step ** -0.8
-            bias_correction1 = 1.0 - beta1 ** step
             bias_correction2 = 1.0 - beta2 ** step
-            debiased1 = (1 - beta1) / bias_correction1
             debiased2 = (1 - beta2) / bias_correction2
 
             # Decay the first and second moment running average coefficient
             # In-place operations to update the averages at the same time
-            torch._foreach_lerp_(exp_avg, grad, debiased1)
             torch._foreach_mul_(exp_avg_sq, 1 - debiased2)
             torch._foreach_addcmul_(exp_avg_sq, grad_projected, grad_projected, value=debiased2)
-            del grad_projected
             denom = torch._foreach_sqrt(exp_avg_sq)
             torch._foreach_maximum_(denom, group["eps"])
 
-            for p, g, ea, d in zip(p_list, grad, exp_avg, denom):
+            for p, g, gp, d in zip(p_list, grad, grad_projected, denom):
                 state = self.state[p]
-                # Projecting the exponential moving average of gradients to the eigenbases of Shampoo's preconditioner
-                # i.e. projecting to the eigenbases of matrices in state['GG']
-                exp_avg_projected = self.project(ea, state, merge_dims=group["merge_dims"],
-                                                 max_precond_dim=group['max_precond_dim'])
-
                 # Projecting back the preconditioned (by Adam) exponential moving average of gradients
                 # to the original space
                 # CANT DO /= HERE AS EXP_AVG MAY POINT TO THE BUFFER
-                d.set_(self.project_back(exp_avg_projected / d, state, merge_dims=group["merge_dims"],
+                d.set_(self.project_back(gp / d, state, merge_dims=group["merge_dims"],
                                          max_precond_dim=group['max_precond_dim']))
                 self.update_preconditioner(g, state, max_precond_dim=group['max_precond_dim'],
                                            merge_dims=group["merge_dims"], precondition_1d=group["precondition_1d"])
 
-            # Why does this have to be rebiased here?
-            step_size = -group["lr"] * min(step / group['warmup_steps'], 1)
-            torch._foreach_add_(p_list, denom, alpha=step_size)  # projected back grad
-            if group["weight_decay"] > 0.0:
-                torch._foreach_add_(p_list, p_list, alpha=step_size * group["weight_decay"])
+            # Weight decay calculated at y
+            if group["weight_decay"] > 0:
+                torch._foreach_add_(grad, p_list, alpha=group["weight_decay"])
+
+            lr = group["lr"] * min(step / group['warmup_steps'], 1)
+            weight = lr ** group['weight_lr_power']
+            weight_sum = group['weight_sum'] = group.get('weight_sum', 0) + weight
+
+            try:
+                ckp1 = weight / weight_sum
+            except ZeroDivisionError:
+                ckp1 = 0
+
+            # These operations update y in-place,
+            # without computing x explicitly.
+            torch._foreach_lerp_(p_list, z, weight=ckp1)
+            torch._foreach_add_(p_list, grad, alpha=lr * (beta1 * (1 - ckp1) - 1))
+
+            # z step
+            torch._foreach_sub_(z, grad, alpha=lr)
         return loss
 
     def init_preconditioner(self, grad, state, precondition_frequency=10, shampoo_beta=0.95, max_precond_dim=10000,
