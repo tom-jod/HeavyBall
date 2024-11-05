@@ -97,8 +97,7 @@ class PaLMForeachSFAdamW(torch.optim.Optimizer):
             else:
                 sched = 1.0
 
-            bias_correction2 = 1 - beta2 ** (k + 1)
-            lr = group['lr'] * sched * math.sqrt(bias_correction2)
+            lr = group['lr'] * sched
 
             lr_max = group['lr_max'] = max(lr, group['lr_max'])
 
