@@ -227,12 +227,13 @@ class SFPaLMForeachSOAP(optim.Optimizer):
                  weight_decay: float = 0.01, precondition_frequency: int = 2, max_precond_dim: int = 2048,  #
                  merge_dims: bool = True, precondition_1d: bool = False, normalize_grads: bool = False,
                  data_format: str = "channels_first", correct_bias: bool = True, warmup_steps: int = 1, r=0.0,
-                 weight_lr_power=2.0):
+                 weight_lr_power=2.0, gradient_clip_val: float = 0.1):
         defaults = {"lr": lr, "beta": beta, "beta2_scale": beta2_scale, "eps": eps, "weight_decay": weight_decay,
                     "precondition_frequency": precondition_frequency, "max_precond_dim": max_precond_dim,
                     "merge_dims": merge_dims, "precondition_1d": precondition_1d, "normalize_grads": normalize_grads,
                     "correct_bias": correct_bias, 'warmup_steps': warmup_steps, 'r': r,
-                    'weight_lr_power': weight_lr_power, 'train_mode': True, 'step': -1}
+                    'weight_lr_power': weight_lr_power, 'train_mode': True, 'step': -1,
+                    'gradient_clip_val': gradient_clip_val}
         super().__init__(params, defaults)
         self._data_format = data_format
         self.rng = random.Random(0x120983109)
@@ -282,13 +283,30 @@ class SFPaLMForeachSOAP(optim.Optimizer):
 
             step = group['step'] = group.get("step", -1) + 1
 
+
             for p in group["params"]:
                 if p.grad is None:
                     continue
-
                 grad = p.grad
                 p.grad = None
+                vals.append((p, grad))
 
+            p_list, grad = zip(*vals)
+
+            # adaptive gradient clipping
+            if group["gradient_clip_val"] > 0:
+                p_norm = torch._foreach_norm(p_list)
+                g_norm = torch._foreach_norm(grad)
+                torch._foreach_maximum_(p_norm, 1e-3)
+                torch._foreach_maximum_(g_norm, group["eps"])
+                torch._foreach_div_(p_norm, g_norm)
+                torch._foreach_mul_(p_norm, group["gradient_clip_val"])
+                torch._foreach_minimum_(p_norm, 1)
+                torch._foreach_mul_(grad, p_norm)
+
+            vals = []
+
+            for p, grad in zip(p_list, grad):
                 state = self.state[p]
 
                 if "z" not in state:
