@@ -99,14 +99,17 @@ class PaLMForeachSOAP(optim.Optimizer):
             beta2 = 1 - step ** -0.8
             bias_correction1 = 1.0 - beta1 ** step
             bias_correction2 = 1.0 - beta2 ** step
-            debiased1 = (1 - beta1) / bias_correction1
-            debiased2 = (1 - beta2) / bias_correction2
+            old_debiased1 = beta1 / bias_correction1 * (1 - beta1 ** (step - 1))
+            old_debiased2 = beta2 / bias_correction2 * (1 - beta2 ** (step - 1))
+            new_debiased1 = (1 - beta1) / bias_correction1
+            new_debiased2 = (1 - beta2) / bias_correction2
 
             # Decay the first and second moment running average coefficient
             # In-place operations to update the averages at the same time
-            torch._foreach_lerp_(exp_avg, grad, debiased1)
-            torch._foreach_mul_(exp_avg_sq, 1 - debiased2)
-            torch._foreach_addcmul_(exp_avg_sq, grad_projected, grad_projected, value=debiased2)
+            torch._foreach_mul_(exp_avg, old_debiased1)
+            torch._foreach_add_(exp_avg, grad, alpha=new_debiased1)
+            torch._foreach_mul_(exp_avg_sq, old_debiased2)
+            torch._foreach_addcmul_(exp_avg_sq, grad_projected, grad_projected, value=new_debiased2)
             del grad_projected
             denom = torch._foreach_sqrt(exp_avg_sq)
             torch._foreach_maximum_(denom, group["eps"])

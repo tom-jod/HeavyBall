@@ -1,5 +1,3 @@
-import math
-
 import torch
 import torch.optim
 
@@ -124,17 +122,17 @@ class PaLMForeachSFAdamW(torch.optim.Optimizer):
 
             # Decay the first moment running average coefficient
             beta2 = 1 - (k + 1) ** -0.8
-            debiased = (1 - beta2) / (1 - beta2 ** (k + 1))
+            old_debiased = beta2 / (1 - beta2 ** (k + 1)) * (1 - beta2 ** k)
+            new_debiased = (1 - beta2) / (1 - beta2 ** (k + 1))
 
             # Decay the first and second moment running average coefficient
-            torch._foreach_mul_(exp_avg_sq, 1 - debiased)
-            torch._foreach_addcmul_(exp_avg_sq, grad, grad, value=debiased)
+            torch._foreach_mul_(exp_avg_sq, old_debiased)
+            torch._foreach_addcmul_(exp_avg_sq, grad, grad, value=new_debiased)
             denom = torch._foreach_sqrt(exp_avg_sq)
             torch._foreach_maximum_(denom, eps)
 
             # Normalize grad in-place for memory efficiency
             torch._foreach_div_(grad, denom)
-
 
             # Weight decay calculated at y
             if decay != 0:

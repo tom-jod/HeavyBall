@@ -124,12 +124,12 @@ class SFPaLMForeachSOAP(optim.Optimizer):
 
             beta2 = 1 - step ** -0.8
             bias_correction2 = 1.0 - beta2 ** step
-            debiased2 = (1 - beta2) / bias_correction2
-
+            old_debiased2 = beta2 / bias_correction2 * (1 - beta2 ** (step - 1))
+            new_debiased2 = (1 - beta2) / bias_correction2
             # Decay the first and second moment running average coefficient
             # In-place operations to update the averages at the same time
-            torch._foreach_mul_(exp_avg_sq, 1 - debiased2)
-            torch._foreach_addcmul_(exp_avg_sq, grad_projected, grad_projected, value=debiased2)
+            torch._foreach_mul_(exp_avg_sq, old_debiased2)
+            torch._foreach_addcmul_(exp_avg_sq, grad_projected, grad_projected, value=new_debiased2)
             denom = torch._foreach_sqrt(exp_avg_sq)
             torch._foreach_maximum_(denom, group["eps"])
 
@@ -159,10 +159,10 @@ class SFPaLMForeachSOAP(optim.Optimizer):
             # These operations update y in-place,
             # without computing x explicitly.
             torch._foreach_lerp_(p_list, z, weight=ckp1)
-            torch._foreach_add_(p_list, grad, alpha=lr * (beta1 * (1 - ckp1) - 1))
+            torch._foreach_add_(p_list, denom, alpha=lr * (beta1 * (1 - ckp1) - 1))
 
             # z step
-            torch._foreach_sub_(z, grad, alpha=lr)
+            torch._foreach_sub_(z, denom, alpha=lr)
         return loss
 
     def init_preconditioner(self, grad, state, precondition_frequency=10, shampoo_beta=0.95, max_precond_dim=10000,
