@@ -1,4 +1,3 @@
-import math
 import random
 import string
 from itertools import chain
@@ -144,7 +143,7 @@ def _get_orthogonal_matrix(mat):
 def _compute_ggt(grad, GG, max_precond_dim, merge_dims, precondition_1d, beta):
     if grad.dim() == 1:
         if precondition_1d and grad.shape[0] <= max_precond_dim:
-            GG[0].lerp_(grad.unsqueeze(1) @ grad.unsqueeze(0), 1 - beta)
+            GG[0].lerp_(grad.unsqueeze(1) * grad.unsqueeze(0), 1 - beta)
         return
 
     if merge_dims:
@@ -224,12 +223,12 @@ def _project(grad, Q, merge_dims, max_precond_dim, back: bool):
 
 
 class SFPaLMForeachSOAP(optim.Optimizer):
-    def __init__(self, params, lr: float = 3e-3, betas=(0.9, 0.95), shampoo_beta: float = 0.95, eps: float = 1e-8,
+    def __init__(self, params, lr: float = 3e-3, beta=0.9, beta2_scale: float = 0.8, eps: float = 1e-8,
                  weight_decay: float = 0.01, precondition_frequency: int = 2, max_precond_dim: int = 2048,  #
                  merge_dims: bool = True, precondition_1d: bool = False, normalize_grads: bool = False,
                  data_format: str = "channels_first", correct_bias: bool = True, warmup_steps: int = 1, r=0.0,
                  weight_lr_power=2.0):
-        defaults = {"lr": lr, "betas": betas, "shampoo_beta": shampoo_beta, "eps": eps, "weight_decay": weight_decay,
+        defaults = {"lr": lr, "beta": beta, "beta2_scale": beta2_scale, "eps": eps, "weight_decay": weight_decay,
                     "precondition_frequency": precondition_frequency, "max_precond_dim": max_precond_dim,
                     "merge_dims": merge_dims, "precondition_1d": precondition_1d, "normalize_grads": normalize_grads,
                     "correct_bias": correct_bias, 'warmup_steps': warmup_steps, 'r': r,
@@ -241,7 +240,7 @@ class SFPaLMForeachSOAP(optim.Optimizer):
     def eval(self):
         for group in self.param_groups:
             train_mode = group['train_mode']
-            beta1, _ = group['betas']
+            beta1 = group['beta']
             if beta1 > 0 and train_mode:
                 for p in group['params']:
                     state = self.state[p]
@@ -253,7 +252,7 @@ class SFPaLMForeachSOAP(optim.Optimizer):
     def train(self):
         for group in self.param_groups:
             train_mode = group['train_mode']
-            beta1, _ = group['betas']
+            beta1 = group['beta']
             if beta1 > 0 and not train_mode:
                 for p in group['params']:
                     state = self.state[p]
@@ -282,8 +281,6 @@ class SFPaLMForeachSOAP(optim.Optimizer):
             precondition_1d = group['precondition_1d']
 
             step = group['step'] = group.get("step", -1) + 1
-            shampoo_beta = group['shampoo_beta']
-            shampoo_beta = torch.zeros((), device=group['params'][0].device).fill_(shampoo_beta)
 
             for p in group["params"]:
                 if p.grad is None:
@@ -298,8 +295,7 @@ class SFPaLMForeachSOAP(optim.Optimizer):
                     state["z"] = torch.clone(p.data)
                     state["exp_avg_sq"] = torch.zeros_like(grad)
                     _init_preconditioner(grad, state, max_precond_dim, precondition_1d, merge_dims)
-                    _update_preconditioner(grad, state, max_precond_dim, merge_dims, precondition_1d, shampoo_beta,
-                                           True)
+                    _update_preconditioner(grad, state, max_precond_dim, merge_dims, precondition_1d, 1, True)
                     continue  # first step is skipped so that we never use the current gradients in the projection.
 
                 # Projecting gradients to the eigenbases of Shampoo's preconditioner
@@ -312,22 +308,21 @@ class SFPaLMForeachSOAP(optim.Optimizer):
                 continue
 
             p_list, grad, grad_projected, z, exp_avg_sq = zip(*vals)
-            beta1, beta2 = group["betas"]
+            beta1 = group["beta"]
 
-            beta2 = 1 - max(step, 1) ** -0.8
+            beta2 = 1 - max(step, 1) ** -group['beta2_scale']
             bias_correction2 = 1.0 - beta2 ** step
-            old_debiased2 = beta2 / bias_correction2 * (1 - beta2 ** (step - 1))
             new_debiased2 = (1 - beta2) / bias_correction2
+
             # Decay the first and second moment running average coefficient
             # In-place operations to update the averages at the same time
-            torch._foreach_mul_(exp_avg_sq, old_debiased2)
+            torch._foreach_mul_(exp_avg_sq, 1 - new_debiased2)
             torch._foreach_addcmul_(exp_avg_sq, grad_projected, grad_projected, value=new_debiased2)
             denom = torch._foreach_sqrt(exp_avg_sq)
             torch._foreach_maximum_(denom, group["eps"])
             torch._foreach_div_(grad_projected, denom)
 
             update_precond = group['step'] > 0 and group['step'] % group['precondition_frequency'] == 0
-            # update_precond = self.rng.random() < update_prob
 
             for p, g, gp in zip(p_list, grad, grad_projected):
                 state = self.state[p]
@@ -336,7 +331,7 @@ class SFPaLMForeachSOAP(optim.Optimizer):
                 # CANT DO /= HERE AS EXP_AVG MAY POINT TO THE BUFFER
                 set_(gp, _project(gp, state['Q'], merge_dims, max_precond_dim, back=True))
 
-                _update_preconditioner(g, state, max_precond_dim, merge_dims, precondition_1d, shampoo_beta,
+                _update_preconditioner(g, state, max_precond_dim, merge_dims, precondition_1d, 1 - new_debiased2,
                                        update_precond)
 
             # Weight decay calculated at y
