@@ -295,7 +295,7 @@ class SFPaLMForeachSOAP(optim.Optimizer):
                     state["z"] = torch.clone(p.data)
                     state["exp_avg_sq"] = torch.zeros_like(grad)
                     _init_preconditioner(grad, state, max_precond_dim, precondition_1d, merge_dims)
-                    _update_preconditioner(grad, state, max_precond_dim, merge_dims, precondition_1d, 1, True)
+                    _update_preconditioner(grad, state, max_precond_dim, merge_dims, precondition_1d, 0, True)
                     continue  # first step is skipped so that we never use the current gradients in the projection.
 
                 # Projecting gradients to the eigenbases of Shampoo's preconditioner
