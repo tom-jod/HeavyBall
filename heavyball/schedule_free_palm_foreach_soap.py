@@ -44,7 +44,7 @@ def _merge_dims(grad, max_precond_dim):
     return new_grad
 
 
-def set_(src: torch.Tensor, dst: torch.Tensor):
+def set_(dst: torch.Tensor, src: torch.Tensor):
     if dst.is_contiguous():
         dst.set_(src)
     else:
@@ -282,16 +282,7 @@ class SFPaLMForeachSOAP(optim.Optimizer):
             precondition_1d = group['precondition_1d']
 
             step = group['step'] = group.get("step", -1) + 1
-            beta2 = 1 - max(step, 1) ** -0.8
-            if beta2 == 0 or beta2 == 1:
-                update_prob = 1
-            else:
-                update_prob = math.log(group['shampoo_beta']) / math.log(beta2)
-            if update_prob >= 1:
-                update_prob = 1
-                shampoo_beta = beta2
-            else:
-                shampoo_beta = group['shampoo_beta']
+            shampoo_beta = group['shampoo_beta']
             shampoo_beta = torch.zeros((), device=group['params'][0].device).fill_(shampoo_beta)
 
             for p in group["params"]:
@@ -303,14 +294,12 @@ class SFPaLMForeachSOAP(optim.Optimizer):
 
                 state = self.state[p]
 
-                update_precond = self.rng.random() < update_prob
-
                 if "z" not in state:
                     state["z"] = torch.clone(p.data)
                     state["exp_avg_sq"] = torch.zeros_like(grad)
                     _init_preconditioner(grad, state, max_precond_dim, precondition_1d, merge_dims)
                     _update_preconditioner(grad, state, max_precond_dim, merge_dims, precondition_1d, shampoo_beta,
-                                           update_precond)
+                                           True)
                     continue  # first step is skipped so that we never use the current gradients in the projection.
 
                 # Projecting gradients to the eigenbases of Shampoo's preconditioner
@@ -325,6 +314,7 @@ class SFPaLMForeachSOAP(optim.Optimizer):
             p_list, grad, grad_projected, z, exp_avg_sq = zip(*vals)
             beta1, beta2 = group["betas"]
 
+            beta2 = 1 - max(step, 1) ** -0.8
             bias_correction2 = 1.0 - beta2 ** step
             old_debiased2 = beta2 / bias_correction2 * (1 - beta2 ** (step - 1))
             new_debiased2 = (1 - beta2) / bias_correction2
@@ -334,13 +324,18 @@ class SFPaLMForeachSOAP(optim.Optimizer):
             torch._foreach_addcmul_(exp_avg_sq, grad_projected, grad_projected, value=new_debiased2)
             denom = torch._foreach_sqrt(exp_avg_sq)
             torch._foreach_maximum_(denom, group["eps"])
+            torch._foreach_div_(grad_projected, denom)
 
-            for p, g, gp, d in zip(p_list, grad, grad_projected, denom):
+            update_precond = group['step'] > 0 and group['step'] % group['precondition_frequency'] == 0
+            # update_precond = self.rng.random() < update_prob
+
+            for p, g, gp in zip(p_list, grad, grad_projected):
                 state = self.state[p]
                 # Projecting back the preconditioned (by Adam) exponential moving average of gradients
                 # to the original space
                 # CANT DO /= HERE AS EXP_AVG MAY POINT TO THE BUFFER
-                set_(d, _project(gp / d, state['Q'], group["merge_dims"], group['max_precond_dim'], back=True))
+                set_(gp, _project(gp, state['Q'], merge_dims, max_precond_dim, back=True))
+
                 _update_preconditioner(g, state, max_precond_dim, merge_dims, precondition_1d, shampoo_beta,
                                        update_precond)
 
@@ -360,8 +355,8 @@ class SFPaLMForeachSOAP(optim.Optimizer):
             # These operations update y in-place,
             # without computing x explicitly.
             torch._foreach_lerp_(p_list, z, weight=ckp1)
-            torch._foreach_add_(p_list, denom, alpha=lr * (beta1 * (1 - ckp1) - 1))
+            torch._foreach_add_(p_list, grad_projected, alpha=lr * (beta1 * (1 - ckp1) - 1))
 
             # z step
-            torch._foreach_sub_(z, denom, alpha=lr)
+            torch._foreach_sub_(z, grad_projected, alpha=lr)
         return loss
