@@ -257,6 +257,34 @@ def _project(grad, Q, merge_dims, max_precond_dim, back: bool):
 # | 100,000     | 100.2     | 4,049 |            50,000 |              6,250 |
 # | 1,000,000   | 513       | 7,245 |           500,000 |             62,500 |
 class PrecondScheduleSFPaLMSOAP(optim.Optimizer):
+    """
+    SFPaLMForeachSOAP with preconditioner schedules
+
+    Sources:
+        Preconditioner Schedules:
+            Preconditioned Stochastic Gradient Descent
+            Xi-Lin Li, Omead Pooladzandi, Evan Walters
+            https://arxiv.org/abs/1512.04202
+            https://github.com/evanatyourservice/kron_torch
+            https://github.com/lixilinx/psgd_torch
+
+        Baseline SOAP:
+            SOAP: Improving and Stabilizing Shampoo using Adam
+            Nikhil Vyas, Depen Morwani, Rosie Zhao, Itai Shapira, David Brandfonbrener, Lucas Janson, Sham Kakade
+            https://arxiv.org/abs/2409.11321
+            https://github.com/nikhilvyas/SOAP
+
+        ScheduleFree
+            The Road Less Scheduled
+            Aaron Defazio, Xingyu Alice Yang, Harsh Mehta, Konstantin Mishchenko, Ahmed Khaled, Ashok Cutkosky
+            https://arxiv.org/abs/2405.15682
+            https://github.com/facebookresearch/schedule_free
+
+        Beta2 Schedule:
+            PaLM: Scaling Language Modeling with Pathways
+            Aakanksha Chowdhery, Sharan Narang, Jacob Devlin, Maarten Bosma, Gaurav Mishra, Adam Roberts, Paul Barham, Hyung Won Chung, Charles Sutton, Sebastian Gehrmann, Parker Schuh, Kensen Shi, Sasha Tsvyashchenko, Joshua Maynez, Abhishek Rao, Parker Barnes, Yi Tay, Noam Shazeer, Vinodkumar Prabhakaran, Emily Reif, Nan Du, Ben Hutchinson, Reiner Pope, James Bradbury, Jacob Austin, Michael Isard, Guy Gur-Ari, Pengcheng Yin, Toju Duke, Anselm Levskaya, Sanjay Ghemawat, Sunipa Dev, Henryk Michalewski, Xavier Garcia, Vedant Misra, Kevin Robinson, Liam Fedus, Denny Zhou, Daphne Ippolito, David Luan, Hyeontaek Lim, Barret Zoph, Alexander Spiridonov, Ryan Sepassi, David Dohan, Shivani Agrawal, Mark Omernick, Andrew M. Dai, Thanumalayan Sankaranarayana Pillai, Marie Pellat, Aitor Lewkowycz, Erica Moreira, Rewon Child, Oleksandr Polozov, Katherine Lee, Zongwei Zhou, Xuezhi Wang, Brennan Saeta, Mark Diaz, Orhan Firat, Michele Catasta, Jason Wei, Kathy Meier-Hellstern, Douglas Eck, Jeff Dean, Slav Petrov, Noah Fiedel
+            https://arxiv.org/abs/2204.02311
+    """
     def __init__(self, params, lr: float = 3e-3, beta=0.9, beta2_scale: float = 0.8, eps: float = 1e-8,
                  weight_decay: float = 0.01, precondition_frequency: int = 2, max_precond_dim: int = 2048,  #
                  merge_dims: bool = True, precondition_1d: bool = False, normalize_grads: bool = False,
