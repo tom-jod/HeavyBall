@@ -15,7 +15,7 @@ class PaLMForeachSOAP(optim.Optimizer):
             https://arxiv.org/abs/2409.11321
             https://github.com/nikhilvyas/SOAP
 
-        ScheduleFree
+        ScheduleFree:
             The Road Less Scheduled
             Aaron Defazio, Xingyu Alice Yang, Harsh Mehta, Konstantin Mishchenko, Ahmed Khaled, Ashok Cutkosky
             https://arxiv.org/abs/2405.15682
