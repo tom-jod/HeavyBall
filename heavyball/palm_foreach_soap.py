@@ -66,7 +66,7 @@ class PaLMForeachSOAP(optim.Optimizer):
                 if p.grad is None:
                     continue
 
-                grad = p.grad
+                grad = p.grad.float()
                 p.grad = None
 
                 state = self.state[p]
@@ -173,7 +173,7 @@ class PaLMForeachSOAP(optim.Optimizer):
 
         for mat in state['Q']:
             if len(mat) > 0:
-                grad = torch.tensordot(grad, mat, dims=[[0], [0]], )
+                grad = torch.tensordot(grad, mat, dims=[[0], [0]])
             else:
                 permute_order = list(range(1, len(grad.shape))) + [0]
                 grad = grad.permute(permute_order)
@@ -191,7 +191,7 @@ class PaLMForeachSOAP(optim.Optimizer):
         """
         if grad.dim() == 1:
             if precondition_1d and grad.shape[0] <= max_precond_dim:
-                state['GG'][0].lerp_(grad.unsqueeze(1) @ grad.unsqueeze(0), 1 - state['shampoo_beta'])
+                state['GG'][0].lerp_((grad.unsqueeze(1) @ grad.unsqueeze(0)).float(), 1 - state['shampoo_beta'])
         else:
             if merge_dims:
                 new_grad = self.merge_dims(grad, max_precond_dim)
@@ -199,14 +199,14 @@ class PaLMForeachSOAP(optim.Optimizer):
                     if sh <= max_precond_dim:
                         outer_product = torch.tensordot(new_grad, new_grad, dims=[[*chain(range(idx), range(idx + 1,
                                                                                                             len(new_grad.shape)))]] * 2, )
-                        state['GG'][idx].lerp_(outer_product, 1 - state['shampoo_beta'])
+                        state['GG'][idx].lerp_(outer_product.float(), 1 - state['shampoo_beta'])
             else:
                 for idx, sh in enumerate(grad.shape):
                     if sh <= max_precond_dim:
                         outer_product = torch.tensordot(grad, grad,  # Contracts across all dimensions except for k.
                                                         dims=[[*chain(range(idx),
                                                                       range(idx + 1, len(grad.shape)))]] * 2, )
-                        state['GG'][idx].lerp_(outer_product, 1 - state['shampoo_beta'])
+                        state['GG'][idx].lerp_(outer_product.float(), 1 - state['shampoo_beta'])
 
         if state['Q'] is None:
             state['Q'] = self.get_orthogonal_matrix(state['GG'])
