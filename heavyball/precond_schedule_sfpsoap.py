@@ -1,3 +1,5 @@
+import gc
+import math
 import random
 import string
 from itertools import chain
@@ -19,12 +21,18 @@ _einsum_base = string.ascii_lowercase + string.ascii_uppercase
 def _merge_dims(grad, max_precond_dim):
     """
     Merges dimensions of the gradient tensor till the product of the dimensions is less than or equal to max_precond_dim.
+
+    we don't want to merge fan-in into fan-out,
+    but we want to merge conv kernels into fan-in or at least merge the kernel
+    so, [128, 64, 3, 3] should result in [128, 576] or [128, 64, 9] instead of [73728] or [8192, 3, 3] the baseline
+    would've done
     """
     shape = grad.shape
     new_shape = []
 
     curr_shape = 1
-    for sh in shape:
+
+    for sh in shape[1:][::-1]:
         temp_shape = curr_shape * sh
         if temp_shape >= max_precond_dim:
             if curr_shape > 1:
@@ -35,6 +43,7 @@ def _merge_dims(grad, max_precond_dim):
                 curr_shape = 1
         else:
             curr_shape = temp_shape
+    new_shape = [*shape[:1], *new_shape[::-1]]
 
     if curr_shape > 1 or len(new_shape) == 0:
         new_shape.append(curr_shape)
@@ -48,6 +57,11 @@ def set_(dst: torch.Tensor, src: torch.Tensor):
         dst.set_(src)
     else:
         dst.copy_(src)
+
+
+def clean():
+    torch.cuda.empty_cache()
+    gc.collect()
 
 
 @decorator
@@ -76,26 +90,30 @@ def _get_orthogonal_matrix_QR(GG, Q, exp_avg_sq, max_precond_dim=10000, merge_di
     else:
         exp_avg_sq_new = exp_avg_sq
 
+    indices = []
+
     for ind, (m, o, q) in enumerate(zip(matrix, orth_matrix, Q)):
         if len(m) == 0:
+            indices.append(None)
             continue
 
-        est_eig = o.T @ m @ o
-        est_eig = torch.diag(est_eig)
+        est_eig = torch.einsum('ij,kj,ik->j', o, o, m)
         sort_idx = torch.argsort(est_eig, descending=True)
         del est_eig
-        torch.index_select(exp_avg_sq_new.clone(), ind, sort_idx, out=exp_avg_sq_new)
+        indices.append(sort_idx)
         o = o[:, sort_idx]
         power_iter = m @ o
-        del o
+        del m, o
         set_(q, torch.linalg.qr(power_iter)[0].contiguous())
         del power_iter
 
-    if exp_avg_sq_new.data_ptr() != exp_avg_sq.data_ptr():
-        if merge_dims:
-            exp_avg_sq_new = exp_avg_sq_new.reshape(orig_shape)
-        set_(exp_avg_sq, exp_avg_sq_new)
+    indices = tuple(slice(None) if ind is None else ind.view(*(1,) * i, -1, *(1,) * (exp_avg_sq_new.dim() - i - 1))  #
+                    for i, ind in enumerate(indices))
+    exp_avg_sq_new = exp_avg_sq_new[indices]
 
+    if merge_dims:
+        exp_avg_sq_new = exp_avg_sq_new.reshape(orig_shape)
+    set_(exp_avg_sq, exp_avg_sq_new)
 
 def _get_orthogonal_matrix(mat):
     """
@@ -120,22 +138,29 @@ def _get_orthogonal_matrix(mat):
         if len(m) == 0:
             final.append([])
             continue
-        try:
-            _, Q = torch.linalg.eigh(m + 1e-30 * torch.eye(m.shape[0], device=m.device))
-        except:
+
+        device, dtype = m.device, m.dtype
+        for modifier in (None, torch.double, 'cpu'):
+            clean()
+            if modifier is not None:
+                m = m.to(modifier)
+                clean()
             try:
-                _, Q = torch.linalg.eigh(m.to(torch.float64) + 1e-30 * torch.eye(m.shape[0], device=m.device))
-                Q = Q.to(m.dtype)
-            except torch.OutOfMemoryError:
-                _, Q = torch.linalg.eigh(
-                    m.to(device='cpu', dtype=torch.float64) + 1e-30 * torch.eye(m.shape[0], device='cpu',
-                                                                                dtype=torch.float64))
-                Q = Q.to(m.device, m.dtype)
+                Q = torch.linalg.eigh(m + 1e-30 * torch.eye(m.shape[0], device=m.device))[1].to(device=device, dtype=dtype)
+                break
+            except:
+                continue
+        else:
+            raise RuntimeError("Failed to compute eigenvalues.")
+
+        clean()
         Q = torch.flip(Q, [1])
 
         if not float_data:
             Q = Q.to(original_device).type(original_type)
         final.append(Q)
+
+    clean()
     return final
 
 
@@ -143,7 +168,7 @@ def _get_orthogonal_matrix(mat):
 def _compute_ggt(grad, GG, max_precond_dim, merge_dims, precondition_1d, beta):
     if grad.dim() == 1:
         if precondition_1d and grad.shape[0] <= max_precond_dim:
-            GG[0].lerp_((grad.unsqueeze(1) * grad.unsqueeze(0)).float(), 1 - beta)
+            GG[0].lerp_(grad.unsqueeze(1) * grad.unsqueeze(0), 1 - beta)
         return
 
     if merge_dims:
@@ -152,14 +177,14 @@ def _compute_ggt(grad, GG, max_precond_dim, merge_dims, precondition_1d, beta):
             if sh <= max_precond_dim:
                 outer_product = torch.tensordot(new_grad, new_grad,
                                                 dims=[[*chain(range(idx), range(idx + 1, len(new_grad.shape)))]] * 2)
-                GG[idx].lerp_(outer_product.float(), 1 - beta)
+                GG[idx].lerp_(outer_product, 1 - beta)
         return
 
     for idx, sh in enumerate(grad.shape):
         if sh <= max_precond_dim:
             outer_product = torch.tensordot(grad, grad,  # Contracts across all dimensions except for k.
                                             dims=[[*chain(range(idx), range(idx + 1, len(grad.shape)))]] * 2)
-            GG[idx].lerp_(outer_product.float(), 1 - beta)
+            GG[idx].lerp_(outer_product, 1 - beta)
 
 
 def _update_preconditioner(grad, state, max_precond_dim, merge_dims, precondition_1d, beta, update_precond):
@@ -222,18 +247,27 @@ def _project(grad, Q, merge_dims, max_precond_dim, back: bool):
     return grad
 
 
-class SFPaLMForeachSOAP(optim.Optimizer):
+# Default precond scheduler has the following values
+# | Input       | f⁻¹(Input) | Total | constant, every 2 | constant, every 16 |
+# |-------------|-----------|-------|-------------------|--------------------|
+# | 10          | 1.00005   |    10 |                 5 |                  0 |
+# | 100         | 1.026     |    99 |                50 |                  6 |
+# | 1,000       | 2.0       |   738 |               500 |                 62 |
+# | 10,000      | 14.3      | 2,168 |             5,000 |                625 |
+# | 100,000     | 100.2     | 4,049 |            50,000 |              6,250 |
+# | 1,000,000   | 513       | 7,245 |           500,000 |             62,500 |
+class PrecondScheduleSFPaLMSOAP(optim.Optimizer):
     def __init__(self, params, lr: float = 3e-3, beta=0.9, beta2_scale: float = 0.8, eps: float = 1e-8,
                  weight_decay: float = 0.01, precondition_frequency: int = 2, max_precond_dim: int = 2048,  #
                  merge_dims: bool = True, precondition_1d: bool = False, normalize_grads: bool = False,
                  data_format: str = "channels_first", correct_bias: bool = True, warmup_steps: int = 1, r=0.0,
-                 weight_lr_power=2.0, gradient_clip_val: float = 0.1):
+                 weight_lr_power=2.0, gradient_clip_val: float = 0.01, precond_scheduler=(1 / 3, 9)):
         defaults = {"lr": lr, "beta": beta, "beta2_scale": beta2_scale, "eps": eps, "weight_decay": weight_decay,
                     "precondition_frequency": precondition_frequency, "max_precond_dim": max_precond_dim,
                     "merge_dims": merge_dims, "precondition_1d": precondition_1d, "normalize_grads": normalize_grads,
                     "correct_bias": correct_bias, 'warmup_steps': warmup_steps, 'r': r,
                     'weight_lr_power': weight_lr_power, 'train_mode': True, 'step': -1,
-                    'gradient_clip_val': gradient_clip_val}
+                    'gradient_clip_val': gradient_clip_val, 'precond_scheduler': precond_scheduler}
         super().__init__(params, defaults)
         self._data_format = data_format
         self.rng = random.Random(0x120983109)
@@ -282,7 +316,6 @@ class SFPaLMForeachSOAP(optim.Optimizer):
             precondition_1d = group['precondition_1d']
 
             step = group['step'] = group.get("step", -1) + 1
-
 
             for p in group["params"]:
                 if p.grad is None:
@@ -340,13 +373,16 @@ class SFPaLMForeachSOAP(optim.Optimizer):
             torch._foreach_maximum_(denom, group["eps"])
             torch._foreach_div_(grad_projected, denom)
 
-            update_precond = group['step'] > 0 and group['step'] % group['precondition_frequency'] == 0
+            precond_prob = max(step, 1) ** group['precond_scheduler'][0]
+            precond_prob = math.log10(precond_prob)
+            precond_prob = precond_prob ** group['precond_scheduler'][1] + 1
+            precond_prob = 1 / precond_prob
+            update_precond = self.rng.random() < precond_prob
 
             for p, g, gp in zip(p_list, grad, grad_projected):
                 state = self.state[p]
                 # Projecting back the preconditioned (by Adam) exponential moving average of gradients
                 # to the original space
-                # CANT DO /= HERE AS EXP_AVG MAY POINT TO THE BUFFER
                 set_(gp, _project(gp, state['Q'], merge_dims, max_precond_dim, back=True))
 
                 _update_preconditioner(g, state, max_precond_dim, merge_dims, precondition_1d, 1 - new_debiased2,
