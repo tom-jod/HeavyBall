@@ -101,7 +101,7 @@ class PrecondScheduleSFPaLMSOAP(ScheduleFree):
 
                 if "z" not in state:
                     state["z"] = torch.clone(p.data)
-                    state["exp_avg_sq"] = torch.zeros_like(grad)
+                    state["exp_avg_sq"] = torch.zeros_like(grad, dtype=torch.float32)
                     _init_preconditioner(grad, state, max_precond_dim, precondition_1d, merge_dims)
                     _update_preconditioner(grad, state, max_precond_dim, merge_dims, precondition_1d, 0, True)
                     continue  # first step is skipped so that we never use the current gradients in the projection.

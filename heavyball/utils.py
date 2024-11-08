@@ -4,7 +4,6 @@ from typing import List
 
 import torch
 
-
 _mode = None
 
 if _mode is None:
@@ -20,8 +19,8 @@ def warmup(lr: float, step: int, warmup_steps: int):
     return lr * min(step / warmup_steps, 1)
 
 
-def schedule_free_(lr: float, weight_lr_power: float, weight_sum: float, beta1: float, parameters: List[torch.Tensor],
-                   z: List[torch.Tensor], grad: list[torch.Tensor]):
+def schedule_free_(lr: float, weight_lr_power: float, weight_sum: float, beta1: float,
+                   parameters: List[torch.Tensor], z: List[torch.Tensor], grad: list[torch.Tensor]):
     weight = lr ** weight_lr_power
     weight_sum = weight_sum + weight
 
@@ -32,11 +31,15 @@ def schedule_free_(lr: float, weight_lr_power: float, weight_sum: float, beta1: 
 
     # These operations update y in-place,
     # without computing x explicitly.
-    torch._foreach_lerp_(parameters, z, weight=ckp1)
-    torch._foreach_add_(parameters, grad, alpha=lr * (beta1 * (1 - ckp1) - 1))
+    p32 = [p.float() for p in parameters]
+    z32 = [z_.float() for z_ in z]
+    torch._foreach_lerp_(p32, z32, weight=ckp1)
+    torch._foreach_add_(p32, grad, alpha=lr * (beta1 * (1 - ckp1) - 1))
+    copy_stochastic_list_(parameters, p32)
 
     # z step
     torch._foreach_sub_(z, grad, alpha=lr)
+    copy_stochastic_list_(z, z32)
     return weight_sum
 
 
@@ -322,3 +325,39 @@ class ScheduleFree(torch.optim.Optimizer):
 
     def _step(self):
         raise NotImplementedError
+
+
+def copy_stochastic_list_(target: List[torch.Tensor], source: List[torch.Tensor]):
+    for t, s in zip(target, source):
+        if t.dtype == torch.bfloat16:
+            copy_stochastic_(t, s)
+        elif t.data_ptr() != s.data_ptr():
+            t.copy_(s)
+
+
+def copy_stochastic_(target: torch.Tensor, source: torch.Tensor):
+    """Taken as-is from https://github.com/pytorch/pytorch/issues/120376#issuecomment-1974828905"""
+    # create a random 16 bit integer
+    result = torch.randint_like(source, dtype=torch.int32, low=0, high=(1 << 16))
+
+    # add the random number to the lower 16 bit of the mantissa
+    result.add_(source.view(dtype=torch.int32))
+
+    # mask off the lower 16 bit of the mantissa
+    result.bitwise_and_(-65536)  # -65536 = FFFF0000 as a signed int32
+
+    # copy the higher 16 bit into the target tensor
+    target.copy_(result.view(dtype=torch.float32))
+
+
+def update_param_(param: List[torch.Tensor], update: List[torch.Tensor], lr: float, decay: float,
+                  add_fn: callable = None):
+    param32 = [p.float() for p in param]
+    update32 = [u.float() for u in update]
+    if decay > 0:
+        torch._foreach_mul_(param32, 1 - decay * lr)
+    if add_fn is None:
+        torch._foreach_add_(param32, update32, alpha=lr)
+    else:
+        add_fn(param32, update32, lr)
+    copy_stochastic_list_(param, param32)

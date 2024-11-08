@@ -22,10 +22,9 @@ args = {'betas': (0.9, 0.95), 'precondition_frequency': 2, 'merge_dims': False, 
         'max_precond_dim': 2 ** 16, 'beta': 0.9}
 
 
-opt = [PaLMForeachSOAP, SFPaLMForeachSOAP, PaLMForeachSFAdamW, PrecondScheduleSFPaLMSOAP,
+@pytest.mark.parametrize('opt', [PaLMForeachSOAP, SFPaLMForeachSOAP, PaLMForeachSFAdamW, PrecondScheduleSFPaLMSOAP,
                                  ForeachADOPT, ForeachSOAP, ForeachSFAdamW, ForeachLaProp, torch.optim.AdamW,
-                                 torch.optim.Adam]
-@pytest.mark.parametrize('opt', [ForeachADOPT, ForeachLaProp])
+                                 torch.optim.Adam])
 @pytest.mark.parametrize('dtype', [torch.float32, torch.bfloat16])
 @pytest.mark.parametrize('size,batch', [(128, 128)])
 @pytest.mark.parametrize('lr', [0.1, 1e-2, 1e-3, 1e-4])

@@ -1,7 +1,7 @@
 import torch
 import torch.optim
 
-from .utils import warmup, exp_avg_sq_, beta_debias
+from .utils import warmup, exp_avg_sq_, beta_debias, update_param_
 
 
 class ForeachAdamW(torch.optim.Optimizer):
@@ -34,8 +34,8 @@ class ForeachAdamW(torch.optim.Optimizer):
 
             for p in active_p:
                 if 'exp_avg' not in self.state[p]:
-                    self.state[p]['exp_avg'] = torch.zeros_like(p.data)
-                    self.state[p]['exp_avg_sq'] = torch.zeros_like(p.data)
+                    self.state[p]['exp_avg'] = torch.zeros_like(p.data, dtype=torch.float32)
+                    self.state[p]['exp_avg_sq'] = torch.zeros_like(p.data, dtype=torch.float32)
 
             y, grad, exp_avg_sq, exp_avg = zip(
                 *[(p.data, p.grad.float(), self.state[p]['exp_avg_sq'], self.state[p]['exp_avg']) for p in active_p])
@@ -46,11 +46,6 @@ class ForeachAdamW(torch.optim.Optimizer):
 
             # Normalize grad in-place for memory efficiency
             lr = -warmup(group['lr'], k + 1, group['warmup_steps'])
-
-            if decay != 0:
-                torch._foreach_add_(y, y, alpha=decay * lr)
-
-            torch._foreach_addcdiv_(y, exp_avg, denom, lr)
-
+            update_param_(y, exp_avg, lr, decay, lambda p, e, l: torch._foreach_addcdiv_(p, e, denom, l))
             group['k'] = k + 1
         return loss

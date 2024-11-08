@@ -72,7 +72,7 @@ class PaLMForeachSFAdamW(ScheduleFree):
             for p in active_p:
                 if 'z' not in self.state[p]:
                     self.state[p]['z'] = torch.clone(p.data)
-                    self.state[p]['exp_avg_sq'] = torch.zeros_like(p.data)
+                    self.state[p]['exp_avg_sq'] = torch.zeros_like(p.data, dtype=torch.float32)
 
             y, grad, exp_avg_sq, z = zip(
                 *[(p.data, p.grad.float(), self.state[p]['exp_avg_sq'], self.state[p]['z']) for p in active_p])

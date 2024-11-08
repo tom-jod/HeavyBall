@@ -1,7 +1,7 @@
 import torch
 import torch.optim as optim
 
-from .utils import _init_preconditioner, _update_preconditioner, _project, beta_debias, exp_avg_sq_
+from .utils import _init_preconditioner, _update_preconditioner, _project, beta_debias, exp_avg_sq_, update_param_
 
 
 class ForeachSOAP(optim.Optimizer):
@@ -99,8 +99,8 @@ class ForeachSOAP(optim.Optimizer):
                 step = state['step'] = state.get("step", -1) + 1
 
                 if "exp_avg" not in state:
-                    state["exp_avg"] = torch.zeros_like(grad)
-                    state["exp_avg_sq"] = torch.zeros_like(grad)
+                    state["exp_avg"] = torch.zeros_like(grad, dtype=torch.float32)
+                    state["exp_avg_sq"] = torch.zeros_like(grad, dtype=torch.float32)
                     _init_preconditioner(grad, state, max_precond_dim, precondition_1d, merge_dims)
                     _update_preconditioner(grad, state, max_precond_dim, merge_dims, precondition_1d, 0, True)
                     continue  # first step is skipped so that we never use the current gradients in the projection.
@@ -142,7 +142,5 @@ class ForeachSOAP(optim.Optimizer):
 
             # Why does this have to be rebiased here?
             step_size = -group["lr"] * min(step / group['warmup_steps'], 1)
-            torch._foreach_add_(p_list, denom, alpha=step_size)  # projected back grad
-            if group["weight_decay"] > 0.0:
-                torch._foreach_add_(p_list, p_list, alpha=step_size * group["weight_decay"])
+            update_param_(p_list, denom, step_size, group["weight_decay"])
         return loss
