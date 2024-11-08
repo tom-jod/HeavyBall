@@ -10,29 +10,31 @@ from torch.backends import cudnn
 
 from heavyball import PaLMForeachSOAP, SFPaLMForeachSOAP, PaLMForeachSFAdamW, PrecondScheduleSFPaLMSOAP
 
-dtype = torch.bfloat16
-steps = 100_000
-size = 2 ** 7
-batch = 128
+steps = 10_000
 
 cudnn.benchmark = True
 cudnn.deterministic = False
 torch.use_deterministic_algorithms(False)
 torch.set_float32_matmul_precision("high")  # highest: FP32, high: TF32, medium: bf16
 
-args = {'lr': 0.001, 'betas': (0.9, 0.95), 'precondition_frequency': 2, 'merge_dims': False, 'warmup_steps': 100,
+args = {'betas': (0.9, 0.95), 'precondition_frequency': 2, 'merge_dims': False, 'warmup_steps': 100,
         'max_precond_dim': 2 ** 16, 'beta': 0.9}
 
-@pytest.mark.parametrize('opt', [PaLMForeachSOAP, SFPaLMForeachSOAP, PaLMForeachSFAdamW, PrecondScheduleSFPaLMSOAP])
-def test_f(opt):
+@pytest.mark.parametrize('opt', [PaLMForeachSOAP, SFPaLMForeachSOAP, PaLMForeachSFAdamW, PrecondScheduleSFPaLMSOAP,
+                                 torch.optim.AdamW, torch.optim.Adam])
+@pytest.mark.parametrize('dtype', [torch.float32, torch.bfloat16])
+@pytest.mark.parametrize('size,batch', [(128, 128), (32, 128), (128, 32)])
+@pytest.mark.parametrize('lr', [1e-2, 3e-3, 1e-3, 3e-4, 1e-4])
+@pytest.mark.parametrize('weight_decay', [1e-2, 1e-6])
+def test_f(opt, dtype, size, batch, lr, weight_decay):
     torch.cuda.empty_cache()
     gc.collect()
-    time.sleep(5)
+    time.sleep(1)
     torch.manual_seed(0x1239121)
 
     a = nn.Linear(size, size, bias=False).cuda().to(dtype)
     signature = inspect.signature(opt)
-    o = opt(a.parameters(), **{k: v for k, v in args.items() if k in signature.parameters})
+    o = opt(a.parameters(), lr, weight_decay=weight_decay, **{k: v for k, v in args.items() if k in signature.parameters})
     torch.cuda.empty_cache()
     gc.collect()
 
@@ -47,10 +49,9 @@ def test_f(opt):
         o.zero_grad()
         with torch.no_grad():
             loss_mean += loss.detach() / steps
-    try:
+
+    if hasattr(o, 'eval'):
         o.eval()
-    except:
-        pass
     eval_loss = (a(inp) - inp).square().mean()
     dist = datetime.datetime.now() - start
     print(f'Took {dist} | {opt.__name__} | Loss: {loss.item()} - Eval: {eval_loss.item()} - Mean: {loss_mean.item()}')
