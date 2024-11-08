@@ -15,6 +15,8 @@ Currently (2024-11-08, 0.7.2), the recommended optimizer is `PrecondSchedulePaLM
 * **PaLM Beta2**: Fast initial
   convergence, [stable late convergence](https://x.com/_clashluke/status/1820810798693818761)
 * **ScheduleFree**: No learning rate schedule, but better convergence
+* [**Preconditioner Schedule**](https://github.com/lixilinx/psgd_torch/): Improved loss-per-step in early convergence,
+  better step-per-second in late convergence (explained below)
 
 ## Getting started
 
