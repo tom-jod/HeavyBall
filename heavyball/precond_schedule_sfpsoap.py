@@ -2,7 +2,6 @@ import gc
 import math
 import random
 import string
-from itertools import chain
 
 import torch
 import torch.optim as optim
@@ -97,14 +96,15 @@ def _get_orthogonal_matrix_QR(GG, Q, exp_avg_sq, max_precond_dim=10000, merge_di
             indices.append(None)
             continue
 
-        est_eig = torch.einsum('ij,kj,ik->j', o, o, m)
+        tmp = m @ o
+        del m
+        est_eig = torch.einsum('ij,ij->i', o, tmp)
+        del o
         sort_idx = torch.argsort(est_eig, descending=True)
         del est_eig
         indices.append(sort_idx)
-        o = o[:, sort_idx]
-        power_iter = m @ o
-        del m, o
-        set_(q, torch.linalg.qr(power_iter)[0].contiguous())
+        power_iter = tmp[:, sort_idx]
+        set_(q, torch.linalg.qr(power_iter)[0])
         del power_iter
 
     indices = tuple(slice(None) if ind is None else ind.view(*(1,) * i, -1, *(1,) * (exp_avg_sq_new.dim() - i - 1))  #
@@ -114,6 +114,7 @@ def _get_orthogonal_matrix_QR(GG, Q, exp_avg_sq, max_precond_dim=10000, merge_di
     if merge_dims:
         exp_avg_sq_new = exp_avg_sq_new.reshape(orig_shape)
     set_(exp_avg_sq, exp_avg_sq_new)
+
 
 def _get_orthogonal_matrix(mat):
     """
@@ -146,7 +147,8 @@ def _get_orthogonal_matrix(mat):
                 m = m.to(modifier)
                 clean()
             try:
-                Q = torch.linalg.eigh(m + 1e-30 * torch.eye(m.shape[0], device=m.device))[1].to(device=device, dtype=dtype)
+                Q = torch.linalg.eigh(m + 1e-30 * torch.eye(m.shape[0], device=m.device))[1].to(device=device,
+                                                                                                dtype=dtype)
                 break
             except:
                 continue
@@ -176,14 +178,13 @@ def _compute_ggt(grad, GG, max_precond_dim, merge_dims, precondition_1d, beta):
         for idx, sh in enumerate(new_grad.shape):
             if sh <= max_precond_dim:
                 outer_product = torch.tensordot(new_grad, new_grad,
-                                                dims=[[*chain(range(idx), range(idx + 1, len(new_grad.shape)))]] * 2)
+                                                dims=[[*range(idx), *range(idx + 1, len(new_grad.shape))]] * 2)
                 GG[idx].lerp_(outer_product, 1 - beta)
         return
 
     for idx, sh in enumerate(grad.shape):
         if sh <= max_precond_dim:
-            outer_product = torch.tensordot(grad, grad,  # Contracts across all dimensions except for k.
-                                            dims=[[*chain(range(idx), range(idx + 1, len(grad.shape)))]] * 2)
+            outer_product = torch.tensordot(grad, grad, dims=[[*range(idx), *range(idx + 1, len(grad.shape))]] * 2)
             GG[idx].lerp_(outer_product, 1 - beta)
 
 
@@ -285,6 +286,7 @@ class PrecondScheduleSFPaLMSOAP(optim.Optimizer):
             Aakanksha Chowdhery, Sharan Narang, Jacob Devlin, Maarten Bosma, Gaurav Mishra, Adam Roberts, Paul Barham, Hyung Won Chung, Charles Sutton, Sebastian Gehrmann, Parker Schuh, Kensen Shi, Sasha Tsvyashchenko, Joshua Maynez, Abhishek Rao, Parker Barnes, Yi Tay, Noam Shazeer, Vinodkumar Prabhakaran, Emily Reif, Nan Du, Ben Hutchinson, Reiner Pope, James Bradbury, Jacob Austin, Michael Isard, Guy Gur-Ari, Pengcheng Yin, Toju Duke, Anselm Levskaya, Sanjay Ghemawat, Sunipa Dev, Henryk Michalewski, Xavier Garcia, Vedant Misra, Kevin Robinson, Liam Fedus, Denny Zhou, Daphne Ippolito, David Luan, Hyeontaek Lim, Barret Zoph, Alexander Spiridonov, Ryan Sepassi, David Dohan, Shivani Agrawal, Mark Omernick, Andrew M. Dai, Thanumalayan Sankaranarayana Pillai, Marie Pellat, Aitor Lewkowycz, Erica Moreira, Rewon Child, Oleksandr Polozov, Katherine Lee, Zongwei Zhou, Xuezhi Wang, Brennan Saeta, Mark Diaz, Orhan Firat, Michele Catasta, Jason Wei, Kathy Meier-Hellstern, Douglas Eck, Jeff Dean, Slav Petrov, Noah Fiedel
             https://arxiv.org/abs/2204.02311
     """
+
     def __init__(self, params, lr: float = 3e-3, beta=0.9, beta2_scale: float = 0.8, eps: float = 1e-8,
                  weight_decay: float = 0.01, precondition_frequency: int = 2, max_precond_dim: int = 2048,  #
                  merge_dims: bool = True, precondition_1d: bool = False, normalize_grads: bool = False,
