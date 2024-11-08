@@ -5,6 +5,8 @@ A simple package of efficient optimizers
 The goal is not to thrive for completeness, full maintenance or abstraction, but instead to provide a simple
 largely static alternative to `torch.optim` with more and better optimizers.
 
+Currently (2024-11-08, 0.7.2), the recommended optimizer is `PrecondSchedulePaLMForeachSOAP`.
+
 ## Features
 
 * **Stochastic Rounding**: [FP32 convergence with BF16 parameters](https://github.com/pytorch/pytorch/issues/120376)
@@ -28,7 +30,7 @@ import heavyball
 model = torch.nn.Linear(16, 1)
 
 # Create an optimizer
-optimizer = heavyball.PaLMForeachSFAdamW(model.parameters(), lr=1e-3)
+optimizer = heavyball.PrecondSchedulePaLMForeachSOAP(model.parameters(), lr=1e-3)
 
 x = torch.randn(128, 16)
 y = torch.randn(128, 1)
@@ -53,5 +55,18 @@ for _ in range(1000):
 | **PaLMForeachSOAP**                  | ForeachSOAP with [PaLM's beta2 schedule](https://arxiv.org/abs/2204.02311)                                                                                        | + Faster convergence (loss-at-step)<br>+ Less control, but faster early and more stable late convergence<br>- more memory usage<br>- more hyperparameters<br>- higher overhead than AdamW (can be ammortized; better loss-at-second)                                                                                                  |
 | **SFPaLMForeachSOAP**                | ScheduleFree PaLMForeachSOAP                                                                                                                                      | + Fast convergence (loss-at-step)<br>+ less memory usage than PaLMForeachSOAP (more tham AdamW)<br>- slower initial convergence than PaLMForeachSOAP (but allows higher LRs)<br>- higher overhead than AdamW (can be ammortized)                                                                                                      |
 | **PrecondScheduleSFPaLMForeachSOAP** | SFPaLMForeachSOAP with [preconditioner schedule](https://github.com/lixilinx/psgd_torch/), matching the error of PrecondEvery=2 with the cost of PrecondEvery=512 | + Better initial convergence than SFPaLMForeachSOAP<br>+ Significantly faster (sec/it) later<br>+ less memory usage than PaLMForeachSOAP (more tham AdamW)<br>- slower initial convergence than PaLMForeachSOAP (but allows higher LRs)<br>- higher overhead than AdamW (can be ammortized), goes to 0 with increasing number of step |
-| **PrecondScheduleForeachSOAP**       | PrecondScheduleSFPaLMForeachSOAP without schedule-free                                                                                                            | + Best initial<br>+ Significantly faster (sec/it) later<br>- more memory usage than PrecondScheduleSFPaLMForeachSOAP <br>+ faster initial convergence than ForeachSOAP<br>- higher overhead than AdamW (can be ammortized), goes to 0 with increasing number of steps                                                                 |
+| **PrecondSchedulePaLMForeachSOAP**   | PrecondScheduleSFPaLMForeachSOAP without schedule-free                                                                                                            | + Best initial convergence<br>+ Significantly faster (sec/it) later<br>+ high stability<br>- more memory usage than PrecondScheduleSFPaLMForeachSOAP<br>- higher overhead than AdamW (can be ammortized), goes to 0 with increasing number of steps                                                                                   |
+| **PrecondScheduleForeachSOAP**       | PrecondScheduleSFPaLMForeachSOAP without PaLM's beta2 schedule                                                                                                    | + Better initial convergence<br>+ Significantly faster (sec/it) later<br>- more memory usage than PrecondScheduleSFPaLMForeachSOAP<br>- higher overhead than AdamW (can be ammortized), goes to 0 with increasing number of steps                                                                                                     |
 
+## Precond Schedule
+
+The default preconditioner schedule (`f`) would yield the following update intervals:
+
+| Steps     | Interval, `f` | Total (schedule) | Total (constant, every 2) | Total (constant, every 16) |
+|-----------|---------------|------------------|---------------------------|----------------------------|
+| 10        | 1.00005       | 10               | 5 (0.5x)                  | 0 (0.0x)                   |
+| 100       | 1.026         | 99               | 50 (0.5x)                 | 6 (0.1x)                   |
+| 1,000     | 2.0           | 738              | 500 (0.7x)                | 62 (0.1x)                  |
+| 10,000    | 14.3          | 2,168            | 5,000 (2.3x)              | 625 (0.3x)                 |
+| 100,000   | 100.2         | 4,049            | 50,000 (12.3x)            | 6,250 (1.5x)               |
+| 1,000,000 | 513           | 7,245            | 500,000 (69.0x)           | 62,500 (8.6x)              |

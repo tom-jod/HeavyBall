@@ -9,7 +9,7 @@ import torch.nn as nn
 from torch.backends import cudnn
 
 from heavyball import PaLMForeachSOAP, SFPaLMForeachSOAP, PaLMForeachSFAdamW, PrecondScheduleSFPaLMSOAP, ForeachADOPT, \
-    ForeachSOAP, ForeachSFAdamW, ForeachLaProp, PrecondScheduleForeachSOAP
+    ForeachSOAP, ForeachSFAdamW, ForeachLaProp, PrecondScheduleForeachSOAP, PrecondSchedulePaLMForeachSOAP
 
 steps = 10
 
@@ -24,7 +24,7 @@ args = {'betas': (0.9, 0.95), 'precondition_frequency': 2, 'merge_dims': False, 
 
 @pytest.mark.parametrize('opt', [PaLMForeachSOAP, SFPaLMForeachSOAP, PaLMForeachSFAdamW, PrecondScheduleSFPaLMSOAP,
                                  ForeachADOPT, ForeachSOAP, ForeachSFAdamW, ForeachLaProp, PrecondScheduleForeachSOAP,
-                                 torch.optim.AdamW, torch.optim.Adam])
+                                 PrecondSchedulePaLMForeachSOAP, torch.optim.AdamW, torch.optim.Adam])
 @pytest.mark.parametrize('dtype', [torch.float32, torch.bfloat16])
 @pytest.mark.parametrize('size,batch', [(128, 128)])
 @pytest.mark.parametrize('lr', [0.1, 1e-2, 1e-3, 1e-4])

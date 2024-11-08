@@ -6,15 +6,6 @@ from .utils import _init_preconditioner, _update_preconditioner, _project, set_,
     exp_avg_sq_, beta_debias, schedule_free_, warmup, ScheduleFree, precond_schedule
 
 
-# Default precond scheduler has the following values
-# | Input       | f⁻¹(Input) | Total | constant, every 2 | constant, every 16 |
-# |-------------|-----------|-------|-------------------|--------------------|
-# | 10          | 1.00005   |    10 |                 5 |                  0 |
-# | 100         | 1.026     |    99 |                50 |                  6 |
-# | 1,000       | 2.0       |   738 |               500 |                 62 |
-# | 10,000      | 14.3      | 2,168 |             5,000 |                625 |
-# | 100,000     | 100.2     | 4,049 |            50,000 |              6,250 |
-# | 1,000,000   | 513       | 7,245 |           500,000 |             62,500 |
 class PrecondScheduleSFPaLMSOAP(ScheduleFree):
     """
     SFPaLMForeachSOAP with preconditioner schedules
