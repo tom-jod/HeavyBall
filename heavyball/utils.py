@@ -92,6 +92,8 @@ def exp_avg_sq_(state, grad, beta2, eps):
 
 def adaptive_gradient_clipping_(parameters: List[torch.Tensor], gradients: List[torch.Tensor], clip_val: float,
                                 minimum: float = 1e-3, eps: float = 1e-8):
+    if clip_val <= 0:
+        return
     p_norm = torch._foreach_norm(parameters)
     g_norm = torch._foreach_norm(gradients)
     torch._foreach_maximum_(p_norm, minimum)
