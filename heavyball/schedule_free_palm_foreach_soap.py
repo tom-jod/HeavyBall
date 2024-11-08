@@ -33,7 +33,9 @@ class SFPaLMForeachSOAP(ScheduleFree):
                  weight_decay: float = 0.01, precondition_frequency: int = 2, max_precond_dim: int = 2048,  #
                  merge_dims: bool = True, precondition_1d: bool = False, normalize_grads: bool = False,
                  data_format: str = "channels_first", correct_bias: bool = True, warmup_steps: int = 1, r=0.0,
-                 weight_lr_power=2.0, gradient_clip_val: float = 0.1):
+                 weight_lr_power=2.0, gradient_clip_val: float = 0.1, betas=(None, None)):
+        if betas[0] is not None:
+            beta = betas[0]
         defaults = {"lr": lr, "beta": beta, "beta2_scale": beta2_scale, "eps": eps, "weight_decay": weight_decay,
                     "precondition_frequency": precondition_frequency, "max_precond_dim": max_precond_dim,
                     "merge_dims": merge_dims, "precondition_1d": precondition_1d, "normalize_grads": normalize_grads,

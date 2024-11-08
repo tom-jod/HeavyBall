@@ -5,12 +5,13 @@ from .utils import schedule_free_, warmup, ScheduleFree, exp_avg_sq_, beta_debia
 
 
 class PaLMForeachSFAdamW(ScheduleFree):
-    def __init__(self, params, lr=0.0025, betas=(0.9, 0.99), eps=1e-8, weight_decay=0, warmup_steps=0, r=0.0,
-                 weight_lr_power=2.0, foreach=hasattr(torch, "_foreach_mul_")):
-
-        defaults = dict(lr=lr, betas=betas, eps=eps, r=r, k=0, warmup_steps=warmup_steps, train_mode=True,
+    def __init__(self, params, lr=0.0025, beta=0.9, betas=(None, None), eps=1e-8, weight_decay=0, warmup_steps=0, r=0.0,
+                 weight_lr_power=2.0, beta2_scale: float = 0.8):
+        if betas[0] is not None:
+            beta = betas[0]
+        defaults = dict(lr=lr, beta=beta, eps=eps, r=r, k=0, warmup_steps=warmup_steps, train_mode=True,
                         weight_sum=0.0, lr_max=-1.0, weight_lr_power=weight_lr_power, weight_decay=weight_decay,
-                        foreach=foreach)
+                        beta2_scale=beta2_scale)
         super().__init__(params, defaults)
 
     def step(self, closure=None):
@@ -44,7 +45,7 @@ class PaLMForeachSFAdamW(ScheduleFree):
                 *[(p.data, p.grad.float(), self.state[p]['exp_avg_sq'], self.state[p]['z']) for p in active_p])
 
             # Decay the first moment running average coefficient
-            beta2 = 1 - (k + 1) ** -0.8
+            beta2 = 1 - (k + 1) ** -group['beta2_scale']
             old_debiased = beta_debias(beta2, k + 1)
 
             # Decay the first and second moment running average coefficient
@@ -58,7 +59,7 @@ class PaLMForeachSFAdamW(ScheduleFree):
                 torch._foreach_add_(grad, y, alpha=decay)
 
             lr = warmup(group['lr'], k + 1, group['warmup_steps'])
-            group['weight_sum'] = schedule_free_(lr, group['weight_lr_power'], group['weight_sum'], group['betas'][0],
+            group['weight_sum'] = schedule_free_(lr, group['weight_lr_power'], group['weight_sum'], group['beta'],
                                                  y, z, grad)
 
             group['k'] = k + 1

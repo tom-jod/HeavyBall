@@ -27,14 +27,16 @@ class PaLMForeachSOAP(optim.Optimizer):
             https://arxiv.org/abs/2204.02311
     """
 
-    def __init__(self, params, lr: float = 3e-3, betas=(0.9, 0.95), shampoo_beta: float = 0.95, eps: float = 1e-8,
+    def __init__(self, params, lr: float = 3e-3, beta=0.9, betas=(None, None), shampoo_beta: float = 0.95, eps: float = 1e-8,
                  weight_decay: float = 0.01, precondition_frequency: int = 2, max_precond_dim: int = 2048,  #
                  merge_dims: bool = True, precondition_1d: bool = False, normalize_grads: bool = False,
-                 data_format: str = "channels_first", correct_bias: bool = True, warmup_steps: int = 1):
-        defaults = {"lr": lr, "betas": betas, "shampoo_beta": shampoo_beta, "eps": eps, "weight_decay": weight_decay,
+                 data_format: str = "channels_first", correct_bias: bool = True, warmup_steps: int = 1, beta2_scale: float = 0.8):
+        if betas[0] is not None:
+            beta = betas[0]
+        defaults = {"lr": lr, "beta": beta, "shampoo_beta": shampoo_beta, "eps": eps, "weight_decay": weight_decay,
                     "precondition_frequency": precondition_frequency, "max_precond_dim": max_precond_dim,
                     "merge_dims": merge_dims, "precondition_1d": precondition_1d, "normalize_grads": normalize_grads,
-                    "correct_bias": correct_bias, 'warmup_steps': warmup_steps}
+                    "correct_bias": correct_bias, 'warmup_steps': warmup_steps, 'beta2_scale': beta2_scale}
         super().__init__(params, defaults)
         self._data_format = data_format
 
@@ -87,9 +89,9 @@ class PaLMForeachSOAP(optim.Optimizer):
                 continue
 
             p_list, grad, grad_projected, exp_avg, exp_avg_sq = zip(*vals)
-            beta1, beta2 = group["betas"]
+            beta1 = group["beta"]
 
-            beta2 = 1 - step ** -0.8
+            beta2 = 1 - step ** -group['beta2_scale']
             old_debiased1 = beta_debias(beta1, step)
             old_debiased2 = beta_debias(beta2, step)
 
