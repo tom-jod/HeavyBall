@@ -1,4 +1,5 @@
 import gc
+import math
 import string
 from typing import List
 
@@ -19,8 +20,8 @@ def warmup(lr: float, step: int, warmup_steps: int):
     return lr * min(step / warmup_steps, 1)
 
 
-def schedule_free_(lr: float, weight_lr_power: float, weight_sum: float, beta1: float,
-                   parameters: List[torch.Tensor], z: List[torch.Tensor], grad: list[torch.Tensor]):
+def schedule_free_(lr: float, weight_lr_power: float, weight_sum: float, beta1: float, parameters: List[torch.Tensor],
+                   z: List[torch.Tensor], grad: list[torch.Tensor]):
     weight = lr ** weight_lr_power
     weight_sum = weight_sum + weight
 
@@ -308,7 +309,10 @@ class ScheduleFree(torch.optim.Optimizer):
                     state = self.state[p]
                     if 'z' in state:
                         # Set p.data to x
-                        p.data.lerp_(end=state['z'], weight=1 - 1 / beta1)
+                        z = state['z'].float()
+                        p32 = p.data.float()
+                        p32.lerp_(end=z, weight=1 - 1 / beta1)
+                        copy_stochastic_(p.data, p32)
                 group['train_mode'] = False
 
     def train(self):
@@ -319,8 +323,10 @@ class ScheduleFree(torch.optim.Optimizer):
                 for p in group['params']:
                     state = self.state[p]
                     if 'z' in state:
-                        # Set p.data to y
-                        p.data.lerp_(end=state['z'], weight=1 - beta1)
+                        z = state['z'].float()
+                        p32 = p.data.float()
+                        p32.lerp_(end=z, weight=1 - beta1)
+                        copy_stochastic_(p.data, p32)
                 group['train_mode'] = True
 
     def _step(self):
@@ -336,6 +342,9 @@ def copy_stochastic_list_(target: List[torch.Tensor], source: List[torch.Tensor]
 
 
 def copy_stochastic_(target: torch.Tensor, source: torch.Tensor):
+    if target.data_ptr() == source.data_ptr():
+        return
+
     """Taken as-is from https://github.com/pytorch/pytorch/issues/120376#issuecomment-1974828905"""
     # create a random 16 bit integer
     result = torch.randint_like(source, dtype=torch.int32, low=0, high=(1 << 16))
@@ -361,3 +370,12 @@ def update_param_(param: List[torch.Tensor], update: List[torch.Tensor], lr: flo
     else:
         add_fn(param32, update32, lr)
     copy_stochastic_list_(param, param32)
+
+
+def precond_schedule(step, precond_scheduler, rng):
+    precond_prob = max(step, 1) ** precond_scheduler[0]
+    precond_prob = math.log10(precond_prob)
+    precond_prob = precond_prob ** precond_scheduler[1] + 1
+    precond_prob = 1 / precond_prob
+    update_precond = rng.random() < precond_prob
+    return update_precond

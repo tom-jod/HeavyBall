@@ -38,35 +38,6 @@ class ForeachSOAP(optim.Optimizer):
         super().__init__(params, defaults)
         self._data_format = data_format
 
-    def merge_dims(self, grad, max_precond_dim):
-        """
-        Merges dimensions of the gradient tensor till the product of the dimensions is less than or equal to max_precond_dim.
-        """
-        assert self._data_format in ["channels_first", "channels_last"]
-        if self._data_format == "channels_last" and grad.dim() == 4:
-            grad = grad.permute(0, 3, 1, 2)
-        shape = grad.shape
-        new_shape = []
-
-        curr_shape = 1
-        for sh in shape:
-            temp_shape = curr_shape * sh
-            if temp_shape > max_precond_dim:
-                if curr_shape > 1:
-                    new_shape.append(curr_shape)
-                    curr_shape = sh
-                else:
-                    new_shape.append(sh)
-                    curr_shape = 1
-            else:
-                curr_shape = temp_shape
-
-        if curr_shape > 1 or len(new_shape) == 0:
-            new_shape.append(curr_shape)
-
-        new_grad = grad.reshape(new_shape)
-        return new_grad
-
     @torch.no_grad()
     def step(self, closure=None):
         """

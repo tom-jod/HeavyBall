@@ -1,11 +1,9 @@
-import math
 import random
 
 import torch
-import torch.optim as optim
 
 from .utils import _init_preconditioner, _update_preconditioner, _project, set_, adaptive_gradient_clipping_, \
-    exp_avg_sq_, beta_debias, schedule_free_, warmup, ScheduleFree
+    exp_avg_sq_, beta_debias, schedule_free_, warmup, ScheduleFree, precond_schedule
 
 
 # Default precond scheduler has the following values
@@ -126,11 +124,7 @@ class PrecondScheduleSFPaLMSOAP(ScheduleFree):
             denom = exp_avg_sq_(exp_avg_sq, grad_projected, new_debiased2, group['eps'])
             torch._foreach_div_(grad_projected, denom)
 
-            precond_prob = max(step, 1) ** group['precond_scheduler'][0]
-            precond_prob = math.log10(precond_prob)
-            precond_prob = precond_prob ** group['precond_scheduler'][1] + 1
-            precond_prob = 1 / precond_prob
-            update_precond = self.rng.random() < precond_prob
+            update_precond = precond_schedule(step, group['precond_scheduler'], self.rng)
 
             for p, g, gp in zip(p_list, grad, grad_projected):
                 state = self.state[p]

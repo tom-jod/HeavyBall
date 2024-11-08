@@ -6,9 +6,9 @@ from .schedule_free_palm_foreach_soap import SFPaLMForeachSOAP
 from .foreach_sfadamw import ForeachSFAdamW
 from .foreach_laprop import ForeachLaProp
 from .foreach_adopt import ForeachADOPT
-
+from .precond_schedule_foreach_soap import PrecondScheduleForeachSOAP
 
 PalmForEachSoap = PaLMForeachSOAP
 
 __all__ = ['PalmForEachSoap', 'PaLMForeachSFAdamW', 'PaLMForeachSOAP', 'SFPaLMForeachSOAP', 'PrecondScheduleSFPaLMSOAP',
-           'ForeachSOAP', 'ForeachSFAdamW', 'ForeachLaProp', 'ForeachADOPT']
+           'ForeachSOAP', 'ForeachSFAdamW', 'ForeachLaProp', 'ForeachADOPT', 'PrecondScheduleForeachSOAP']
