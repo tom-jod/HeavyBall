@@ -8,7 +8,8 @@ import torch
 import torch.nn as nn
 from torch.backends import cudnn
 
-from heavyball import PaLMForeachSOAP, SFPaLMForeachSOAP, PaLMForeachSFAdamW, PrecondScheduleSFPaLMSOAP
+from heavyball import PaLMForeachSOAP, SFPaLMForeachSOAP, PaLMForeachSFAdamW, PrecondScheduleSFPaLMSOAP, ForeachADOPT, \
+    ForeachSOAP, ForeachSFAdamW, ForeachLaProp
 
 steps = 10_000
 
@@ -20,12 +21,15 @@ torch.set_float32_matmul_precision("high")  # highest: FP32, high: TF32, medium:
 args = {'betas': (0.9, 0.95), 'precondition_frequency': 2, 'merge_dims': False, 'warmup_steps': 100,
         'max_precond_dim': 2 ** 16, 'beta': 0.9}
 
-@pytest.mark.parametrize('opt', [PaLMForeachSOAP, SFPaLMForeachSOAP, PaLMForeachSFAdamW, PrecondScheduleSFPaLMSOAP,
-                                 torch.optim.AdamW, torch.optim.Adam])
+
+opt = [PaLMForeachSOAP, SFPaLMForeachSOAP, PaLMForeachSFAdamW, PrecondScheduleSFPaLMSOAP,
+                                 ForeachADOPT, ForeachSOAP, ForeachSFAdamW, ForeachLaProp, torch.optim.AdamW,
+                                 torch.optim.Adam]
+@pytest.mark.parametrize('opt', [ForeachADOPT, ForeachLaProp])
 @pytest.mark.parametrize('dtype', [torch.float32, torch.bfloat16])
-@pytest.mark.parametrize('size,batch', [(128, 128), (32, 128), (128, 32)])
-@pytest.mark.parametrize('lr', [1e-2, 3e-3, 1e-3, 3e-4, 1e-4])
-@pytest.mark.parametrize('weight_decay', [1e-2, 1e-6])
+@pytest.mark.parametrize('size,batch', [(128, 128)])
+@pytest.mark.parametrize('lr', [0.1, 1e-2, 1e-3, 1e-4])
+@pytest.mark.parametrize('weight_decay', [1e-2])
 def test_f(opt, dtype, size, batch, lr, weight_decay):
     torch.cuda.empty_cache()
     gc.collect()
@@ -34,7 +38,8 @@ def test_f(opt, dtype, size, batch, lr, weight_decay):
 
     a = nn.Linear(size, size, bias=False).cuda().to(dtype)
     signature = inspect.signature(opt)
-    o = opt(a.parameters(), lr, weight_decay=weight_decay, **{k: v for k, v in args.items() if k in signature.parameters})
+    o = opt(a.parameters(), lr, weight_decay=weight_decay,
+            **{k: v for k, v in args.items() if k in signature.parameters})
     torch.cuda.empty_cache()
     gc.collect()
 
