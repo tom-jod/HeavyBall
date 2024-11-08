@@ -4,7 +4,7 @@ import torch
 import torch.optim as optim
 
 from .utils import _init_preconditioner, _update_preconditioner, _project, beta_debias, exp_avg_sq_, update_param_, \
-    precond_schedule
+    precond_schedule, set_
 
 
 class PrecondSchedulePaLMForeachSOAP(optim.Optimizer):
@@ -115,7 +115,7 @@ class PrecondSchedulePaLMForeachSOAP(optim.Optimizer):
                 # Projecting back the preconditioned (by Adam) exponential moving average of gradients
                 # to the original space
                 # CANT DO /= HERE AS EXP_AVG MAY POINT TO THE BUFFER
-                d.set_(_project(exp_avg_projected / d, state['Q'], merge_dims, max_precond_dim, True))
+                set_(d, _project(exp_avg_projected / d, state['Q'], merge_dims, max_precond_dim, True))
 
                 _update_preconditioner(g, state, max_precond_dim, merge_dims, precondition_1d, 1 - old_debiased2,
                                        update_precond)

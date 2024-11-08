@@ -105,7 +105,7 @@ def adaptive_gradient_clipping_(parameters: List[torch.Tensor], gradients: List[
 
 
 def set_(dst: torch.Tensor, src: torch.Tensor):
-    if src.is_contiguous():
+    if src.is_contiguous() and dst.is_contiguous() and src.dtype == dst.dtype:
         dst.set_(src)
     else:
         dst.copy_(src)
