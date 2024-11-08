@@ -3,7 +3,7 @@ import random
 import torch
 import torch.optim as optim
 
-from .utils import _init_preconditioner, _update_preconditioner, _project, beta_debias, exp_avg_sq_, update_param_, \
+from .utils import init_preconditioner, update_preconditioner, project, beta_debias, exp_avg_sq_, update_param_, \
     precond_schedule, set_
 
 
@@ -79,13 +79,13 @@ class PrecondSchedulePaLMForeachSOAP(optim.Optimizer):
                 if "exp_avg" not in state:
                     state["exp_avg"] = torch.zeros_like(grad, dtype=torch.float32)
                     state["exp_avg_sq"] = torch.zeros_like(grad, dtype=torch.float32)
-                    _init_preconditioner(grad, state, max_precond_dim, precondition_1d, merge_dims)
-                    _update_preconditioner(grad, state, max_precond_dim, merge_dims, precondition_1d, 0, True)
+                    init_preconditioner(grad, state, max_precond_dim, precondition_1d, merge_dims)
+                    update_preconditioner(grad, state, max_precond_dim, merge_dims, precondition_1d, 0, True)
                     continue  # first step is skipped so that we never use the current gradients in the projection.
 
                 # Projecting gradients to the eigenbases of Shampoo's preconditioner
                 # i.e. projecting to the eigenbases of matrices in state['GG']
-                grad_projected = _project(grad, state['Q'], merge_dims, max_precond_dim, False)
+                grad_projected = project(grad, state['Q'], merge_dims, max_precond_dim, False)
                 exp_avg, exp_avg_sq = state["exp_avg"], state["exp_avg_sq"]
                 vals.append((p, grad, grad_projected, exp_avg, exp_avg_sq))
 
@@ -110,15 +110,16 @@ class PrecondSchedulePaLMForeachSOAP(optim.Optimizer):
                 state = self.state[p]
                 # Projecting the exponential moving average of gradients to the eigenbases of Shampoo's preconditioner
                 # i.e. projecting to the eigenbases of matrices in state['GG']
-                exp_avg_projected = _project(ea, state['Q'], merge_dims, max_precond_dim, False)
+                exp_avg_projected = project(ea, state['Q'], merge_dims, max_precond_dim, False)
 
                 # Projecting back the preconditioned (by Adam) exponential moving average of gradients
                 # to the original space
                 # CANT DO /= HERE AS EXP_AVG MAY POINT TO THE BUFFER
-                set_(d, _project(exp_avg_projected / d, state['Q'], merge_dims, max_precond_dim, True))
+                exp_avg_projected = exp_avg_projected / d
+                set_(d, project(exp_avg_projected, state['Q'], merge_dims, max_precond_dim, True))
 
-                _update_preconditioner(g, state, max_precond_dim, merge_dims, precondition_1d, 1 - old_debiased2,
-                                       update_precond)
+                update_preconditioner(g, state, max_precond_dim, merge_dims, precondition_1d, 1 - old_debiased2,
+                                      update_precond)
 
             # Why does this have to be rebiased here?
             step_size = -group["lr"] * min(step / group['warmup_steps'], 1)

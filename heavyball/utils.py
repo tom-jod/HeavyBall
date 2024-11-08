@@ -44,7 +44,7 @@ def schedule_free_(lr: float, weight_lr_power: float, weight_sum: float, beta1: 
     return weight_sum
 
 
-def _merge_dims(grad, max_precond_dim):
+def dim_merger(grad, max_precond_dim):
     """
     Merges dimensions of the gradient tensor till the product of the dimensions is less than or equal to max_precond_dim.
 
@@ -117,7 +117,7 @@ def clean():
 
 
 @decorator
-def _get_orthogonal_matrix_QR(GG, Q, exp_avg_sq, max_precond_dim=10000, merge_dims=False):
+def get_orthogonal_matrix_QR(GG, Q, exp_avg_sq, max_precond_dim=10000, merge_dims=False):
     """
     Computes the eigenbases of the preconditioner using one round of power iteration
     followed by torch.linalg.qr decomposition.
@@ -138,7 +138,7 @@ def _get_orthogonal_matrix_QR(GG, Q, exp_avg_sq, max_precond_dim=10000, merge_di
 
     orig_shape = exp_avg_sq.shape
     if merge_dims:
-        exp_avg_sq_new = _merge_dims(exp_avg_sq, max_precond_dim)
+        exp_avg_sq_new = dim_merger(exp_avg_sq, max_precond_dim)
     else:
         exp_avg_sq_new = exp_avg_sq
 
@@ -169,7 +169,7 @@ def _get_orthogonal_matrix_QR(GG, Q, exp_avg_sq, max_precond_dim=10000, merge_di
     set_(exp_avg_sq, exp_avg_sq_new)
 
 
-def _get_orthogonal_matrix(mat):
+def get_orthogonal_matrix(mat):
     """
     Computes the eigenbases of the preconditioner using torch.linalg.eigh decomposition.
     """
@@ -195,64 +195,59 @@ def _get_orthogonal_matrix(mat):
 
         device, dtype = m.device, m.dtype
         for modifier in (None, torch.double, 'cpu'):
-            clean()
             if modifier is not None:
                 m = m.to(modifier)
-                clean()
             try:
                 Q = torch.linalg.eigh(m + 1e-30 * torch.eye(m.shape[0], device=m.device))[1].to(device=device,
                                                                                                 dtype=dtype)
                 break
-            except:
+            except torch.OutOfMemoryError:
+                pass
+            except RuntimeError:  # failed to compute eigenvalues
                 continue
+            clean()
         else:
             raise RuntimeError("Failed to compute eigenvalues.")
 
-        clean()
         Q = torch.flip(Q, [1])
 
         if not float_data:
             Q = Q.to(original_device).type(original_type)
         final.append(Q)
 
-    clean()
     return final
 
 
 @decorator
-def _compute_ggt(grad, GG, max_precond_dim, merge_dims, precondition_1d, beta):
-    if grad.dim() == 1:
-        if precondition_1d and grad.shape[0] <= max_precond_dim:
-            GG[0].lerp_((grad.unsqueeze(1) * grad.unsqueeze(0)).float(), 1 - beta)
+def compute_ggt(grad, GG, max_precond_dim, merge_dims, precondition_1d, beta):
+    if grad.dim() == 1 and (not precondition_1d or grad.shape[0] > max_precond_dim):
         return
 
     if merge_dims:
-        new_grad = _merge_dims(grad, max_precond_dim)
-        for idx, sh in enumerate(new_grad.shape):
-            if sh <= max_precond_dim:
-                outer_product = torch.tensordot(new_grad, new_grad,
-                                                dims=[[*range(idx), *range(idx + 1, len(new_grad.shape))]] * 2)
-                GG[idx].lerp_(outer_product.float(), 1 - beta)
-        return
+        grad = dim_merger(grad, max_precond_dim)
 
     for idx, sh in enumerate(grad.shape):
-        if sh <= max_precond_dim:
-            outer_product = torch.tensordot(grad, grad, dims=[[*range(idx), *range(idx + 1, len(grad.shape))]] * 2)
-            GG[idx].lerp_(outer_product.float(), 1 - beta)
+        if sh > max_precond_dim:
+            continue
+        b = _einsum_base[idx]
+        g0 = _einsum_base[:grad.dim()]
+        g1 = g0.replace(b, b.upper())
+        outer_product = torch.einsum(f'{g0},{g1}->{b + b.upper()}', grad, grad)
+        GG[idx].lerp_(outer_product.float(), 1 - beta)
 
 
-def _update_preconditioner(grad, state, max_precond_dim, merge_dims, precondition_1d, beta, update_precond):
+def update_preconditioner(grad, state, max_precond_dim, merge_dims, precondition_1d, beta, update_precond):
     """
     Updates the preconditioner matrices and the eigenbases (L, R, Q_L, Q_R in the paper).
     """
-    _compute_ggt(grad, state['GG'], max_precond_dim, merge_dims, precondition_1d, beta)
+    compute_ggt(grad, state['GG'], max_precond_dim, merge_dims, precondition_1d, beta)
     if state['Q'] is None:
-        state['Q'] = _get_orthogonal_matrix(state['GG'])
+        state['Q'] = get_orthogonal_matrix(state['GG'])
     if update_precond:
-        _get_orthogonal_matrix_QR(state['GG'], state['Q'], state['exp_avg_sq'], max_precond_dim, merge_dims)
+        get_orthogonal_matrix_QR(state['GG'], state['Q'], state['exp_avg_sq'], max_precond_dim, merge_dims)
 
 
-def _init_preconditioner(grad, state, max_precond_dim=10000, precondition_1d=False, merge_dims=False):
+def init_preconditioner(grad, state, max_precond_dim=10000, precondition_1d=False, merge_dims=False):
     """
     Initializes the preconditioner matrices (L and R in the paper).
     """
@@ -264,7 +259,7 @@ def _init_preconditioner(grad, state, max_precond_dim=10000, precondition_1d=Fal
             state['GG'].append(torch.zeros(grad.shape[0], grad.shape[0], device=grad.device))
     else:
         if merge_dims:
-            grad = _merge_dims(grad, max_precond_dim)
+            grad = dim_merger(grad, max_precond_dim)
 
         for sh in grad.shape:
             if sh > max_precond_dim:
@@ -276,7 +271,7 @@ def _init_preconditioner(grad, state, max_precond_dim=10000, precondition_1d=Fal
 
 
 @decorator
-def _project(grad, Q, merge_dims, max_precond_dim, back: bool):
+def project(grad, Q, merge_dims, max_precond_dim, back: bool):
     """
 
     :param grad:
@@ -288,7 +283,7 @@ def _project(grad, Q, merge_dims, max_precond_dim, back: bool):
     """
     original_shape = grad.shape
     if merge_dims:
-        grad = _merge_dims(grad, max_precond_dim)
+        grad = dim_merger(grad, max_precond_dim)
 
     param = _einsum_base[:grad.dim()]
     preconditioners = ",".join(

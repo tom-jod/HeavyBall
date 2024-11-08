@@ -2,7 +2,7 @@ import random
 
 import torch
 
-from .utils import _init_preconditioner, _update_preconditioner, _project, set_, adaptive_gradient_clipping_, \
+from .utils import init_preconditioner, update_preconditioner, project, set_, adaptive_gradient_clipping_, \
     exp_avg_sq_, beta_debias, schedule_free_, warmup, ScheduleFree, precond_schedule
 
 
@@ -94,13 +94,13 @@ class PrecondScheduleSFPaLMSOAP(ScheduleFree):
                 if "z" not in state:
                     state["z"] = torch.clone(p.data)
                     state["exp_avg_sq"] = torch.zeros_like(grad, dtype=torch.float32)
-                    _init_preconditioner(grad, state, max_precond_dim, precondition_1d, merge_dims)
-                    _update_preconditioner(grad, state, max_precond_dim, merge_dims, precondition_1d, 0, True)
+                    init_preconditioner(grad, state, max_precond_dim, precondition_1d, merge_dims)
+                    update_preconditioner(grad, state, max_precond_dim, merge_dims, precondition_1d, 0, True)
                     continue  # first step is skipped so that we never use the current gradients in the projection.
 
                 # Projecting gradients to the eigenbases of Shampoo's preconditioner
                 # i.e. projecting to the eigenbases of matrices in state['GG']
-                grad_projected = _project(grad, state['Q'], merge_dims, max_precond_dim, False)
+                grad_projected = project(grad, state['Q'], merge_dims, max_precond_dim, False)
                 z, exp_avg_sq = state["z"], state["exp_avg_sq"]
                 vals.append((p, grad, grad_projected, z, exp_avg_sq))
 
@@ -124,10 +124,10 @@ class PrecondScheduleSFPaLMSOAP(ScheduleFree):
                 state = self.state[p]
                 # Projecting back the preconditioned (by Adam) exponential moving average of gradients
                 # to the original space
-                set_(gp, _project(gp, state['Q'], merge_dims, max_precond_dim, back=True))
+                set_(gp, project(gp, state['Q'], merge_dims, max_precond_dim, back=True))
 
-                _update_preconditioner(g, state, max_precond_dim, merge_dims, precondition_1d, 1 - new_debiased2,
-                                       update_precond)
+                update_preconditioner(g, state, max_precond_dim, merge_dims, precondition_1d, 1 - new_debiased2,
+                                      update_precond)
 
             # Weight decay calculated at y
             if group["weight_decay"] > 0:
