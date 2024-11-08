@@ -111,11 +111,11 @@ class PrecondScheduleSFPaLMSOAP(ScheduleFree):
             del vals
 
             beta2 = 1 - max(step, 1) ** -group['beta2_scale']
-            new_debiased2 = beta_debias(beta2, step)
+            old_debiased2 = beta_debias(beta2, step)
 
             # Decay the first and second moment running average coefficient
             # In-place operations to update the averages at the same time
-            denom = exp_avg_sq_(exp_avg_sq, grad_projected, new_debiased2, group['eps'])
+            denom = exp_avg_sq_(exp_avg_sq, grad_projected, old_debiased2, group['eps'])
             torch._foreach_div_(grad_projected, denom)
 
             update_precond = precond_schedule(step, group['precond_scheduler'], self.rng)
@@ -126,7 +126,7 @@ class PrecondScheduleSFPaLMSOAP(ScheduleFree):
                 # to the original space
                 set_(gp, project(gp, state['Q'], merge_dims, max_precond_dim, back=True))
 
-                update_preconditioner(g, state, max_precond_dim, merge_dims, precondition_1d, 1 - new_debiased2,
+                update_preconditioner(g, state, max_precond_dim, merge_dims, precondition_1d, old_debiased2,
                                       update_precond)
 
             # Weight decay calculated at y

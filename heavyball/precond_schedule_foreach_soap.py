@@ -108,7 +108,7 @@ class PrecondScheduleForeachSOAP(optim.Optimizer):
                 # CANT DO /= HERE AS EXP_AVG MAY POINT TO THE BUFFER
                 set_(d, project(exp_avg_projected / d, state['Q'], merge_dims, max_precond_dim, True))
 
-                update_preconditioner(g, state, max_precond_dim, merge_dims, precondition_1d, 1 - old_debiased2,
+                update_preconditioner(g, state, max_precond_dim, merge_dims, precondition_1d, old_debiased2,
                                       update_precond)
 
             # Why does this have to be rebiased here?

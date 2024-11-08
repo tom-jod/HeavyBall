@@ -141,7 +141,6 @@ def get_orthogonal_matrix_QR(GG, Q, exp_avg_sq, max_precond_dim=10000, merge_dim
         exp_avg_sq_new = dim_merger(exp_avg_sq, max_precond_dim)
     else:
         exp_avg_sq_new = exp_avg_sq
-
     indices = []
 
     for ind, (m, o, q) in enumerate(zip(matrix, orth_matrix, Q)):

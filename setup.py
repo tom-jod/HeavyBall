@@ -10,7 +10,7 @@ setuptools.setup(
     name='heavyball',
     license='BSD',
     description='Efficient optimizers',
-    version='0.7.6',
+    version='0.8.0',
     long_description=README,
     url='https://github.com/clashluke/heavyball',
     packages=setuptools.find_packages(),
