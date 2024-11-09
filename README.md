@@ -10,7 +10,7 @@ largely static alternative to `torch.optim` with more and better optimizers.
 
 Currently (2024-11-08, 0.10.0), the recommended optimizer is `PrecondSchedulePaLMForeachSOAP`.
 
-Turn on "newtonschulz5" preconditioning, by setting `heavyball.utils.zeroth_power_mode = 'newtonschulz5'`.
+Turn on "newtonschulz" preconditioning, by setting `heavyball.utils.zeroth_power_mode = f'newtonschulz{iterations}'`.
 
 ## Features
 
