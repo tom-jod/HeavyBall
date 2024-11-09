@@ -1,11 +1,14 @@
 # HeavyBall
 
+> [!IMPORTANT]  
+> The SOAP implementation was broken until 0.9.0. Please upgrade to 0.9.0 or later.
+
 A simple package of efficient optimizers
 
 The goal is not to thrive for completeness, full maintenance or abstraction, but instead to provide a simple
 largely static alternative to `torch.optim` with more and better optimizers.
 
-Currently (2024-11-08, 0.7.4), the recommended optimizer is `PrecondSchedulePaLMForeachSOAP`.
+Currently (2024-11-08, 0.9.0), the recommended optimizer is `PrecondSchedulePaLMForeachSOAP`.
 
 ## Features
 
