@@ -117,6 +117,7 @@ def clean():
     gc.collect()
 
 
+@torch.compile
 def zeropower_via_newtonschulz5(G, steps=10, eps=1e-7):
     """
     Taken as-is from "modded-nanogpt" under the MIT license:
@@ -152,6 +153,9 @@ def ortho(x):
         return zeropower_via_newtonschulz5(x)
     if zeroth_power_mode == 'eigh':
         return torch.linalg.eigh(x)[1]
+    if zeroth_power_mode == 'svd':
+        u, s, v = torch.linalg.svd(x)
+        return u @ v.T
     raise NotImplementedError(f"Unknown zeroth_power_mode: {zeroth_power_mode}")
 
 
