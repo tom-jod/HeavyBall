@@ -6,7 +6,7 @@ from typing import List
 import torch
 
 _mode = None
-zeroth_power_mode = 'qr'  # 'qr' is baseline, 'newtonschulz5' converges better and faster, 'eigh' is perfect but slow
+zeroth_power_mode = 'qr'  # 'qr' is baseline, 'newtonschulz' converges better and faster, 'eigh' is perfect but slow
 
 if _mode is None:
     def decorator(func):
@@ -117,10 +117,9 @@ def clean():
     gc.collect()
 
 
-@torch.compile
-def zeropower_via_newtonschulz5(G, steps=10, eps=1e-7):
+def zeropower_via_newtonschulz5(G, init, steps=2, eps=1e-7):
     """
-    Taken as-is from "modded-nanogpt" under the MIT license:
+    Modified from "modded-nanogpt" under the MIT license:
     Original: https://github.com/KellerJordan/modded-nanogpt/blob/a0dcbfdd9a0617d091d5123cfc354745428e40d3/train_gpt2.py
 
     Newton-Schulz iteration to compute the zeroth power / orthogonalization of G. We opt to use a
@@ -133,14 +132,15 @@ def zeropower_via_newtonschulz5(G, steps=10, eps=1e-7):
     """
     assert len(G.shape) == 2
     a, b, c = (3.4445, -4.7750, 2.0315)
-    X = G.bfloat16()
-    X /= (X.norm() + eps)  # ensure top singular value <= 1
+    X = G.float()
+    init = init / (init.norm() + eps)  # ensure top singular value <= 1
+    X = X / (X.norm() + eps)  # ensure top singular value <= 1
     if G.size(0) > G.size(1):
         X = X.T
     for _ in range(steps):
-        A = X @ X.T
-        B = A @ X
-        X = a * X + b * B + c * A @ B
+        A = X @ X.T  # preconditioner
+        B = A @ init
+        init = X = a * init + b * B + c * A @ B
     if G.size(0) > G.size(1):
         X = X.T
     return X
@@ -149,10 +149,6 @@ def zeropower_via_newtonschulz5(G, steps=10, eps=1e-7):
 def ortho(x):
     if zeroth_power_mode == 'qr':
         return torch.linalg.qr(x).Q
-    if zeroth_power_mode == 'newtonschulz5':
-        return zeropower_via_newtonschulz5(x)
-    if zeroth_power_mode == 'eigh':
-        return torch.linalg.eigh(x)[1]
     if zeroth_power_mode == 'svd':
         u, s, v = torch.linalg.svd(x)
         return u @ v.T
@@ -187,15 +183,20 @@ def get_orthogonal_matrix_QR(GG, Q, exp_avg_sq, max_precond_dim=10000, merge_dim
             continue
 
         tmp = m @ o
-        del m
         est_eig = torch.einsum('ij,ij->j', o, tmp)
-        del o
         sort_idx = torch.argsort(est_eig, descending=True)
-        del est_eig
         indices.append(sort_idx)
-        power_iter = tmp[:, sort_idx]
-        set_(q, ortho(power_iter))
-        del power_iter
+        if zeroth_power_mode == 'eigh':
+            set_(q, torch.linalg.eigh(m)[1])
+        elif zeroth_power_mode.startswith('newtonschulz'):
+            iterations = zeroth_power_mode[len('newtonschulz'):]
+            if iterations == '':
+                iterations = 10
+            else:
+                iterations = int(iterations)
+            set_(q, zeropower_via_newtonschulz5(m, o[:, sort_idx], iterations))
+        else:
+            set_(q, ortho(tmp[:, sort_idx]))
 
     exp_avg_sq_new = exp_avg_sq
     if merge_dims:
