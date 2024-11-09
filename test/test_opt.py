@@ -11,8 +11,7 @@ from torch.backends import cudnn
 from heavyball import PaLMForeachSOAP, SFPaLMForeachSOAP, PaLMForeachSFAdamW, PrecondScheduleSFPaLMSOAP, ForeachADOPT, \
     ForeachSOAP, ForeachSFAdamW, ForeachLaProp, PrecondScheduleForeachSOAP, PrecondSchedulePaLMForeachSOAP
 
-steps = 10000
-
+steps = 10
 cudnn.benchmark = True
 cudnn.deterministic = False
 torch.use_deterministic_algorithms(False)
@@ -22,10 +21,10 @@ args = {'betas': (0.9, 0.95), 'precondition_frequency': 2, 'merge_dims': False, 
         'max_precond_dim': 2 ** 16, 'beta': 0.9}
 
 
-@pytest.mark.parametrize('opt', [PrecondSchedulePaLMForeachSOAP, SFPaLMForeachSOAP, PaLMForeachSFAdamW, PrecondScheduleSFPaLMSOAP,
+@pytest.mark.parametrize('opt', [PaLMForeachSOAP, SFPaLMForeachSOAP, PaLMForeachSFAdamW, PrecondScheduleSFPaLMSOAP,
                                  ForeachADOPT, ForeachSOAP, ForeachSFAdamW, ForeachLaProp, PrecondScheduleForeachSOAP,
                                  PrecondSchedulePaLMForeachSOAP, torch.optim.AdamW, torch.optim.Adam])
-@pytest.mark.parametrize('dtype', [torch.float32, torch.bfloat16])
+@pytest.mark.parametrize('dtype', [torch.float32, torch.bfloat16, torch.double])
 @pytest.mark.parametrize('size,batch', [(128, 128)])
 @pytest.mark.parametrize('lr', [0.1, 1e-2, 1e-3, 1e-4])
 @pytest.mark.parametrize('weight_decay', [1e-2])

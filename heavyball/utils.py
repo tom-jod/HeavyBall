@@ -32,8 +32,8 @@ def schedule_free_(lr: float, weight_lr_power: float, weight_sum: float, beta1: 
 
     # These operations update y in-place,
     # without computing x explicitly.
-    p32 = [p.float() for p in parameters]
-    z32 = [z_.float() for z_ in z]
+    p32 = [promote(p) for p in parameters]
+    z32 = [promote(z_) for z_ in z]
     torch._foreach_lerp_(p32, z32, weight=ckp1)
     torch._foreach_add_(p32, grad, alpha=lr * (beta1 * (1 - ckp1) - 1))
     copy_stochastic_list_(parameters, p32)
@@ -130,17 +130,12 @@ def get_orthogonal_matrix_QR(GG, Q, exp_avg_sq, max_precond_dim=10000, merge_dim
             orth_matrix.append([])
             continue
         if m.data.dtype != torch.float:
-            matrix.append(m.data.float())
-            orth_matrix.append(o.data.float())
+            matrix.append(promote(m.data))
+            orth_matrix.append(promote(o.data))
         else:
-            matrix.append(m.data.float())
-            orth_matrix.append(o.data.float())
+            matrix.append(promote(m.data))
+            orth_matrix.append(promote(o.data))
 
-    orig_shape = exp_avg_sq.shape
-    if merge_dims:
-        exp_avg_sq_new = dim_merger(exp_avg_sq, max_precond_dim)
-    else:
-        exp_avg_sq_new = exp_avg_sq
     indices = []
 
     for ind, (m, o, q) in enumerate(zip(matrix, orth_matrix, Q)):
@@ -150,7 +145,7 @@ def get_orthogonal_matrix_QR(GG, Q, exp_avg_sq, max_precond_dim=10000, merge_dim
 
         tmp = m @ o
         del m
-        est_eig = torch.einsum('ij,ij->i', o, tmp)
+        est_eig = torch.einsum('ij,ij->j', o, tmp)
         del o
         sort_idx = torch.argsort(est_eig, descending=True)
         del est_eig
@@ -159,12 +154,16 @@ def get_orthogonal_matrix_QR(GG, Q, exp_avg_sq, max_precond_dim=10000, merge_dim
         set_(q, torch.linalg.qr(power_iter)[0])
         del power_iter
 
+    exp_avg_sq_new = exp_avg_sq
+    if merge_dims:
+        exp_avg_sq_new = dim_merger(exp_avg_sq, max_precond_dim)
+
     indices = tuple(slice(None) if ind is None else ind.view(*(1,) * i, -1, *(1,) * (exp_avg_sq_new.dim() - i - 1))  #
                     for i, ind in enumerate(indices))
     exp_avg_sq_new = exp_avg_sq_new[indices]
 
     if merge_dims:
-        exp_avg_sq_new = exp_avg_sq_new.reshape(orig_shape)
+        exp_avg_sq_new = exp_avg_sq_new.reshape(exp_avg_sq.shape)
     set_(exp_avg_sq, exp_avg_sq_new)
 
 
@@ -181,7 +180,7 @@ def get_orthogonal_matrix(mat):
             float_data = False
             original_type = m.data.dtype
             original_device = m.data.device
-            matrix.append(m.data.float())
+            matrix.append(promote(m.data))
         else:
             float_data = True
             matrix.append(m.data)
@@ -232,7 +231,15 @@ def compute_ggt(grad, GG, max_precond_dim, merge_dims, precondition_1d, beta):
         g0 = _einsum_base[:grad.dim()]
         g1 = g0.replace(b, b.upper())
         outer_product = torch.einsum(f'{g0},{g1}->{b + b.upper()}', grad, grad)
-        GG[idx].lerp_(outer_product.float(), 1 - beta)
+        GG[idx].lerp_(promote(outer_product), 1 - beta)
+
+
+def promote(x):
+    if x is (torch.bfloat16, torch.float16):
+        return torch.float32
+    if x.dtype in (torch.bfloat16, torch.float16):
+        return x.float()
+    return x
 
 
 def update_preconditioner(grad, state, max_precond_dim, merge_dims, precondition_1d, beta, update_precond):
@@ -250,23 +257,24 @@ def init_preconditioner(grad, state, max_precond_dim=10000, precondition_1d=Fals
     """
     Initializes the preconditioner matrices (L and R in the paper).
     """
+    state['Q'] = None  # Will hold all the eigenbases of the preconditioner.
     state['GG'] = []  # Will hold all the preconditioner matrices (L and R in the paper).
     if grad.dim() == 1:
         if not precondition_1d or grad.shape[0] > max_precond_dim:
             state['GG'].append([])
+            return
+        state['GG'].append(torch.zeros(grad.shape[0], grad.shape[0], device=grad.device, dtype=grad.dtype))
+        return
+
+    if merge_dims:
+        grad = dim_merger(grad, max_precond_dim)
+
+    for sh in grad.shape:
+        if sh > max_precond_dim:
+            state['GG'].append([])
         else:
-            state['GG'].append(torch.zeros(grad.shape[0], grad.shape[0], device=grad.device))
-    else:
-        if merge_dims:
-            grad = dim_merger(grad, max_precond_dim)
+            state['GG'].append(torch.zeros(sh, sh, device=grad.device, dtype=grad.dtype))
 
-        for sh in grad.shape:
-            if sh > max_precond_dim:
-                state['GG'].append([])
-            else:
-                state['GG'].append(torch.zeros(sh, sh, device=grad.device))
-
-    state['Q'] = None  # Will hold all the eigenbases of the preconditioner.
 
 
 @decorator
@@ -286,10 +294,10 @@ def project(grad, Q, merge_dims, max_precond_dim, back: bool):
 
     param = _einsum_base[:grad.dim()]
     preconditioners = ",".join(
-        (g + g.upper())[::-1 if back else 1] for m, g in zip(Q, param) if isinstance(m, torch.Tensor))
+        (g + g.upper())[::-1 if back else 1] for m, g in zip(Q, param) if len(m) > 0)
     if preconditioners:
         out = ''.join(c.upper() if c.upper() in preconditioners else c for c in param)
-        grad = torch.einsum(f'{param},{preconditioners}->{out}', grad, *[q for q in Q if isinstance(q, torch.Tensor)])
+        grad = torch.einsum(f'{param},{preconditioners}->{out}', grad, *[q for q in Q if len(q) > 0])
     if merge_dims:
         grad = grad.reshape(original_shape)
     return grad
@@ -305,8 +313,8 @@ class ScheduleFree(torch.optim.Optimizer):
                     state = self.state[p]
                     if 'z' in state:
                         # Set p.data to x
-                        z = state['z'].float()
-                        p32 = p.data.float()
+                        z = promote(state['z'])
+                        p32 = promote(p.data)
                         p32.lerp_(end=z, weight=1 - 1 / beta1)
                         copy_stochastic_(p.data, p32)
                 group['train_mode'] = False
@@ -319,8 +327,8 @@ class ScheduleFree(torch.optim.Optimizer):
                 for p in group['params']:
                     state = self.state[p]
                     if 'z' in state:
-                        z = state['z'].float()
-                        p32 = p.data.float()
+                        z = promote(state['z'])
+                        p32 = promote(p.data)
                         p32.lerp_(end=z, weight=1 - beta1)
                         copy_stochastic_(p.data, p32)
                 group['train_mode'] = True
@@ -357,8 +365,8 @@ def copy_stochastic_(target: torch.Tensor, source: torch.Tensor):
 
 def update_param_(param: List[torch.Tensor], update: List[torch.Tensor], lr: float, decay: float,
                   add_fn: callable = None):
-    param32 = [p.float() for p in param]
-    update32 = [u.float() for u in update]
+    param32 = [promote(p) for p in param]
+    update32 = [promote(u) for u in update]
     if decay > 0:
         torch._foreach_mul_(param32, 1 - decay * lr)
     if add_fn is None:
