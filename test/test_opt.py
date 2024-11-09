@@ -11,13 +11,13 @@ from torch.backends import cudnn
 from heavyball import PaLMForeachSOAP, SFPaLMForeachSOAP, PaLMForeachSFAdamW, PrecondScheduleSFPaLMSOAP, ForeachADOPT, \
     ForeachSOAP, ForeachSFAdamW, ForeachLaProp, PrecondScheduleForeachSOAP, PrecondSchedulePaLMForeachSOAP
 
-steps = 10
+steps = 1000
 cudnn.benchmark = True
 cudnn.deterministic = False
 torch.use_deterministic_algorithms(False)
 torch.set_float32_matmul_precision("high")  # highest: FP32, high: TF32, medium: bf16
 
-args = {'betas': (0.9, 0.95), 'precondition_frequency': 2, 'merge_dims': False, 'warmup_steps': 100,
+args = {'betas': (0.9, 0.95), 'precondition_frequency': 1, 'merge_dims': False, 'warmup_steps': 100,
         'max_precond_dim': 2 ** 16, 'beta': 0.9}
 
 
