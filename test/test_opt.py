@@ -2,6 +2,7 @@ import datetime
 import gc
 import inspect
 
+import numpy as np
 import pytest
 import torch
 import torch.backends.opt_einsum
@@ -25,8 +26,10 @@ args = {'betas': (0.9, 0.95), 'precondition_frequency': 4, 'merge_dims': False, 
 
 def data(size, batch, dtype):
     inp = torch.randn((batch, size, 1), device='cuda', dtype=torch.float)
-    i0 = inp > 0
-    return i0.to(dtype), (i0.sum(1) % 2).to(dtype)
+    inp = inp > 0
+    i0, i1 = inp.chunk(2, 1)
+    i0 = torch.logical_xor(i0, i1)
+    return inp.to(dtype), i0.to(dtype)
 
 
 @pytest.mark.parametrize('method', ['qr'])
@@ -39,7 +42,10 @@ def test_f(opt, dtype, size, batch, weight_decay, method, length):
         return
     heavyball.utils.zeroth_power_mode = method
 
-    for lr in [1e-1, 3e-2, 1e-2, 3e-3, 1e-3, 3e-4, 1e-4]:
+    lr = 1e-3
+    losses = []
+    lrs = []
+    for _ in range(10):
         torch.cuda.empty_cache()
         gc.collect()
         torch.manual_seed(0x1239121)
@@ -51,19 +57,30 @@ def test_f(opt, dtype, size, batch, weight_decay, method, length):
         torch.cuda.empty_cache()
         gc.collect()
 
-        loss_mean = 0
         start = datetime.datetime.now()
 
         for i in range(steps):
             inp, tgt = data(length, batch, dtype)
-            loss = torch.nn.functional.binary_cross_entropy_with_logits(a(inp)[0][:, -1], tgt)
+            loss = torch.nn.functional.binary_cross_entropy_with_logits(a(inp)[0].chunk(2, 1)[1], tgt)
             loss.backward()
             o.step()
             o.zero_grad()
-            with torch.no_grad():
-                loss_mean += loss.detach() / steps
             if loss.item() < 0.1:
                 dist = datetime.datetime.now() - start
-                print(f'Took {dist} | {opt.__name__}, {dtype=}, {size=}, {length=}, {batch=}, {lr=}, {weight_decay=}, {method=} | Iteration: {i}')
+                print(
+                    f'Took {dist} | {opt.__name__}, {dtype=}, {size=}, {length=}, {batch=}, {lr=}, {weight_decay=}, {method=} | Iteration: {i}')
                 return
+
+        lrs.append(lr)
+        lrs = sorted(lrs)
+        losses.insert(lrs.index(lr), loss.item())
+
+        argmin = np.argmin(losses)
+        if argmin == 0:
+            lr /= 2
+        elif argmin == len(losses) - 1:
+            lr *= 3
+        else:
+            lr = (lrs[argmin - 1] + lrs[argmin + 1]) / 2
+
     raise ValueError(f"Failed to converge")
