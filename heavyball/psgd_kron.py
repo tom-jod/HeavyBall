@@ -58,20 +58,20 @@ class ForeachPSGDKron(torch.optim.Optimizer):
             update instead of raw gradients.
     """
 
-    def __init__(self, params, lr=0.001, b1=0.9, weight_decay=0.0, preconditioner_update_probability=None,
+    def __init__(self, params, lr=0.001, beta=0.9, weight_decay=0.0, preconditioner_update_probability=None,
                  max_size_triangular=2048, min_ndim_triangular=2, memory_save_mode=None,
                  momentum_into_precond_update=True, warmup_steps: int = 1):
         if not 0.0 <= lr:
             raise ValueError(f"Invalid learning rate: {lr}")
-        if not 0.0 <= b1 < 1.0:
-            raise ValueError(f"Invalid beta parameter: {b1}")
+        if not 0.0 <= beta < 1.0:
+            raise ValueError(f"Invalid beta parameter: {beta}")
         if not 0.0 <= weight_decay:
             raise ValueError(f"Invalid weight_decay value: {weight_decay}")
 
         if preconditioner_update_probability is None:
             preconditioner_update_probability = precond_update_prob_schedule()
 
-        defaults = dict(lr=lr, b1=b1, weight_decay=weight_decay,
+        defaults = dict(lr=lr, beta=beta, weight_decay=weight_decay,
                         preconditioner_update_probability=preconditioner_update_probability,
                         max_size_triangular=max_size_triangular, min_ndim_triangular=min_ndim_triangular,
                         memory_save_mode=memory_save_mode, momentum_into_precond_update=momentum_into_precond_update,
@@ -109,7 +109,7 @@ class ForeachPSGDKron(torch.optim.Optimizer):
             precond_lr = group['precond_lr']
             weight_decay = group['weight_decay']
             lr = group['lr']
-            beta = group['b1']
+            beta = group['beta']
 
             vals = []
 
