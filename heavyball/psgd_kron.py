@@ -91,11 +91,6 @@ class ForeachPSGDKron(torch.optim.Optimizer):
             with torch.enable_grad():
                 loss = closure()
 
-        total_momentum_size = 0
-        total_momentum_mb = 0
-        total_precond_size = 0
-        total_precond_mb = 0
-
         # update preconditioners all together
         update_prob = self.param_groups[0]["preconditioner_update_probability"]
         if callable(update_prob):
@@ -130,18 +125,6 @@ class ForeachPSGDKron(torch.optim.Optimizer):
                     state["exp_avg"] = torch.zeros_like(grad)
                     state["Q"], state["exprs"] = init_Q_exprs(p, precond_init_scale, max_size_triangular,
                                                               min_ndim_triangular, memory_save_mode, dtype=grad.dtype)
-
-                    # Print sizes
-                    momentum_size = state["exp_avg"].numel()
-                    momentum_mb = (momentum_size * state["exp_avg"].element_size() / (2 ** 20))
-                    total_momentum_size += momentum_size
-                    total_momentum_mb += momentum_mb
-
-                    precond_size = sum(q.numel() for q in state["Q"])
-                    precond_mb = sum(q.numel() * q.element_size() for q in state["Q"]) / (2 ** 20)
-                    total_precond_size += precond_size
-                    total_precond_mb += precond_mb
-
                     state['step'] = 0
 
                 vals.append((p, grad, state["exp_avg"], state["Q"]))
@@ -170,8 +153,8 @@ class ForeachPSGDKron(torch.optim.Optimizer):
                     _update_precond(Q, self.state[p]["exprs"], torch.randn_like(exp_avg),
                                     exp_avg if momentum_into_precond_update else grad, precond_lr, self._tiny)
 
-            pre_grads = [_precond_grad(Q, self.state[p]["exprs"], exp_avg) for Q, exp_avg, state in
-                         zip(Q_list, exp_avg_list, vals)]
+            pre_grads = [_precond_grad(Q, self.state[p]["exprs"], exp_avg) for p, Q, exp_avg, state in
+                         zip(p_list, Q_list, exp_avg_list, vals)]
 
             torch._foreach_mul_(pre_grads, 1 / 1.5)
             tanh = torch._foreach_tanh(pre_grads)
@@ -185,14 +168,8 @@ class ForeachPSGDKron(torch.optim.Optimizer):
             torch._foreach_maximum_(pre_grads, -2)
             torch._foreach_minimum_(pre_grads, 2)
 
-            lr = warmup(lr, group['step'], group['warmup_steps'])
+            lr = -warmup(lr, group['step'], group['warmup_steps'])
             update_param_(p_list, pre_grads, lr, weight_decay)
-
-        if total_momentum_size > 0:
-            print(f"PSGD Momentum buffer size: {total_momentum_size} "
-                  f"elements, {total_momentum_mb:.2f} MB")
-            print(f"PSGD Preconditioners size: {total_precond_size} "
-                  f"elements, {total_precond_mb:.2f} MB")
 
         return loss
 
@@ -343,7 +320,7 @@ def _update_precond(Q, exprs, V, G, step, tiny):
             term1 *= q
             q.addcdiv_(term1, norm.clamp_(min=tiny), value=-1)
         else:
-            torch.triu_(term1)
+            torch.triu(term1, out=term1)
             term1 /= torch.where(norm > 0, _lb(term2, norm), norm).clamp_(tiny)
             term1 @= q
             q.sub_(term1)
