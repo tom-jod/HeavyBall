@@ -1,18 +1,18 @@
 import datetime
 import gc
 import inspect
+import itertools
 
 import numpy as np
-import pytest
 import torch
 import torch.backends.opt_einsum
 import torch.nn as nn
 from torch.backends import cudnn
 
 import heavyball.utils
-from heavyball import ForeachSOAP, ForeachPSGDKron, ForeachSFAdamW, ForeachADOPT
+from heavyball import ForeachPSGDKron, ForeachLaProp, ForeachSOAP
 
-steps = 1_000
+steps = 100_000
 cudnn.benchmark = True
 cudnn.deterministic = False
 torch.use_deterministic_algorithms(False)
@@ -35,31 +35,33 @@ def data(size, batch, dtype):
 class Model(nn.Module):
     def __init__(self, size, depth):
         super().__init__()
-        self.enc = nn.LSTM(1, size, depth, batch_first=True)
-        self.dec = nn.LSTM(1, size, depth, batch_first=True)
+        self.embed = nn.Embedding(2, size)
+        self.enc = nn.LSTM(size, size, depth, batch_first=True)
+        self.dec = nn.LSTM(size, size, depth, batch_first=True)
         self.proj = nn.Linear(size, 1, bias=False)
 
     def forward(self, inp):
+        inp = self.embed(inp.squeeze(-1).long())
         i0, i1 = inp.chunk(2, 1)
         _, state = self.enc(i0)
         out, _ = self.dec(i1, state)
         return self.proj(out)
 
 
-@pytest.mark.parametrize('method', ['qr'])
-@pytest.mark.parametrize('dtype', [torch.float32])
-@pytest.mark.parametrize('length,size,depth,batch', [(16, 128, 1, 32)])  # 21, 34 for (16, 32) without compile
-@pytest.mark.parametrize('opt', [ForeachSFAdamW, ForeachADOPT, ForeachSOAP, ForeachPSGDKron])
-@pytest.mark.parametrize('weight_decay', [0])
-def test_f(opt, dtype, size, batch, weight_decay, method, length, depth):
+def mean(x):
+    return sum(x) / len(x)
+
+
+def f(opt, dtype, size, batch, weight_decay, method, length, depth, trials=10, mean_items: int = 100):
     if "soap" not in opt.__name__.lower() and method != 'qr':
         return
+
     heavyball.utils.zeroth_power_mode = method
 
     lr = 1e-3
     losses = []
     lrs = []
-    for _ in range(10):
+    for _ in range(trials):
         torch.cuda.empty_cache()
         gc.collect()
         torch.manual_seed(0x1239121)
@@ -72,6 +74,7 @@ def test_f(opt, dtype, size, batch, weight_decay, method, length, depth):
         gc.collect()
 
         start = datetime.datetime.now()
+        loss_hist = []
 
         for i in range(steps):
             inp, tgt = data(length, batch, dtype)
@@ -80,12 +83,17 @@ def test_f(opt, dtype, size, batch, weight_decay, method, length, depth):
             loss.backward()
             o.step()
             o.zero_grad()
-            if loss.item() < 0.1:
+            loss_hist.append(loss.item())
+            if loss_hist[-1] < 0.1:
                 dist = datetime.datetime.now() - start
                 print(f'Took {dist} | {opt.__name__}, {dtype=}, {size=}, {length=}, {batch=}, {lr=}, {weight_decay=}, '
                       f'{method=} | Iteration: {i}')
                 return
+            if loss_hist[-1] > 10 or not np.isfinite(loss_hist[-1]):
+                print(f'{opt.__name__} diverged at {i=}')
+                break
 
+        print(f'{lr=} did not converge')
         lrs.append(lr)
         lrs = sorted(lrs)
         losses.insert(lrs.index(lr), loss.item())
@@ -99,3 +107,20 @@ def test_f(opt, dtype, size, batch, weight_decay, method, length, depth):
             lr = (lrs[argmin - 1] + lrs[argmin + 1]) / 2
 
     raise ValueError(f"Failed to converge")
+
+
+def main():
+    method = ['qr']
+    dtype = [torch.float32]
+    length_size_depth_batch = [(60, 32, 1, 32)]
+    opt = [ForeachLaProp, ForeachSOAP, ForeachPSGDKron]
+    weight_decay = [0]
+
+    for args in itertools.product(method, dtype, length_size_depth_batch, opt, weight_decay):
+        m, d, (l, s, dp, b), o, wd = args
+        print(f'{o.__name__} | {d} size={s} batch={b} weight_decay={wd} method={m} length={l} depth={dp}')
+        f(o, d, s, b, wd, m, l, dp)
+
+
+if __name__ == '__main__':
+    main()
