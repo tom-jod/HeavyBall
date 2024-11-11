@@ -12,14 +12,6 @@ app = typer.Typer(pretty_exceptions_enable=False)
 set_torch()
 
 
-def data(length, _size, _depth, batch, dtype):
-    inp = torch.randn((batch, length, 1), device='cuda', dtype=torch.float)
-    inp = inp > 0
-    i0, i1 = inp.chunk(2, 1)
-    xored = torch.logical_xor(i0, i1)
-    return inp.to(dtype), xored.to(dtype)
-
-
 class Model(nn.Module):
     def __init__(self, size, depth):
         super().__init__()
@@ -36,7 +28,7 @@ class Model(nn.Module):
         return self.proj(out)
 
 
-def win(model, loss):
+def win(loss):
     return loss < 0.1
 
 
@@ -45,9 +37,21 @@ def main(method: List[str] = typer.Option(['qr'], help='Eigenvector method to us
          dtype: List[str] = typer.Option(["float32"], help='Data type to use'), length: int = 60, size: int = 32,
          depth: int = 1, batch: int = 32, steps: int = 100_000, weight_decay: float = 0,
          opt: List[str] = typer.Option(['ForeachLaProp', 'ForeachSOAP', 'ForeachPSGDKron'], help='Optimizers to use')):
+    dtype = [getattr(torch, d) for d in dtype]
+
     for args in itertools.product(method, dtype, [(length, size, depth, batch)], opt, [weight_decay]):
         m, d, (l, s, dp, b), o, wd = args
-        trial(Model, data, torch.nn.functional.binary_cross_entropy_with_logits, win, steps, o, d, s, b, wd, m, l, dp,
+
+        model = Model(s, dp)
+
+        def data():
+            inp = torch.randn((b, l, 1), device='cuda', dtype=d)
+            inp = inp > 0
+            i0, i1 = inp.chunk(2, 1)
+            xored = torch.logical_xor(i0, i1)
+            return inp.to(d), xored.to(d)
+
+        trial(model, data, torch.nn.functional.binary_cross_entropy_with_logits, win, steps, o, d, s, b, wd, m, l, dp,
               failure_threshold=10)
 
 

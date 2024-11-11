@@ -31,7 +31,6 @@ def get_optim(optim, params, **kwargs):
 def trial(model, data, loss_fn, win_condition, steps, opt, dtype, size, batch, weight_decay, method, length, depth,
           trials=10, failure_threshold=10):
     opt = getattr(heavyball, opt)
-    dtype = getattr(torch, dtype)
     if "soap" not in opt.__name__.lower() and method != 'qr':
         return
 
@@ -47,7 +46,7 @@ def trial(model, data, loss_fn, win_condition, steps, opt, dtype, size, batch, w
         gc.collect()
         torch.manual_seed(0x1239121)
 
-        m = torch.compile(model(size, depth).to(dtype).cuda(), mode='max-autotune', fullgraph=False, dynamic=False)
+        m = torch.compile(model.to(dtype).cuda(), mode='max-autotune', fullgraph=False, dynamic=False)
         o = get_optim(opt, m.parameters(), lr=lr, weight_decay=weight_decay)
         torch.cuda.empty_cache()
         gc.collect()
@@ -56,14 +55,14 @@ def trial(model, data, loss_fn, win_condition, steps, opt, dtype, size, batch, w
         loss_hist = []
 
         for i in range(steps):
-            inp, tgt = data(length, size, depth, batch, dtype)
+            inp, tgt = data()
             out = m(inp)
             loss = loss_fn(out, tgt)
             loss.backward()
             o.step()
             o.zero_grad()
             loss_hist.append(loss.item())
-            if win_condition(m, loss_hist[-1]):
+            if win_condition(loss_hist[-1]):
                 dist = datetime.datetime.now() - start
                 print(f'Took {dist} | {opt.__name__}, {dtype=}, {size=}, {length=}, {batch=}, {lr=}, {weight_decay=}, '
                       f'{method=} | Iteration: {i}')
