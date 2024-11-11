@@ -292,9 +292,9 @@ def _lb(A, max_abs):
     x = x.conj()
     if x.dim() > 1:
         x = torch.where(comp, x, x.T)
-    torch.matmul(x, torch.where(comp, A, A.T), out=x)
+    torch.matmul(x, torch.where(comp, A, A.T), out=x.view(1, -1))
     x /= torch.linalg.vector_norm(x)
-    torch.matmul(x, torch.where(comp, ah, ah.T), out=x)
+    torch.matmul(x, torch.where(comp, ah, ah.T), out=x.view(1, -1))
     x = torch.linalg.vector_norm(x)
     x *= max_abs
     return x
