@@ -29,7 +29,7 @@ def get_optim(optim, params, **kwargs):
 
 
 def trial(model, data, loss_fn, win_condition, steps, opt, dtype, size, batch, weight_decay, method, length, depth,
-          trials=10, failure_threshold=10):
+          trials=10, failure_threshold=3):
     opt = getattr(heavyball, opt)
     if "soap" not in opt.__name__.lower() and method != 'qr':
         return
@@ -41,6 +41,7 @@ def trial(model, data, loss_fn, win_condition, steps, opt, dtype, size, batch, w
     lr = 1e-3
     losses = []
     lrs = []
+    loss0 = None
     for _ in range(trials):
         torch.cuda.empty_cache()
         gc.collect()
@@ -62,12 +63,14 @@ def trial(model, data, loss_fn, win_condition, steps, opt, dtype, size, batch, w
             o.step()
             o.zero_grad()
             loss_hist.append(loss.item())
+            if loss0 is None:
+                loss0 = loss.item()
             if win_condition(loss_hist[-1]):
                 dist = datetime.datetime.now() - start
                 print(f'Took {dist} | {opt.__name__}, {dtype=}, {size=}, {length=}, {batch=}, {lr=}, {weight_decay=}, '
                       f'{method=} | Iteration: {i}')
                 return
-            if loss_hist[-1] > failure_threshold or not np.isfinite(loss_hist[-1]):
+            if loss_hist[-1] > failure_threshold * loss0 or not np.isfinite(loss_hist[-1]):
                 print(f'{opt.__name__} diverged at {i=}, loss={loss_hist[-1]}')
                 break
 

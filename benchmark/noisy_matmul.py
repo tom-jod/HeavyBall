@@ -47,7 +47,7 @@ def main(method: List[str] = typer.Option(['qr'], help='Eigenvector method to us
             with torch.no_grad():
                 return model.param.add(1).norm().item() < 1e-3
 
-        trial(model, data, torch.nn.functional.mse_loss, win, steps, o, d, s, b, wd, m, l, dp, failure_threshold=s ** 2)
+        trial(model, data, torch.nn.functional.mse_loss, win, steps, o, d, s, b, wd, m, l, dp)
 
 
 if __name__ == '__main__':
