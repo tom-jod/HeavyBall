@@ -6,38 +6,35 @@ import torch.backends.opt_einsum
 import torch.nn as nn
 import typer
 
+import heavyball
 from utils import set_torch, trial
 
 app = typer.Typer(pretty_exceptions_enable=False)
 set_torch()
 
 
-def data(length, _size, _depth, batch, dtype):
-    inp = torch.randn((batch, length, 1), device='cuda', dtype=torch.float)
-    inp = inp > 0
-    i0, i1 = inp.chunk(2, 1)
-    xored = torch.logical_xor(i0, i1)
-    return inp.to(dtype), xored.to(dtype)
+def data(_length, size, depth, batch, dtype):
+    inp = torch.randn((batch, depth, size, size), device='cuda', dtype=dtype)
+    return inp, torch.zeros((batch, size), device='cuda', dtype=dtype)
 
 
 class Model(nn.Module):
     def __init__(self, size, depth):
         super().__init__()
-        self.embed = nn.Embedding(2, size)
-        self.enc = nn.LSTM(size, size, depth, batch_first=True)
-        self.dec = nn.LSTM(size, size, depth, batch_first=True)
-        self.proj = nn.Linear(size, 1, bias=False)
+        self.param = nn.Parameter(torch.randn((size,)))
 
     def forward(self, inp):
-        inp = self.embed(inp.squeeze(-1).long())
-        i0, i1 = inp.chunk(2, 1)
-        _, state = self.enc(i0)
-        out, _ = self.dec(i1, state)
-        return self.proj(out)
+        y = None
+        y0 = self.param.view(1, -1).expand(inp.size(0), -1) + 1  # offset, so weight decay doesnt help
+        for i in inp.unbind(1):
+            y = torch.einsum('bi,bik->bk', y0, i)
+            y0 = torch.nn.functional.leaky_relu(y)
+        return y
 
 
-def win(model, loss):
-    return loss < 0.1
+def win(model: Model, loss):
+    with torch.no_grad():
+        return model.param.add(1).norm().item() < 1e-3
 
 
 @app.command()
@@ -47,8 +44,7 @@ def main(method: List[str] = typer.Option(['qr'], help='Eigenvector method to us
          opt: List[str] = typer.Option(['ForeachLaProp', 'ForeachSOAP', 'ForeachPSGDKron'], help='Optimizers to use')):
     for args in itertools.product(method, dtype, [(length, size, depth, batch)], opt, [weight_decay]):
         m, d, (l, s, dp, b), o, wd = args
-        trial(Model, data, torch.nn.functional.binary_cross_entropy_with_logits, win, steps, o, d, s, b, wd, m, l, dp,
-              failure_threshold=10)
+        trial(Model, data, torch.nn.functional.mse_loss, win, steps, o, d, s, b, wd, m, l, dp, failure_threshold=s ** 2)
 
 
 if __name__ == '__main__':

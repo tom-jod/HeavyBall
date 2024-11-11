@@ -145,7 +145,8 @@ class ForeachPSGDKron(torch.optim.Optimizer):
                     if g.dim() > 1:
                         norms.extend(_balance_Q(q))
                         filtered_q.extend(q)
-                torch._foreach_mul_(filtered_q, norms)
+                if filtered_q:
+                    torch._foreach_mul_(filtered_q, norms)
                 del filtered_q, norms
 
             if do_update:
