@@ -8,7 +8,8 @@ import torch
 import heavyball.utils
 
 base_args = {'betas': (0.9, 0.999), 'precondition_frequency': 1, 'merge_dims': False, 'warmup_steps': 100,
-             'max_precond_dim': 2 ** 16, 'beta': 0.9, 'preconditioner_update_probability': 1}
+             'max_precond_dim': 2 ** 16, 'beta': 0.9, 'preconditioner_update_probability': 1,
+             'max_size_triangular': 2 ** 16}
 
 
 def get_optim(optim, params, **kwargs):

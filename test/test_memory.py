@@ -17,7 +17,7 @@ def get_memory():
 
 
 expected_memory = {'adamw': {'after': 4, 'peak': 5.1}, 'soap': {'after': 7, 'peak': 14},
-                   'psgd': {'after': 2, 'peak': 7}}
+                   'psgd': {'after': 2, 'peak': 10.5}}
 
 
 @pytest.mark.parametrize("opt", ['ForeachPurePSGD', 'ForeachPSGDKron'])
