@@ -44,7 +44,7 @@ def main(method: List[str] = typer.Option(['qr'], help='Eigenvector method to us
 
         def win(_loss):
             with torch.no_grad():
-                return model.param.add(1).norm().item() < 1e-3
+                return model.param.add(1).norm().item() < 1e-5
 
         trial(model, data, torch.nn.functional.mse_loss, win, steps, o, d, size, batch, wd, m, 1, depth,
               failure_threshold=depth * 2)
