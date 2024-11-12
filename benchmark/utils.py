@@ -8,8 +8,8 @@ from torch.backends import cudnn, opt_einsum
 
 import heavyball.utils
 
-base_args = {'betas': (0.9, 0.999), 'precondition_frequency': 4, 'merge_dims': False, 'warmup_steps': 100,
-             'max_precond_dim': 2 ** 16, 'beta': 0.9, 'preconditioner_update_probability': 1 / 4}
+base_args = {'betas': (0.9, 0.999), 'precondition_frequency': 1, 'merge_dims': False, 'warmup_steps': 100,
+             'max_precond_dim': 2 ** 16, 'beta': 0.9, 'preconditioner_update_probability': 1}
 
 
 def set_torch():
@@ -71,7 +71,7 @@ def trial(model, data, loss_fn, win_condition, steps, opt, dtype, size, batch, w
                       f'{method=} | Iteration: {i}')
                 return
             if loss_hist[-1] > failure_threshold * loss0 or not np.isfinite(loss_hist[-1]):
-                print(f'{opt.__name__} diverged at {i=}, loss={loss_hist[-1]}')
+                print(f'{opt.__name__} diverged at {i=}, loss={loss_hist[-1]}, {loss0}')
                 break
 
         print(f'{lr=} did not converge')

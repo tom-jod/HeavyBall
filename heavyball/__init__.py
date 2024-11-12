@@ -1,6 +1,7 @@
 from .foreach_adopt import ForeachADOPT
 from .foreach_laprop import ForeachLaProp
 from .foreach_sfadamw import ForeachSFAdamW
+from .foreach_adamw import ForeachAdamW
 from .foreach_soap import ForeachSOAP
 from .palm_foreach_sfadamw import PaLMForeachSFAdamW
 from .palm_foreach_soap import PaLMForeachSOAP
@@ -14,4 +15,4 @@ PalmForEachSoap = PaLMForeachSOAP
 
 __all__ = ['PalmForEachSoap', 'PaLMForeachSFAdamW', 'PaLMForeachSOAP', 'SFPaLMForeachSOAP', 'PrecondScheduleSFPaLMSOAP',
            'ForeachSOAP', 'ForeachSFAdamW', 'ForeachLaProp', 'ForeachADOPT', 'PrecondScheduleForeachSOAP',
-           'PrecondSchedulePaLMForeachSOAP', 'ForeachPSGDKron']
+           'PrecondSchedulePaLMForeachSOAP', 'ForeachPSGDKron', 'ForeachAdamW']

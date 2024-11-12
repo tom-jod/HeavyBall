@@ -41,7 +41,7 @@ class ForeachAdamW(torch.optim.Optimizer):
                 *[(p.data, p.grad.float(), self.state[p]['exp_avg_sq'], self.state[p]['exp_avg']) for p in active_p])
 
             # Decay the first and second moment running average coefficient
-            exp_avg.lerp_(grad, 1 - beta_debias(group['betas'][0], k + 1))
+            torch._foreach_lerp_(exp_avg, grad, 1 - beta_debias(group['betas'][0], k + 1))
             denom = exp_avg_sq_(exp_avg_sq, grad, beta_debias(group['betas'][1], k + 1), eps)
 
             # Normalize grad in-place for memory efficiency
