@@ -8,9 +8,7 @@ A simple package of efficient optimizers
 The goal is not to thrive for completeness, full maintenance or abstraction, but instead to provide a simple
 largely static alternative to `torch.optim` with more and better optimizers.
 
-Currently (2024-11-08, 0.10.0), the recommended optimizer is `PrecondSchedulePaLMForeachSOAP`.
-
-Turn on "newtonschulz" preconditioning, by setting `heavyball.utils.zeroth_power_mode = f'newtonschulz{iterations}'`.
+Currently (2024-11-12, 0.11.0), the recommended optimizer is `PrecondSchedulePaLMForeachSOAP`.
 
 ## Features
 
@@ -77,3 +75,13 @@ The default preconditioner schedule (`f`) would yield the following update inter
 | 10,000    | 14.3          | 2,168            | 5,000 (2.3x)              | 625 (0.3x)                 |
 | 100,000   | 100.2         | 4,049            | 50,000 (12.3x)            | 6,250 (1.5x)               |
 | 1,000,000 | 513           | 7,245            | 500,000 (69.0x)           | 62,500 (8.6x)              |
+
+## Utils
+
+To access `heavyball.utils`, you need to explicitly `import heavyball.utils`.\
+It has several handy functions:
+
+* `set_torch()` sets pytorch optimization settings (TF32, opt_einsum, benchmark, ...)
+* `compile_mode`, a string passed as-is to `torch.compile(mode=compile_mode)` in all compiled heavyball calls
+* `zeroth_power_mode`, a string determining whether to use QR, newtonschulz{iterations}, or svd or eigh to approximate
+  the eigenvectors. Eigh has the highest precision and cost

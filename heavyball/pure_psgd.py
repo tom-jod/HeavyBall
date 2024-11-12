@@ -12,7 +12,6 @@ from .utils import promote, update_param_, warmup, psgd_precond_grad, init_Q_exp
     PSGDBase, precond_update_prob_schedule
 
 
-
 class ForeachPurePSGD(PSGDBase):
     """
     Kronecker Factorized PSGD WITHOUT Momentum

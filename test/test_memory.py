@@ -4,8 +4,8 @@ from torch import nn
 
 import heavyball
 import heavyball.utils
-from benchmark.utils import get_optim, set_torch
-from heavyball.utils import clean
+from benchmark.utils import get_optim
+from heavyball.utils import clean, set_torch
 
 
 def get_memory():

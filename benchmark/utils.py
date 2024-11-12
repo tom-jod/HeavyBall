@@ -4,21 +4,11 @@ import inspect
 
 import numpy as np
 import torch
-from torch.backends import cudnn, opt_einsum
 
 import heavyball.utils
 
 base_args = {'betas': (0.9, 0.999), 'precondition_frequency': 1, 'merge_dims': False, 'warmup_steps': 100,
              'max_precond_dim': 2 ** 16, 'beta': 0.9, 'preconditioner_update_probability': 1}
-
-
-def set_torch():
-    cudnn.benchmark = True
-    cudnn.deterministic = False
-    torch.use_deterministic_algorithms(False)
-    torch.set_float32_matmul_precision("high")  # highest: FP32, high: TF32, medium: bf16
-    opt_einsum.enabled = True
-    opt_einsum.strategy = "optimal"
 
 
 def get_optim(optim, params, **kwargs):

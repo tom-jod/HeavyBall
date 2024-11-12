@@ -14,7 +14,8 @@ import torch.backends.opt_einsum
 import torch.nn as nn
 import typer
 
-from utils import set_torch, trial
+from heavyball.utils import set_torch
+from utils import trial
 
 app = typer.Typer(pretty_exceptions_enable=False)
 set_torch()

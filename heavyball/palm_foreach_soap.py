@@ -27,10 +27,12 @@ class PaLMForeachSOAP(optim.Optimizer):
             https://arxiv.org/abs/2204.02311
     """
 
-    def __init__(self, params, lr: float = 3e-3, beta=0.9, betas=(None, None), shampoo_beta: float = 0.95, eps: float = 1e-8,
+    def __init__(self, params, lr: float = 3e-3, beta=0.9, betas=(None, None), shampoo_beta: float = 0.95,
+                 eps: float = 1e-8,
                  weight_decay: float = 0.01, precondition_frequency: int = 2, max_precond_dim: int = 2048,  #
                  merge_dims: bool = True, precondition_1d: bool = False, normalize_grads: bool = False,
-                 data_format: str = "channels_first", correct_bias: bool = True, warmup_steps: int = 1, beta2_scale: float = 0.8):
+                 data_format: str = "channels_first", correct_bias: bool = True, warmup_steps: int = 1,
+                 beta2_scale: float = 0.8):
         if betas[0] is not None:
             beta = betas[0]
         defaults = {"lr": lr, "beta": beta, "shampoo_beta": shampoo_beta, "eps": eps, "weight_decay": weight_decay,
@@ -39,7 +41,6 @@ class PaLMForeachSOAP(optim.Optimizer):
                     "correct_bias": correct_bias, 'warmup_steps': warmup_steps, 'beta2_scale': beta2_scale}
         super().__init__(params, defaults)
         self._data_format = data_format
-
 
     @torch.no_grad()
     def step(self, closure=None):

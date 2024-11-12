@@ -6,15 +6,16 @@ from typing import List
 
 import numpy as np
 import torch
+from torch.backends import cudnn, opt_einsum
 
-_mode = None
+compile_mode = None
 zeroth_power_mode = 'qr'  # 'qr' is baseline, 'newtonschulz' converges better and faster, 'eigh' is perfect but slow
 
-if _mode is None:
+if compile_mode is None:
     def decorator(func):
         return func
 else:
-    decorator = torch.compile(fullgraph=False, dynamic=True, mode=_mode)
+    decorator = torch.compile(fullgraph=False, dynamic=True, mode=compile_mode)
 
 _einsum_base = string.ascii_lowercase + string.ascii_uppercase
 
@@ -117,6 +118,15 @@ def set_(dst: torch.Tensor, src: torch.Tensor):
 def clean():
     torch.cuda.empty_cache()
     gc.collect()
+
+
+def set_torch():
+    cudnn.benchmark = True
+    cudnn.deterministic = False
+    torch.use_deterministic_algorithms(False)
+    torch.set_float32_matmul_precision("high")  # highest: FP32, high: TF32, medium: bf16
+    opt_einsum.enabled = True
+    opt_einsum.strategy = "optimal"
 
 
 def zeropower_via_newtonschulz5(G, init, steps=2, eps=1e-7):
