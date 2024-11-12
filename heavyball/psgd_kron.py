@@ -133,7 +133,6 @@ class ForeachPSGDKron(PSGDBase):
             torch._foreach_lerp_(exp_avg_list, grad_list, (1 - beta) / (1 - beta ** group["step"]))
 
             self.balance(do_update, grad_list, Q_list)
-
             if do_update:
                 self.do_update(p_list, exp_avg_list if momentum_into_precond_update else grad_list, Q_list, precond_lr)
 

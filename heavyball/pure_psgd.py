@@ -71,8 +71,6 @@ class ForeachPurePSGD(PSGDBase):
         do_update = self.rng.random() < update_prob
         self._prob_step += 1
 
-        balance = self.rng.random() < 0.01 and do_update
-
         for group in self.param_groups:
             precond_init_scale = group['precond_init_scale']
             max_size_triangular = group['max_size_triangular']
@@ -107,9 +105,7 @@ class ForeachPurePSGD(PSGDBase):
 
             group["step"] += 1
 
-            if balance:
-                self.balance(do_update, grad_list, Q_list)
-
+            self.balance(do_update, grad_list, Q_list)
             if do_update:
                 self.do_update(p_list, grad_list, Q_list, precond_lr)
 
