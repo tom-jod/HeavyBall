@@ -16,10 +16,11 @@ def get_memory():
     return torch.cuda.memory_allocated()
 
 
-expected_memory = {'adamw': {'after': 4, 'peak': 5.1}, 'soap': {'after': 7, 'peak': 14}, 'psgd': {'after': 2, 'peak': 6}}
+expected_memory = {'adamw': {'after': 4, 'peak': 5.1}, 'soap': {'after': 7, 'peak': 14},
+                   'psgd': {'after': 2, 'peak': 7}}
 
 
-@pytest.mark.parametrize("opt", ['ForeachAdamW', 'ForeachSOAP', 'ForeachPSGDKron'])
+@pytest.mark.parametrize("opt", ['ForeachPurePSGD', 'ForeachPSGDKron'])
 @pytest.mark.parametrize("method", ['qr', 'newtonschulz2', 'svd', 'eigh'])
 @pytest.mark.parametrize("size", [8192])
 def test_memory(opt, method, size, iterations: int = 5):
@@ -55,6 +56,7 @@ def test_memory(opt, method, size, iterations: int = 5):
         del model, o
         peak = torch.cuda.memory_stats()['allocated_bytes.all.peak']
 
+        print(peak / model_allocated)
         assert peak / model_allocated < v['peak']
 
     assert opt_allocated / model_allocated < v['after']

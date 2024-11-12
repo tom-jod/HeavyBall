@@ -1,8 +1,10 @@
 import gc
 import math
+import random
 import string
 from typing import List
 
+import numpy as np
 import torch
 
 _mode = None
@@ -425,3 +427,219 @@ def precond_schedule(step, precond_scheduler, rng):
     precond_prob = 1 / precond_prob
     update_precond = rng.random() < precond_prob
     return update_precond
+
+
+def init_Q_exprs(t, scale, max_size, min_ndim_triangular, memory_save_mode, dtype=None):
+    """For a scalar or tensor t, we initialize its preconditioner Q and
+    reusable einsum expressions for updating Q and preconditioning gradient.
+    """
+    letters = string.ascii_lowercase + string.ascii_uppercase
+
+    dtype = dtype if dtype is not None else t.dtype
+    shape = t.shape
+    if len(shape) == 0:  # scalar
+        Q = [scale * torch.ones_like(t, dtype=dtype)]
+        exprA = ",->"
+        exprGs = [",->"]
+        exprP = ",,->"
+    else:  # tensor
+        if len(shape) > 13:
+            raise ValueError(f"Got tensor with dim {len(t.shape)}; Einstein runs out of letters!")
+
+        scale = scale ** (1 / len(shape))
+
+        if memory_save_mode is None:
+            dim_diag = [False for _ in shape]
+        elif memory_save_mode == "one_diag":
+            rev_sorted_dims = np.argsort(shape)[::-1]
+            dim_diag = [False for _ in shape]
+            dim_diag[rev_sorted_dims[0]] = True
+        elif memory_save_mode == "all_diag":
+            dim_diag = [True for _ in shape]
+        else:
+            raise ValueError(f"Invalid memory_save_mode: {memory_save_mode}, must be one of "
+                             "[None, 'one_diag', 'all_diag']")
+
+        Q = []
+        piece1A, piece2A, piece3A = ([], "", "")
+        exprGs = []
+        piece1P, piece2P, piece3P, piece4P = ([], [], "", "")
+        for i, (size, dim_d) in enumerate(zip(shape, dim_diag)):
+            if (size == 1 or size > max_size or len(shape) < min_ndim_triangular or dim_d):
+                # use diagonal matrix as preconditioner for this dim
+                Q.append(scale * torch.ones(size, dtype=dtype, device=t.device))
+
+                piece1A.append(letters[i])
+                piece2A = piece2A + letters[i]
+                piece3A = piece3A + letters[i]
+
+                piece1 = "".join([(letters[i + 13] if j == i else letters[j]) for j in range(len(shape))])
+                subscripts = piece1 + "," + piece1 + "->" + letters[i + 13]
+                exprGs.append(subscripts)
+
+                piece1P.append(letters[i + 13])
+                piece2P.append(letters[i + 13])
+                piece3P = piece3P + letters[i + 13]
+                piece4P = piece4P + letters[i + 13]
+            else:
+                # use triangular matrix as preconditioner for this dim
+                Q.append(scale * torch.eye(size, dtype=dtype, device=t.device))
+
+                piece1A.append(letters[i] + letters[i + 13])
+                piece2A = piece2A + letters[i + 13]
+                piece3A = piece3A + letters[i]
+
+                piece1 = "".join([(letters[i + 13] if j == i else letters[j]) for j in range(len(shape))])
+                piece2 = "".join([(letters[i + 26] if j == i else letters[j]) for j in range(len(shape))])
+                subscripts = (piece1 + "," + piece2 + "->" + letters[i + 13] + letters[i + 26])
+                exprGs.append(subscripts)
+
+                a, b, c = (letters[i], letters[i + 13], letters[i + 26])
+                piece1P.append(a + b)
+                piece2P.append(a + c)
+                piece3P = piece3P + c
+                piece4P = piece4P + b
+
+        exprA = ",".join(piece1A) + "," + piece2A + "->" + piece3A
+        exprP = (",".join(piece1P) + "," + ",".join(piece2P) + "," + piece3P + "->" + piece4P)
+
+    exprGs = tuple(exprGs)
+    return [Q, (exprA, exprGs, exprP)]
+
+
+@torch.compile(fullgraph=True, dynamic=False)
+def psgd_balance_Q(Q_in):
+    norms = torch.stack([q.norm(float("inf")) for q in Q_in])
+    geometric_mean = norms.log().mean().exp()
+    norms = geometric_mean / norms
+    return list(norms)
+
+
+def psgd_calc_A_and_conjB(exprA, G, Q, V):
+    A = torch.einsum(exprA, *Q, G)
+    order = G.dim()
+    p = list(range(order))
+    conjB = torch.permute(V.conj(), p[1:] + p[:1])
+    for i, q in enumerate(Q):
+        if q.dim() <= 1:
+            conjB /= q
+        else:
+            unsqueeze = conjB.dim() <= 1
+            if unsqueeze:
+                conjB = conjB.unsqueeze(0)
+            conjB = torch.linalg.solve_triangular(q, conjB, upper=True, left=False, out=conjB)
+            if unsqueeze:
+                conjB = conjB.squeeze(0)
+        if i < order - 1:
+            conjB = torch.transpose(conjB, i, order - 1)
+    return A, conjB
+
+
+def psgd_lb(A, max_abs):
+    A /= max_abs
+    aa = torch.real(A * A.conj())
+    value0, i = torch.max(torch.sum(aa, dim=0), 0)
+    value1, j = torch.max(torch.sum(aa, dim=1), 0)
+
+    ah = A.H
+    comp = value0 > value1
+    x = torch.where(comp, A[:, i], A[j])
+    x = x.conj()
+    if x.dim() > 1:
+        x = torch.where(comp, x, x.T)
+    torch.matmul(x, torch.where(comp, A, A.T), out=x.view(1, -1))
+    x /= torch.linalg.vector_norm(x)
+    torch.matmul(x, torch.where(comp, ah, ah.T), out=x.view(1, -1))
+    x = torch.linalg.vector_norm(x)
+    x *= max_abs
+    return x
+
+
+def psgd_update_precond(Q, exprs, V, G, step, tiny):
+    """Update Kronecker product preconditioner Q with pair (V, G)."""
+    exprA, exprGs, _ = exprs
+
+    A, conjB = psgd_calc_A_and_conjB(exprA, G, Q, V)
+
+    for q, exprG in zip(Q, exprGs):
+        term1 = torch.einsum(exprG, A, A.conj())
+        term2 = torch.einsum(exprG, conjB.conj(), conjB)
+
+        term2 += term1  # a + b
+        term1 *= 2  # 2a
+        term1 -= term2  # 2a - (a + b) == a - b
+
+        term1 *= step
+        norm = term2.norm(float('inf'))
+        if q.dim() < 2:
+            term1 *= q
+            q.addcdiv_(term1, norm.clamp_(min=tiny), value=-1)
+        else:
+            torch.triu(term1, out=term1)
+            term1 /= torch.where(norm > 0, psgd_lb(term2, norm), norm).clamp_(tiny)
+            q.addmm_(term1, q, alpha=-1)
+
+
+def psgd_precond_grad(Q, exprs, G, inplace: bool = False):
+    """Precondition gradient G with preconditioner Q."""
+    out = torch.einsum(exprs[-1], *[q.conj() for q in Q], *Q, G)
+    if inplace:
+        set_(G, out)
+        return G
+    return out
+
+
+def trust_region_clip_(grad, lerp: float, scale: float):
+    torch._foreach_mul_(grad, 1 / scale)
+    tanh = torch._foreach_tanh(grad)
+    torch._foreach_abs_(grad)
+    torch._foreach_log1p_(grad)
+    grad = [p.copysign_(t) for t, p in zip(tanh, grad)]  # torch doesn't have a foreach copysign
+    torch._foreach_lerp_(grad, tanh, lerp)  # sgn(x) * log(1 + |x|) * 0.1 + tanh(x) * 0.9
+    torch._foreach_mul_(grad, scale)
+
+
+class PSGDBase(torch.optim.Optimizer):
+    def __init__(self, parameters, groups):
+        super().__init__(parameters, groups)
+        self.rng = random.Random(0x1923213)
+        self._tiny = torch.finfo(torch.bfloat16).tiny
+
+    def balance(self, do_update, grad_list, Q_list):
+        if not do_update or self.rng.random() > 0.01:
+            return
+
+        filtered_q = []
+        norms = []
+        for g, q in zip(grad_list, Q_list):
+            if g.dim() > 1:
+                norms.extend(psgd_balance_Q(q))
+                filtered_q.extend(q)
+        if filtered_q:
+            torch._foreach_mul_(filtered_q, norms)
+
+    def do_update(self, p_list, grad_list, q_list, precond_lr):
+        for p, grad, Q in zip(p_list, grad_list, q_list):
+            psgd_update_precond(Q, self.state[p]["exprs"], torch.randn_like(grad), grad, precond_lr, self._tiny)
+
+
+def precond_update_prob_schedule(max_prob=1.0, min_prob=0.03, decay=0.001, flat_start=250):
+    """Anneal preconditioner update probability during beginning of training.
+
+    PSGD benefits from more preconditioner updates at the beginning of training,
+    but once the preconditioner is learned the update probability can drop low.
+
+    This schedule is an exponential anneal with a flat start. Default settings keep
+    update probability at 1.0 for 200 steps then exponentially anneal down to
+    `min_prob` by 4000 steps. Default settings work very well for most models and
+    training regimes.
+    """
+
+    def _schedule(n):
+        """Exponential anneal with flat start."""
+        n = torch.tensor(n, dtype=torch.float32)
+        prob = max_prob * torch.exp(-decay * (n - flat_start))
+        prob.clamp_(min=min_prob, max=max_prob)
+        return prob
+
+    return _schedule
