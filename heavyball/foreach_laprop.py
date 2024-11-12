@@ -6,7 +6,7 @@ from .utils import warmup, exp_avg_sq_, beta_debias, update_param_
 
 class ForeachLaProp(torch.optim.Optimizer):
 
-    def __init__(self, params, lr=0.0025, betas=(0.9, 0.99), eps=1e-8, weight_decay=0, warmup_steps=0):
+    def __init__(self, params, lr=0.0025, betas=(0.9, 0.99), eps=1e-8, weight_decay=0, warmup_steps=1):
         defaults = dict(lr=lr, betas=betas, eps=eps, k=0, warmup_steps=warmup_steps, train_mode=True, weight_sum=0.0,
                         lr_max=-1.0, weight_decay=weight_decay)
         super().__init__(params, defaults)
