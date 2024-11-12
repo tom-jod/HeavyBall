@@ -126,7 +126,7 @@ def set_torch():
     torch.use_deterministic_algorithms(False)
     torch.set_float32_matmul_precision("high")  # highest: FP32, high: TF32, medium: bf16
     opt_einsum.enabled = True
-    opt_einsum.strategy = "optimal"
+    opt_einsum.strategy = "auto-hq"
 
 
 def zeropower_via_newtonschulz5(G, init, steps=2, eps=1e-7):

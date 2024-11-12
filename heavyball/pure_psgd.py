@@ -45,9 +45,9 @@ class ForeachPurePSGD(PSGDBase):
 
         if preconditioner_update_probability is None:
             preconditioner_update_probability = precond_update_prob_schedule()
+        self.preconditioner_update_probability = preconditioner_update_probability
 
         defaults = dict(lr=lr, weight_decay=weight_decay,
-                        preconditioner_update_probability=preconditioner_update_probability,
                         max_size_triangular=max_size_triangular, min_ndim_triangular=min_ndim_triangular,
                         memory_save_mode=memory_save_mode, momentum_into_precond_update=momentum_into_precond_update,
                         precond_lr=0.1,  # precond lr hardcoded to 0.1
@@ -55,9 +55,7 @@ class ForeachPurePSGD(PSGDBase):
                         step=0, warmup_steps=warmup_steps)
         super().__init__(params, defaults)
 
-        self._tiny = torch.finfo(torch.bfloat16).tiny
         self._prob_step = 0
-        self.rng = random.Random(5318008)
 
     @torch.no_grad()
     def step(self, closure=None):
@@ -67,7 +65,7 @@ class ForeachPurePSGD(PSGDBase):
                 loss = closure()
 
         # update preconditioners all together
-        update_prob = self.param_groups[0]["preconditioner_update_probability"]
+        update_prob = self.preconditioner_update_probability
         if callable(update_prob):
             update_prob = update_prob(self._prob_step)
         do_update = self.rng.random() < update_prob
