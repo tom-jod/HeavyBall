@@ -28,8 +28,8 @@ class PaLMForeachSOAP(optim.Optimizer):
     """
 
     def __init__(self, params, lr: float = 3e-3, beta=0.9, betas=(None, None), shampoo_beta: float = 0.95,
-                 eps: float = 1e-8,
-                 weight_decay: float = 0.01, precondition_frequency: int = 2, max_precond_dim: int = 2048,  #
+                 eps: float = 1e-8, weight_decay: float = 0.01, precondition_frequency: int = 2,
+                 max_precond_dim: int = 2048,  #
                  merge_dims: bool = True, precondition_1d: bool = False, normalize_grads: bool = False,
                  data_format: str = "channels_first", correct_bias: bool = True, warmup_steps: int = 1,
                  beta2_scale: float = 0.8):
@@ -98,8 +98,7 @@ class PaLMForeachSOAP(optim.Optimizer):
 
             # Decay the first and second moment running average coefficient
             # In-place operations to update the averages at the same time
-            torch._foreach_mul_(exp_avg, old_debiased1)
-            torch._foreach_add_(exp_avg, grad, alpha=1 - old_debiased1)
+            torch._foreach_lerp_(exp_avg, grad, 1 - old_debiased1)
             denom = exp_avg_sq_(exp_avg_sq, grad_projected, old_debiased2, group['eps'])
 
             for p, g, ea, d in zip(p_list, grad, exp_avg, denom):

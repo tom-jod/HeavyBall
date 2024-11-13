@@ -7,7 +7,7 @@ Source available at https://github.com/evanatyourservice/kron_torch/blob/97a2b5e
 import torch
 
 from .utils import promote, update_param_, warmup, psgd_precond_grad, init_Q_exprs, trust_region_clip_, PSGDBase, \
-    precond_update_prob_schedule
+    precond_update_prob_schedule, merge_group
 
 
 def precond_update_prob_schedule(max_prob=1.0, min_prob=0.03, decay=0.001, flat_start=250):
@@ -57,7 +57,8 @@ class ForeachPSGDKron(PSGDBase):
 
     def __init__(self, params, lr=0.001, beta=0.9, weight_decay=0.0, preconditioner_update_probability=None,
                  max_size_triangular=2048, min_ndim_triangular=2, memory_save_mode=None,
-                 momentum_into_precond_update=True, warmup_steps: int = 1):
+                 momentum_into_precond_update=True, warmup_steps: int = 1,
+                 merge_dims: bool = False):
         if not 0.0 <= lr:
             raise ValueError(f"Invalid learning rate: {lr}")
         if not 0.0 <= beta < 1.0:
@@ -74,7 +75,7 @@ class ForeachPSGDKron(PSGDBase):
                         momentum_into_precond_update=momentum_into_precond_update, precond_lr=0.1,
                         # precond lr hardcoded to 0.1
                         precond_init_scale=1.0,  # precond init scale hardcoded to 1.0
-                        step=0, warmup_steps=warmup_steps)
+                        step=0, warmup_steps=warmup_steps, merge_dims=merge_dims)
         super().__init__(params, defaults)
 
         self._prob_step = 0
@@ -114,9 +115,11 @@ class ForeachPSGDKron(PSGDBase):
                 p.grad = None
                 state = self.state[p]
 
+                grad, p_view = merge_group(group, grad, p)
+
                 if 'step' not in state:
                     state["exp_avg"] = torch.zeros_like(grad)
-                    state["Q"], state["exprs"] = init_Q_exprs(p, precond_init_scale, max_size_triangular,
+                    state["Q"], state["exprs"] = init_Q_exprs(p_view, precond_init_scale, max_size_triangular,
                                                               min_ndim_triangular, memory_save_mode, dtype=grad.dtype)
                     state['step'] = 0
 

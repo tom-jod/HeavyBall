@@ -63,12 +63,13 @@ def trial(model, data, loss_fn, win_condition, steps, opt, dtype, size, batch, w
                 return
             if loss_hist[-1] > failure_threshold * loss0 or not np.isfinite(loss_hist[-1]):
                 print(f'{opt.__name__} diverged at {i=}, loss={loss_hist[-1]}, {loss0}')
+                loss_hist[-1] = 1e6 + lr
                 break
 
         print(f'{lr=} did not converge')
         lrs.append(lr)
         lrs = sorted(lrs)
-        losses.insert(lrs.index(lr), loss.item())
+        losses.insert(lrs.index(lr), loss_hist[-1])
 
         argmin = np.argmin(losses)
         if argmin == 0:

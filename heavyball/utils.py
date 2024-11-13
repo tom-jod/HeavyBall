@@ -86,7 +86,11 @@ def beta_debias(beta, step):
     return 1 - (1 - beta) / (1 - beta ** step)
 
 
-def exp_avg_sq_(state, grad, beta2, eps):
+def exp_avg_sq_(state, grad, beta2, eps, out=None):
+    if isinstance(state, torch.Tensor):
+        state.mul_(beta2).addcmul_(grad, grad, value=1 - beta2)
+        return torch.sqrt(state, out=out).clamp_(min=eps)
+
     torch._foreach_mul_(state, beta2)
     torch._foreach_addcmul_(state, grad, grad, value=1 - beta2)
     denom = torch._foreach_sqrt(state)
@@ -420,7 +424,7 @@ def copy_stochastic_(target: torch.Tensor, source: torch.Tensor):
 def update_param_(param: List[torch.Tensor], update: List[torch.Tensor], lr: float, decay: float,
                   add_fn: callable = None):
     param32 = [promote(p) for p in param]
-    update32 = [promote(u) for u in update]
+    update32 = [promote(u.view(p.shape)) for u, p in zip(update, param)]
     if decay > 0:
         torch._foreach_mul_(param32, 1 - decay * lr)
     if add_fn is None:
@@ -653,3 +657,12 @@ def precond_update_prob_schedule(max_prob=1.0, min_prob=0.03, decay=0.001, flat_
         return prob
 
     return _schedule
+
+
+def merge_group(group, *tensors):
+    if not group['merge_dims']:
+        return tensors
+    if isinstance(tensors[0], list):
+        return [merge_group(group, *t) for t in tensors]
+    return [dim_merger(t, group['max_size_triangular'] if 'max_size_triangular' in group else group['max_precond_dim'])
+            for t in tensors]
