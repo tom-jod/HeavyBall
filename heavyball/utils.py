@@ -21,12 +21,14 @@ _einsum_base = string.ascii_lowercase + string.ascii_uppercase
 
 
 def warmup(lr: float, step: int, warmup_steps: int):
-    return lr * min(step / warmup_steps, 1)
+    if step >= warmup_steps:  # if instead of min to guard against 0 div
+        return lr
+    return lr * step / warmup_steps
 
 
 def schedule_free_(lr: float, weight_lr_power: float, weight_sum: float, beta1: float, parameters: List[torch.Tensor],
-                   z: List[torch.Tensor], grad: list[torch.Tensor]):
-    weight = lr ** weight_lr_power
+                   z: List[torch.Tensor], grad: list[torch.Tensor], r: float = 0.0, step: int = 0):
+    weight = lr ** weight_lr_power * max(step, 1) ** r
     weight_sum = weight_sum + weight
 
     try:
@@ -126,6 +128,8 @@ def adaptive_gradient_clipping_(parameters: List[torch.Tensor], gradients: List[
 
 
 def set_(dst: torch.Tensor, src: torch.Tensor):
+    if src.data_ptr() == dst.data_ptr():
+        return
     if src.is_contiguous() and dst.is_contiguous() and src.dtype == dst.dtype:
         dst.set_(src)
     else:
@@ -631,7 +635,8 @@ class PSGDBase(torch.optim.Optimizer):
 
     def do_update(self, p_list, grad_list, q_list, precond_lr):
         for p, grad, Q in zip(p_list, grad_list, q_list):
-            psgd_update_precond(Q, self.state[p.data_ptr()]["exprs"], torch.randn_like(grad), grad, precond_lr, self._tiny)
+            psgd_update_precond(Q, self.state[p.data_ptr()]["exprs"], torch.randn_like(grad), grad, precond_lr,
+                                self._tiny)
 
 
 def precond_update_prob_schedule(max_prob=1.0, min_prob=0.03, decay=0.001, flat_start=250):

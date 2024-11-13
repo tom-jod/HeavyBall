@@ -134,6 +134,6 @@ class PrecondScheduleSFPaLMSOAP(ScheduleFree):
 
             lr = warmup(group['lr'], step, group['warmup_steps'])
             group['weight_sum'] = schedule_free_(lr, group['weight_lr_power'], group['weight_sum'], group['beta'],
-                                                 p_list, z, grad_projected)
+                                                 p_list, z, grad_projected, group['r'], step)
 
         return loss

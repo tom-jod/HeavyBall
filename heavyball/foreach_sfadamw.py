@@ -58,7 +58,7 @@ class ForeachSFAdamW(ScheduleFree):
 
             lr = warmup(group['lr'], k + 1, group['warmup_steps'])
             group['weight_sum'] = schedule_free_(lr, group['weight_lr_power'], group['weight_sum'], group['betas'][0],
-                                                 y, z, grad)
+                                                 y, z, grad, group['r'], k + 1)
 
             group['k'] = k + 1
         return loss
