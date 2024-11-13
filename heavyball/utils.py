@@ -66,7 +66,7 @@ def dim_merger(grad, max_precond_dim, split: bool = False):
 
     for sh in shape[1:][::-1]:
         temp_shape = curr_shape * sh
-        if temp_shape >= max_precond_dim:
+        if temp_shape > max_precond_dim:
             if curr_shape > 1:
                 new_shape.append(curr_shape)
                 curr_shape = sh
@@ -89,7 +89,7 @@ def dim_merger(grad, max_precond_dim, split: bool = False):
         if sh == 1:
             grads = [g.squeeze(dim=i) for g in grads]
             continue
-        if sh < max_precond_dim:
+        if sh <= max_precond_dim:
             continue
         grads = [a for g in grads for a in g.split(max_precond_dim, dim=i)]
     if len(grads) == 1 and grads[0].shape == new_shape:
@@ -452,74 +452,75 @@ def init_Q_exprs(t, scale, max_size, min_ndim_triangular, memory_save_mode, dtyp
 
     dtype = dtype if dtype is not None else t.dtype
     shape = t.shape
+
     if len(shape) == 0:  # scalar
         Q = [scale * torch.ones_like(t, dtype=dtype)]
         exprA = ",->"
         exprGs = [",->"]
         exprP = ",,->"
-    else:  # tensor
-        if len(shape) > 13:
-            raise ValueError(f"Got tensor with dim {len(t.shape)}; Einstein runs out of letters!")
+        return [Q, (exprA, tuple(exprGs), exprP)]
 
-        scale = scale ** (1 / len(shape))
+    # Tensor
+    if len(shape) > 13:
+        raise ValueError(f"Got tensor with dim {len(t.shape)}; Einstein runs out of letters!")
 
-        if memory_save_mode is None:
-            dim_diag = [False for _ in shape]
-        elif memory_save_mode == "one_diag":
-            rev_sorted_dims = np.argsort(shape)[::-1]
-            dim_diag = [False for _ in shape]
-            dim_diag[rev_sorted_dims[0]] = True
-        elif memory_save_mode == "all_diag":
-            dim_diag = [True for _ in shape]
+    scale = scale ** (1 / len(shape))
+
+    if memory_save_mode is None:
+        dim_diag = [False for _ in shape]
+    elif memory_save_mode == "one_diag":
+        rev_sorted_dims = np.argsort(shape)[::-1]
+        dim_diag = [False for _ in shape]
+        dim_diag[rev_sorted_dims[0]] = True
+    elif memory_save_mode == "all_diag":
+        dim_diag = [True for _ in shape]
+    else:
+        raise ValueError(f"Invalid memory_save_mode: {memory_save_mode}, must be one of "
+                         "[None, 'one_diag', 'all_diag']")
+
+    Q = []
+    piece1A, piece2A, piece3A = ([], "", "")
+    exprGs = []
+    piece1P, piece2P, piece3P, piece4P = ([], [], "", "")
+    for i, (size, dim_d) in enumerate(zip(shape, dim_diag)):
+        if size == 1 or size > max_size or len(shape) < min_ndim_triangular or dim_d:
+            # use diagonal matrix as preconditioner for this dim
+            Q.append(scale * torch.ones(size, dtype=dtype, device=t.device))
+
+            piece1A.append(letters[i])
+            piece2A = piece2A + letters[i]
+            piece3A = piece3A + letters[i]
+
+            piece1 = "".join([(letters[i + 13] if j == i else letters[j]) for j in range(len(shape))])
+            subscripts = piece1 + "," + piece1 + "->" + letters[i + 13]
+            exprGs.append(subscripts)
+
+            piece1P.append(letters[i + 13])
+            piece2P.append(letters[i + 13])
+            piece3P = piece3P + letters[i + 13]
+            piece4P = piece4P + letters[i + 13]
         else:
-            raise ValueError(f"Invalid memory_save_mode: {memory_save_mode}, must be one of "
-                             "[None, 'one_diag', 'all_diag']")
+            # use triangular matrix as preconditioner for this dim
+            Q.append(scale * torch.eye(size, dtype=dtype, device=t.device))
 
-        Q = []
-        piece1A, piece2A, piece3A = ([], "", "")
-        exprGs = []
-        piece1P, piece2P, piece3P, piece4P = ([], [], "", "")
-        for i, (size, dim_d) in enumerate(zip(shape, dim_diag)):
-            if (size == 1 or size > max_size or len(shape) < min_ndim_triangular or dim_d):
-                # use diagonal matrix as preconditioner for this dim
-                Q.append(scale * torch.ones(size, dtype=dtype, device=t.device))
+            piece1A.append(letters[i] + letters[i + 13])
+            piece2A = piece2A + letters[i + 13]
+            piece3A = piece3A + letters[i]
 
-                piece1A.append(letters[i])
-                piece2A = piece2A + letters[i]
-                piece3A = piece3A + letters[i]
+            piece1 = "".join([(letters[i + 13] if j == i else letters[j]) for j in range(len(shape))])
+            piece2 = "".join([(letters[i + 26] if j == i else letters[j]) for j in range(len(shape))])
+            subscripts = (piece1 + "," + piece2 + "->" + letters[i + 13] + letters[i + 26])
+            exprGs.append(subscripts)
 
-                piece1 = "".join([(letters[i + 13] if j == i else letters[j]) for j in range(len(shape))])
-                subscripts = piece1 + "," + piece1 + "->" + letters[i + 13]
-                exprGs.append(subscripts)
+            a, b, c = (letters[i], letters[i + 13], letters[i + 26])
+            piece1P.append(a + b)
+            piece2P.append(a + c)
+            piece3P = piece3P + c
+            piece4P = piece4P + b
 
-                piece1P.append(letters[i + 13])
-                piece2P.append(letters[i + 13])
-                piece3P = piece3P + letters[i + 13]
-                piece4P = piece4P + letters[i + 13]
-            else:
-                # use triangular matrix as preconditioner for this dim
-                Q.append(scale * torch.eye(size, dtype=dtype, device=t.device))
-
-                piece1A.append(letters[i] + letters[i + 13])
-                piece2A = piece2A + letters[i + 13]
-                piece3A = piece3A + letters[i]
-
-                piece1 = "".join([(letters[i + 13] if j == i else letters[j]) for j in range(len(shape))])
-                piece2 = "".join([(letters[i + 26] if j == i else letters[j]) for j in range(len(shape))])
-                subscripts = (piece1 + "," + piece2 + "->" + letters[i + 13] + letters[i + 26])
-                exprGs.append(subscripts)
-
-                a, b, c = (letters[i], letters[i + 13], letters[i + 26])
-                piece1P.append(a + b)
-                piece2P.append(a + c)
-                piece3P = piece3P + c
-                piece4P = piece4P + b
-
-        exprA = ",".join(piece1A) + "," + piece2A + "->" + piece3A
-        exprP = (",".join(piece1P) + "," + ",".join(piece2P) + "," + piece3P + "->" + piece4P)
-
-    exprGs = tuple(exprGs)
-    return [Q, (exprA, exprGs, exprP)]
+    exprA = ",".join(piece1A) + "," + piece2A + "->" + piece3A
+    exprP = (",".join(piece1P) + "," + ",".join(piece2P) + "," + piece3P + "->" + piece4P)
+    return [Q, (exprA, tuple(exprGs), exprP)]
 
 
 @torch.compile(fullgraph=True, dynamic=False)
