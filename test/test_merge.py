@@ -1,0 +1,39 @@
+import pytest
+import torch
+from torch import nn
+
+import heavyball
+import heavyball.utils
+from benchmark.utils import get_optim
+from heavyball.utils import set_torch
+
+
+class Param(nn.Module):
+    def __init__(self, size):
+        super().__init__()
+        self.weight = nn.Parameter(torch.randn(size))
+
+    def forward(self, inp):
+        return self.weight.sum() + inp
+
+
+@pytest.mark.parametrize("opt", ['ForeachPaLMPAdam', 'ForeachPSGDKron'])
+@pytest.mark.parametrize("method", ['qr', 'newtonschulz2', 'svd', 'eigh'])
+@pytest.mark.parametrize("size", [(16, 16, 16, 16), (4, 4, 4, 4)])
+def test_memory(opt, method, size, depth: int = 2, iterations: int = 5):
+    if 'soap' not in opt.lower() and method != 'qr':
+        return
+    set_torch()
+
+    opt = getattr(heavyball, opt)
+    heavyball.utils.zeroth_power_mode = method
+
+    for i in range(iterations):
+        model = nn.Sequential(*[Param(size) for _ in range(depth)]).cuda()
+        # We don't know if merging will use more or less memory, but we do know that it shouldn't crash. This test is to check if it crashes
+        o = get_optim(opt, model.parameters(), lr=1e-3, merge_dims=True)
+        model(torch.randn((1, size)).cuda()).sum().backward()
+        o.step()
+        o.zero_grad()
+
+        del model, o

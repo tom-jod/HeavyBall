@@ -683,10 +683,9 @@ def split_p_and_g_in_group(group: dict):
         grad = promote(p.grad)
         p.grad = None
 
-        grad, p_views = merge_group(group, grad, p)
+        p_views, grad = merge_group(group, p, grad)
         if isinstance(grad, torch.Tensor):
-            yield p, grad
+            yield p_views, grad
             continue
 
-        for g, p in zip(grad, p_views):
-            yield p, g
+        yield from zip(p_views, grad)
