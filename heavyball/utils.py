@@ -361,15 +361,18 @@ def project(grad, Q, back: bool):
         grad = torch.einsum(f'{param},{preconditioners}->{out}', grad, *[q for q in Q if len(q) > 0])
     return grad
 
+class StatefulOptimizer(torch.optim.Optimizer):
+    def state_(self, arg: torch.Tensor):
+        return self.state[(arg.data_ptr(), tuple(arg.shape))]
 
-class ScheduleFree(torch.optim.Optimizer):
+class ScheduleFree(StatefulOptimizer):
     def eval(self):
         for group in self.param_groups:
             train_mode = group['train_mode']
             beta1 = group['beta'] if 'beta' in group else group['betas'][0]
             if beta1 > 0 and train_mode:
                 for p in group['params']:
-                    state = self.state[p.data_ptr()]
+                    state = self.state_(p)
                     if 'z' in state:
                         # Set p.data to x
                         z = promote(state['z'])
@@ -384,7 +387,7 @@ class ScheduleFree(torch.optim.Optimizer):
             beta1 = group['beta'] if 'beta' in group else group['betas'][0]
             if beta1 > 0 and not train_mode:
                 for p in group['params']:
-                    state = self.state[p.data_ptr()]
+                    state = self.state_(p)
                     if 'z' in state:
                         z = promote(state['z'])
                         p32 = promote(p.data)
@@ -615,7 +618,7 @@ def trust_region_clip_(grad, lerp: float, scale: float):
     torch._foreach_mul_(grad, scale)
 
 
-class PSGDBase(torch.optim.Optimizer):
+class PSGDBase(StatefulOptimizer):
     def __init__(self, parameters, groups):
         super().__init__(parameters, groups)
         self.rng = random.Random(0x1923213)
@@ -636,7 +639,7 @@ class PSGDBase(torch.optim.Optimizer):
 
     def do_update(self, p_list, grad_list, q_list, precond_lr):
         for p, grad, Q in zip(p_list, grad_list, q_list):
-            psgd_update_precond(Q, self.state[p.data_ptr()]["exprs"], torch.randn_like(grad), grad, precond_lr,
+            psgd_update_precond(Q, self.state_(p)["exprs"], torch.randn_like(grad), grad, precond_lr,
                                 self._tiny)
 
 

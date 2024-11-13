@@ -82,7 +82,7 @@ class ForeachPurePSGD(PSGDBase):
             vals = []
 
             for p, g in split_p_and_g_in_group(group):
-                state = self.state[p.data_ptr()]
+                state = self.state_(p)
 
                 if 'step' not in state:
                     state["Q"], state["exprs"] = init_Q_exprs(p, precond_init_scale, max_size_triangular,
@@ -104,7 +104,7 @@ class ForeachPurePSGD(PSGDBase):
                 self.do_update(p_list, grad_list, Q_list, precond_lr)
 
             for p, Q, g in zip(p_list, Q_list, grad_list):
-                psgd_precond_grad(Q, self.state[p.data_ptr()]["exprs"], g, inplace=True)
+                psgd_precond_grad(Q, self.state_(p)["exprs"], g, inplace=True)
 
             lr = -warmup(lr, group['step'], group['warmup_steps'])
             update_param_(p_list, grad_list, lr, weight_decay)

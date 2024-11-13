@@ -2,10 +2,10 @@ import torch
 import torch.optim as optim
 
 from .utils import init_preconditioner, update_preconditioner, project, beta_debias, exp_avg_sq_, update_param_, set_, \
-    split_p_and_g_in_group
+    split_p_and_g_in_group, StatefulOptimizer
 
 
-class ForeachSOAP(optim.Optimizer):
+class ForeachSOAP(StatefulOptimizer):
     """
     SFPaLMForeachSOAP
 
@@ -56,7 +56,7 @@ class ForeachSOAP(optim.Optimizer):
             precondition_1d = group['precondition_1d']
 
             for p, g in split_p_and_g_in_group(group):
-                state = self.state[p.data_ptr()]
+                state = self.state_(p)
                 step = state['step'] = state.get("step", -1) + 1
 
                 if "exp_avg" not in state:
@@ -88,7 +88,7 @@ class ForeachSOAP(optim.Optimizer):
             denom = exp_avg_sq_(exp_avg_sq, grad_projected, old_debiased2, group['eps'])
 
             for p, g, ea, d in zip(p_list, grad, exp_avg, denom):
-                state = self.state[p.data_ptr()]
+                state = self.state_(p)
                 # Projecting the exponential moving average of gradients to the eigenbases of Shampoo's preconditioner
                 # i.e. projecting to the eigenbases of matrices in state['GG']
                 exp_avg_projected = project(ea, state['Q'], False)

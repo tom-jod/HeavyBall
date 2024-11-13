@@ -1,10 +1,10 @@
 import torch
 import torch.optim
 
-from .utils import warmup, exp_avg_sq_, beta_debias, update_param_
+from .utils import warmup, exp_avg_sq_, beta_debias, update_param_, StatefulOptimizer
 
 
-class ForeachAdamW(torch.optim.Optimizer):
+class ForeachAdamW(StatefulOptimizer):
     def __init__(self, params, lr=0.0025, betas=(0.9, 0.99), eps=1e-8, weight_decay=0, warmup_steps=0):
         defaults = dict(lr=lr, betas=betas, eps=eps, k=0, warmup_steps=warmup_steps, train_mode=True, weight_sum=0.0,
                         lr_max=-1.0, weight_decay=weight_decay)
@@ -33,12 +33,12 @@ class ForeachAdamW(torch.optim.Optimizer):
             active_p = [p for p in group['params'] if p.grad is not None]
 
             for p in active_p:
-                if 'exp_avg' not in self.state[p.data_ptr()]:
-                    self.state[p.data_ptr()]['exp_avg'] = torch.zeros_like(p.data, dtype=torch.float32)
-                    self.state[p.data_ptr()]['exp_avg_sq'] = torch.zeros_like(p.data, dtype=torch.float32)
+                if 'exp_avg' not in self.state_(p):
+                    self.state_(p)['exp_avg'] = torch.zeros_like(p.data, dtype=torch.float32)
+                    self.state_(p)['exp_avg_sq'] = torch.zeros_like(p.data, dtype=torch.float32)
 
             y, grad, exp_avg_sq, exp_avg = zip(
-                *[(p.data, p.grad.float(), self.state[p.data_ptr()]['exp_avg_sq'], self.state[p.data_ptr()]['exp_avg']) for p in active_p])
+                *[(p.data, p.grad.float(), self.state_(p)['exp_avg_sq'], self.state_(p)['exp_avg']) for p in active_p])
 
             # Decay the first and second moment running average coefficient
             torch._foreach_lerp_(exp_avg, grad, 1 - beta_debias(group['betas'][0], k + 1))

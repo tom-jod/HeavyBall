@@ -85,7 +85,7 @@ class ForeachPaLMPAdam(PSGDBase):
             vals = []
 
             for p, g in split_p_and_g_in_group(group):
-                state = self.state[p.data_ptr()]
+                state = self.state_(p)
 
                 if 'step' not in state:
                     state['exp_avg'] = torch.zeros_like(g)
@@ -113,8 +113,8 @@ class ForeachPaLMPAdam(PSGDBase):
             beta2 = 1 - group['step'] ** -group['beta2_scale']
 
             for p, Q, g, ea, eas in zip(p_list, Q_list, grad_list, exp_avg, exp_avg_sq):
-                psgd_precond_grad(Q, self.state[p.data_ptr()]["exprs"], g, inplace=True)
-                ea = psgd_precond_grad(Q, self.state[p.data_ptr()]["exprs"], ea)
+                psgd_precond_grad(Q, self.state_(p)["exprs"], g, inplace=True)
+                ea = psgd_precond_grad(Q, self.state_(p)["exprs"], ea)
                 exp_avg_sq_(eas, g, beta_debias(beta2, group['step']), 1e-8, out=g)
                 torch.div(ea, g, out=g)
                 """

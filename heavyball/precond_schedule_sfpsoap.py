@@ -88,7 +88,7 @@ class PrecondScheduleSFPaLMSOAP(ScheduleFree):
             adaptive_gradient_clipping_(p_list, grad, group["gradient_clip_val"], eps=group["eps"])
 
             for p, g in split_p_and_g_in_group(group):
-                state = self.state[p.data_ptr()]
+                state = self.state_(p)
 
                 if "z" not in state:
                     state["z"] = torch.clone(p.data)
@@ -120,7 +120,7 @@ class PrecondScheduleSFPaLMSOAP(ScheduleFree):
             update_precond = precond_schedule(step, group['precond_scheduler'], self.rng)
 
             for p, g, gp in zip(p_list, grad, grad_projected):
-                state = self.state[p.data_ptr()]
+                state = self.state_(p)
                 # Projecting back the preconditioned (by Adam) exponential moving average of gradients
                 # to the original space
                 set_(gp, project(gp, state['Q'], back=True))

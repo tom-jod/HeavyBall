@@ -108,7 +108,7 @@ class ForeachPSGDKron(PSGDBase):
             vals = []
 
             for p, g in split_p_and_g_in_group(group):
-                state = self.state[p.data_ptr()]
+                state = self.state_(p)
 
                 if 'step' not in state:
                     state["exp_avg"] = torch.zeros_like(g)
@@ -134,7 +134,7 @@ class ForeachPSGDKron(PSGDBase):
 
             del grad_list
 
-            pre_grads = [psgd_precond_grad(Q, self.state[p.data_ptr()]["exprs"], exp_avg) for p, Q, exp_avg in
+            pre_grads = [psgd_precond_grad(Q, self.state_(p)["exprs"], exp_avg) for p, Q, exp_avg in
                          zip(p_list, Q_list, exp_avg_list)]
 
             trust_region_clip_(pre_grads, 0.9, 1.5)

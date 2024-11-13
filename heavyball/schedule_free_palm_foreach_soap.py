@@ -79,7 +79,7 @@ class SFPaLMForeachSOAP(ScheduleFree):
             vals = []
 
             for p, g in split_p_and_g_in_group(group):
-                state = self.state[p.data_ptr()]
+                state = self.state_(p)
 
                 if "z" not in state:
                     state["z"] = torch.clone(p).float()
@@ -110,7 +110,7 @@ class SFPaLMForeachSOAP(ScheduleFree):
             update_precond = group['step'] > 0 and group['step'] % group['precondition_frequency'] == 0
 
             for p, g, gp in zip(p_list, grad, grad_projected):
-                state = self.state[p.data_ptr()]
+                state = self.state_(p)
                 # Projecting back the preconditioned (by Adam) exponential moving average of gradients
                 # to the original space
                 # CANT DO /= HERE AS EXP_AVG MAY POINT TO THE BUFFER
