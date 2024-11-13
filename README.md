@@ -8,8 +8,8 @@ A simple package of efficient optimizers
 The goal is not to thrive for completeness, full maintenance or abstraction, but instead to provide a simple
 largely static alternative to `torch.optim` with more and better optimizers.
 
-Currently (2024-11-13, 0.12.4), the recommended stable optimizer is `PrecondSchedulePaLMForeachSOAP` (see below). The
-recommended experimental optimizer is `ForeachPaLMPAdam`.
+Currently (2024-11-13, 0.12.5), the recommended stable optimizer is `PrecondSchedulePaLMForeachSOAP` (see below). The
+recommended experimental optimizer is `ForeachPSGDKron`.
 
 ## Features
 

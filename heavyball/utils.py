@@ -656,11 +656,12 @@ def precond_update_prob_schedule(max_prob=1.0, min_prob=0.03, decay=0.001, flat_
     """
 
     def _schedule(n):
-        """Exponential anneal with flat start."""
-        n = torch.tensor(n, dtype=torch.float32)
-        prob = max_prob * torch.exp(-decay * (n - flat_start))
-        prob.clamp_(min=min_prob, max=max_prob)
-        return prob
+        if n < flat_start:  # higher numerical stability
+            return max_prob
+
+        n -= flat_start
+        prob = max_prob * math.exp(-decay * (n - flat_start))
+        return max(min_prob, min(max_prob, prob))
 
     return _schedule
 
