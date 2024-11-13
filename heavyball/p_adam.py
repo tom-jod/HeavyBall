@@ -7,7 +7,7 @@ Source available at https://github.com/evanatyourservice/kron_torch/blob/97a2b5e
 import torch
 
 from .utils import promote, update_param_, warmup, psgd_precond_grad, init_Q_exprs, PSGDBase, \
-    precond_update_prob_schedule, exp_avg_sq_, beta_debias, merge_group
+    precond_update_prob_schedule, exp_avg_sq_, beta_debias, merge_group, split_p_and_g_in_group
 
 
 class ForeachPaLMPAdam(PSGDBase):
@@ -36,7 +36,7 @@ class ForeachPaLMPAdam(PSGDBase):
     def __init__(self, params, lr=0.001, weight_decay=0.0, preconditioner_update_probability=None,
                  max_size_triangular=2048, min_ndim_triangular=2, memory_save_mode=None,
                  momentum_into_precond_update=True, warmup_steps: int = 1, betas=(None, None), beta: float = 0.9,
-                 beta2_scale: float = 0.8, merge_dims: bool = False):
+                 beta2_scale: float = 0.8, merge_dims: bool = False, split: bool = False):
         if not 0.0 <= lr:
             raise ValueError(f"Invalid learning rate: {lr}")
         if not 0.0 <= weight_decay:
@@ -53,7 +53,8 @@ class ForeachPaLMPAdam(PSGDBase):
                         momentum_into_precond_update=momentum_into_precond_update, precond_lr=0.1,
                         # precond lr hardcoded to 0.1
                         precond_init_scale=1.0,  # precond init scale hardcoded to 1.0
-                        step=0, warmup_steps=warmup_steps, beta=beta, beta2_scale=beta2_scale, merge_dims=merge_dims)
+                        step=0, warmup_steps=warmup_steps, beta=beta, beta2_scale=beta2_scale, merge_dims=merge_dims,
+                        split=split)
         super().__init__(params, defaults)
 
         self._prob_step = 0
@@ -83,24 +84,17 @@ class ForeachPaLMPAdam(PSGDBase):
 
             vals = []
 
-            for p in group["params"]:
-                if p.grad is None:
-                    continue
-
-                grad = promote(p.grad)
-                p.grad = None
-                state = self.state[p]
-
-                grad, p_view = merge_group(group, grad, p)
+            for p, g in split_p_and_g_in_group(group):
+                state = self.state[p.data_ptr()]
 
                 if 'step' not in state:
-                    state['exp_avg'] = torch.zeros_like(grad)
-                    state['exp_avg_sq'] = torch.zeros_like(grad)
-                    state["Q"], state["exprs"] = init_Q_exprs(p_view, precond_init_scale, max_size_triangular,
-                                                              min_ndim_triangular, memory_save_mode, dtype=grad.dtype)
+                    state['exp_avg'] = torch.zeros_like(g)
+                    state['exp_avg_sq'] = torch.zeros_like(g)
+                    state["Q"], state["exprs"] = init_Q_exprs(p, precond_init_scale, max_size_triangular,
+                                                              min_ndim_triangular, memory_save_mode, dtype=g.dtype)
                     state['step'] = 0
 
-                vals.append((p, grad, state["Q"], state['exp_avg'], state['exp_avg_sq']))
+                vals.append((p, g, state["Q"], state['exp_avg'], state['exp_avg_sq']))
 
             if not vals:
                 continue
@@ -119,8 +113,8 @@ class ForeachPaLMPAdam(PSGDBase):
             beta2 = 1 - group['step'] ** -group['beta2_scale']
 
             for p, Q, g, ea, eas in zip(p_list, Q_list, grad_list, exp_avg, exp_avg_sq):
-                psgd_precond_grad(Q, self.state[p]["exprs"], g, inplace=True)
-                ea = psgd_precond_grad(Q, self.state[p]["exprs"], ea)
+                psgd_precond_grad(Q, self.state[p.data_ptr()]["exprs"], g, inplace=True)
+                ea = psgd_precond_grad(Q, self.state[p.data_ptr()]["exprs"], ea)
                 exp_avg_sq_(eas, g, beta_debias(beta2, group['step']), 1e-8, out=g)
                 torch.div(ea, g, out=g)
                 """

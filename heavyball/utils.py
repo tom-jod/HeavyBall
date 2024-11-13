@@ -48,7 +48,7 @@ def schedule_free_(lr: float, weight_lr_power: float, weight_sum: float, beta1: 
     return weight_sum
 
 
-def dim_merger(grad, max_precond_dim):
+def dim_merger(grad, max_precond_dim, split: bool = False):
     """
     Merges dimensions of the gradient tensor till the product of the dimensions is less than or equal to max_precond_dim.
 
@@ -78,8 +78,21 @@ def dim_merger(grad, max_precond_dim):
     if curr_shape > 1 or len(new_shape) == 0:
         new_shape.append(curr_shape)
 
-    new_grad = grad.reshape(new_shape)
-    return new_grad
+    new_grad = grad.view(new_shape)
+    if not split:
+        return new_grad
+
+    grads = [new_grad]
+    for i, sh in reversed(list(enumerate(new_shape[:]))):
+        if sh == 1:
+            grads = [g.squeeze(dim=i) for g in grads]
+            continue
+        if sh < max_precond_dim:
+            continue
+        grads = [a for g in grads for a in g.split(max_precond_dim, dim=i)]
+    if len(grads) == 1 and grads[0].shape == new_shape:
+        return new_grad
+    return [dim_merger(g, max_precond_dim) for g in grads]
 
 
 def beta_debias(beta, step):
@@ -172,7 +185,7 @@ def ortho(x):
 
 
 @decorator
-def get_orthogonal_matrix_QR(GG, Q, exp_avg_sq, max_precond_dim=10000, merge_dims=False):
+def get_orthogonal_matrix_QR(GG, Q, exp_avg_sq):
     """
     Computes the eigenbases of the preconditioner using one round of power iteration
     followed by torch.linalg.qr decomposition.
@@ -215,15 +228,11 @@ def get_orthogonal_matrix_QR(GG, Q, exp_avg_sq, max_precond_dim=10000, merge_dim
             set_(q, ortho(tmp[:, sort_idx]))
 
     exp_avg_sq_new = exp_avg_sq
-    if merge_dims:
-        exp_avg_sq_new = dim_merger(exp_avg_sq, max_precond_dim)
 
     indices = tuple(slice(None) if ind is None else ind.view(*(1,) * i, -1, *(1,) * (exp_avg_sq_new.dim() - i - 1))  #
                     for i, ind in enumerate(indices))
     exp_avg_sq_new = exp_avg_sq_new[indices]
 
-    if merge_dims:
-        exp_avg_sq_new = exp_avg_sq_new.reshape(exp_avg_sq.shape)
     set_(exp_avg_sq, exp_avg_sq_new)
 
 
@@ -277,12 +286,9 @@ def get_orthogonal_matrix(mat):
 
 
 @decorator
-def compute_ggt(grad, GG, max_precond_dim, merge_dims, precondition_1d, beta):
+def compute_ggt(grad, GG, max_precond_dim, precondition_1d, beta):
     if grad.dim() == 1 and (not precondition_1d or grad.shape[0] > max_precond_dim):
         return
-
-    if merge_dims:
-        grad = dim_merger(grad, max_precond_dim)
 
     for idx, sh in enumerate(grad.shape):
         if sh > max_precond_dim:
@@ -302,18 +308,18 @@ def promote(x):
     return x
 
 
-def update_preconditioner(grad, state, max_precond_dim, merge_dims, precondition_1d, beta, update_precond):
+def update_preconditioner(grad, state, max_precond_dim, precondition_1d, beta, update_precond):
     """
     Updates the preconditioner matrices and the eigenbases (L, R, Q_L, Q_R in the paper).
     """
-    compute_ggt(grad, state['GG'], max_precond_dim, merge_dims, precondition_1d, beta)
+    compute_ggt(grad, state['GG'], max_precond_dim, precondition_1d, beta)
     if state['Q'] is None:
         state['Q'] = get_orthogonal_matrix(state['GG'])
     if update_precond:
-        get_orthogonal_matrix_QR(state['GG'], state['Q'], state['exp_avg_sq'], max_precond_dim, merge_dims)
+        get_orthogonal_matrix_QR(state['GG'], state['Q'], state['exp_avg_sq'])
 
 
-def init_preconditioner(grad, state, max_precond_dim=10000, precondition_1d=False, merge_dims=False):
+def init_preconditioner(grad, state, max_precond_dim=10000, precondition_1d=False):
     """
     Initializes the preconditioner matrices (L and R in the paper).
     """
@@ -326,9 +332,6 @@ def init_preconditioner(grad, state, max_precond_dim=10000, precondition_1d=Fals
         state['GG'].append(torch.zeros(grad.shape[0], grad.shape[0], device=grad.device, dtype=grad.dtype))
         return
 
-    if merge_dims:
-        grad = dim_merger(grad, max_precond_dim)
-
     for sh in grad.shape:
         if sh > max_precond_dim:
             state['GG'].append([])
@@ -337,7 +340,7 @@ def init_preconditioner(grad, state, max_precond_dim=10000, precondition_1d=Fals
 
 
 @decorator
-def project(grad, Q, merge_dims, max_precond_dim, back: bool):
+def project(grad, Q, back: bool):
     """
 
     :param grad:
@@ -347,17 +350,11 @@ def project(grad, Q, merge_dims, max_precond_dim, back: bool):
     :param back: whether to project to Shampoo eigenbases or back to original space
     :return:
     """
-    original_shape = grad.shape
-    if merge_dims:
-        grad = dim_merger(grad, max_precond_dim)
-
     param = _einsum_base[:grad.dim()]
     preconditioners = ",".join((g + g.upper())[::-1 if back else 1] for m, g in zip(Q, param) if len(m) > 0)
     if preconditioners:
         out = ''.join(c.upper() if c.upper() in preconditioners else c for c in param)
         grad = torch.einsum(f'{param},{preconditioners}->{out}', grad, *[q for q in Q if len(q) > 0])
-    if merge_dims:
-        grad = grad.reshape(original_shape)
     return grad
 
 
@@ -368,7 +365,7 @@ class ScheduleFree(torch.optim.Optimizer):
             beta1 = group['beta'] if 'beta' in group else group['betas'][0]
             if beta1 > 0 and train_mode:
                 for p in group['params']:
-                    state = self.state[p]
+                    state = self.state[p.data_ptr()]
                     if 'z' in state:
                         # Set p.data to x
                         z = promote(state['z'])
@@ -383,7 +380,7 @@ class ScheduleFree(torch.optim.Optimizer):
             beta1 = group['beta'] if 'beta' in group else group['betas'][0]
             if beta1 > 0 and not train_mode:
                 for p in group['params']:
-                    state = self.state[p]
+                    state = self.state[p.data_ptr()]
                     if 'z' in state:
                         z = promote(state['z'])
                         p32 = promote(p.data)
@@ -399,8 +396,8 @@ def copy_stochastic_list_(target: List[torch.Tensor], source: List[torch.Tensor]
     for t, s in zip(target, source):
         if t.dtype == torch.bfloat16:
             copy_stochastic_(t, s)
-        elif t.data_ptr() != s.data_ptr():
-            t.copy_(s)
+        else:
+            set_(t, s)
 
 
 def copy_stochastic_(target: torch.Tensor, source: torch.Tensor):
@@ -634,7 +631,7 @@ class PSGDBase(torch.optim.Optimizer):
 
     def do_update(self, p_list, grad_list, q_list, precond_lr):
         for p, grad, Q in zip(p_list, grad_list, q_list):
-            psgd_update_precond(Q, self.state[p]["exprs"], torch.randn_like(grad), grad, precond_lr, self._tiny)
+            psgd_update_precond(Q, self.state[p.data_ptr()]["exprs"], torch.randn_like(grad), grad, precond_lr, self._tiny)
 
 
 def precond_update_prob_schedule(max_prob=1.0, min_prob=0.03, decay=0.001, flat_start=250):
@@ -660,9 +657,27 @@ def precond_update_prob_schedule(max_prob=1.0, min_prob=0.03, decay=0.001, flat_
 
 
 def merge_group(group, *tensors):
-    if not group['merge_dims']:
+    if not group.get('merge_dims', False):
         return tensors
     if isinstance(tensors[0], list):
         return [merge_group(group, *t) for t in tensors]
-    return [dim_merger(t, group['max_size_triangular'] if 'max_size_triangular' in group else group['max_precond_dim'])
+    return [dim_merger(t, group['max_size_triangular'] if 'max_size_triangular' in group else group['max_precond_dim'],
+                       group.get('split', False))  #
             for t in tensors]
+
+
+def split_p_and_g_in_group(group: dict):
+    for p in group["params"]:
+        if p.grad is None:
+            continue
+
+        grad = promote(p.grad)
+        p.grad = None
+
+        grad, p_views = merge_group(group, grad, p)
+        if isinstance(grad, torch.Tensor):
+            yield p, grad
+            continue
+
+        for g, p in zip(grad, p_views):
+            yield p, g

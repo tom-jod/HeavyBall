@@ -3,7 +3,8 @@ import random
 import torch
 
 from .utils import init_preconditioner, update_preconditioner, project, set_, adaptive_gradient_clipping_, \
-    exp_avg_sq_, beta_debias, schedule_free_, warmup, ScheduleFree, precond_schedule
+    exp_avg_sq_, beta_debias, schedule_free_, warmup, ScheduleFree, precond_schedule, merge_group, \
+    split_p_and_g_in_group
 
 
 class PrecondScheduleSFPaLMSOAP(ScheduleFree):
@@ -41,7 +42,7 @@ class PrecondScheduleSFPaLMSOAP(ScheduleFree):
                  merge_dims: bool = True, precondition_1d: bool = False, normalize_grads: bool = False,
                  data_format: str = "channels_first", correct_bias: bool = True, warmup_steps: int = 1, r=0.0,
                  weight_lr_power=2.0, gradient_clip_val: float = 0.1, precond_scheduler=(1 / 3, 9),
-                 betas=(None, None)):
+                 betas=(None, None), split: bool = False):
         if betas[0] is not None:
             beta = betas[0]
         defaults = {"lr": lr, "beta": beta, "beta2_scale": beta2_scale, "eps": eps, "weight_decay": weight_decay,
@@ -49,7 +50,7 @@ class PrecondScheduleSFPaLMSOAP(ScheduleFree):
                     "merge_dims": merge_dims, "precondition_1d": precondition_1d, "normalize_grads": normalize_grads,
                     "correct_bias": correct_bias, 'warmup_steps': warmup_steps, 'r': r,
                     'weight_lr_power': weight_lr_power, 'train_mode': True, 'step': -1, 'weight_sum': 0,
-                    'gradient_clip_val': gradient_clip_val, 'precond_scheduler': precond_scheduler}
+                    'gradient_clip_val': gradient_clip_val, 'precond_scheduler': precond_scheduler, 'split': split}
         super().__init__(params, defaults)
         self._data_format = data_format
         self.rng = random.Random(0x120983109)
@@ -69,7 +70,6 @@ class PrecondScheduleSFPaLMSOAP(ScheduleFree):
 
         for group in self.param_groups:
             vals = []
-            merge_dims = group['merge_dims']
             max_precond_dim = group['max_precond_dim']
             precondition_1d = group['precondition_1d']
 
@@ -79,7 +79,6 @@ class PrecondScheduleSFPaLMSOAP(ScheduleFree):
                 if p.grad is None:
                     continue
                 grad = p.grad.float()
-                p.grad = None
                 vals.append((p, grad))
 
             p_list, grad = zip(*vals)
@@ -88,21 +87,21 @@ class PrecondScheduleSFPaLMSOAP(ScheduleFree):
             # adaptive gradient clipping
             adaptive_gradient_clipping_(p_list, grad, group["gradient_clip_val"], eps=group["eps"])
 
-            for p, grad in zip(p_list, grad):
-                state = self.state[p]
+            for p, g in split_p_and_g_in_group(group):
+                state = self.state[p.data_ptr()]
 
                 if "z" not in state:
                     state["z"] = torch.clone(p.data)
-                    state["exp_avg_sq"] = torch.zeros_like(grad, dtype=torch.float32)
-                    init_preconditioner(grad, state, max_precond_dim, precondition_1d, merge_dims)
-                    update_preconditioner(grad, state, max_precond_dim, merge_dims, precondition_1d, 0, True)
+                    state["exp_avg_sq"] = torch.zeros_like(g, dtype=torch.float32)
+                    init_preconditioner(g, state, max_precond_dim, precondition_1d)
+                    update_preconditioner(g, state, max_precond_dim, precondition_1d, 0, True)
                     continue  # first step is skipped so that we never use the current gradients in the projection.
 
                 # Projecting gradients to the eigenbases of Shampoo's preconditioner
                 # i.e. projecting to the eigenbases of matrices in state['GG']
-                grad_projected = project(grad, state['Q'], merge_dims, max_precond_dim, False)
+                grad_projected = project(g, state['Q'], False)
                 z, exp_avg_sq = state["z"], state["exp_avg_sq"]
-                vals.append((p, grad, grad_projected, z, exp_avg_sq))
+                vals.append((p, g, grad_projected, z, exp_avg_sq))
 
             if not vals:
                 continue
@@ -121,12 +120,12 @@ class PrecondScheduleSFPaLMSOAP(ScheduleFree):
             update_precond = precond_schedule(step, group['precond_scheduler'], self.rng)
 
             for p, g, gp in zip(p_list, grad, grad_projected):
-                state = self.state[p]
+                state = self.state[p.data_ptr()]
                 # Projecting back the preconditioned (by Adam) exponential moving average of gradients
                 # to the original space
-                set_(gp, project(gp, state['Q'], merge_dims, max_precond_dim, back=True))
+                set_(gp, project(gp, state['Q'], back=True))
 
-                update_preconditioner(g, state, max_precond_dim, merge_dims, precondition_1d, old_debiased2,
+                update_preconditioner(g, state, max_precond_dim, precondition_1d, old_debiased2,
                                       update_precond)
 
             # Weight decay calculated at y

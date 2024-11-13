@@ -36,12 +36,12 @@ class ForeachSFAdamW(ScheduleFree):
             active_p = [p for p in group['params'] if p.grad is not None]
 
             for p in active_p:
-                if 'z' not in self.state[p]:
-                    self.state[p]['z'] = torch.clone(p.data)
-                    self.state[p]['exp_avg_sq'] = torch.zeros_like(p.data, dtype=torch.float32)
+                if 'z' not in self.state[p.data_ptr()]:
+                    self.state[p.data_ptr()]['z'] = torch.clone(p.data)
+                    self.state[p.data_ptr()]['exp_avg_sq'] = torch.zeros_like(p.data, dtype=torch.float32)
 
             y, grad, exp_avg_sq, z = zip(
-                *[(p.data, p.grad.float(), self.state[p]['exp_avg_sq'], self.state[p]['z']) for p in active_p])
+                *[(p.data, p.grad.float(), self.state[p.data_ptr()]['exp_avg_sq'], self.state[p.data_ptr()]['z']) for p in active_p])
 
             # Decay the first moment running average coefficient
             old_debiased = beta_debias(group['betas'][1], k + 1)

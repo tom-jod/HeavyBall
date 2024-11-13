@@ -1,15 +1,16 @@
 import datetime
 import gc
 import inspect
+import random
 
 import numpy as np
 import torch
 
 import heavyball.utils
 
-base_args = {'betas': (0.9, 0.999), 'precondition_frequency': 1, 'merge_dims': False, 'warmup_steps': 100,
+base_args = {'betas': (0.9, 0.999), 'precondition_frequency': 1, 'merge_dims': True, 'warmup_steps': 100,
              'max_precond_dim': 2 ** 16, 'beta': 0.9, 'preconditioner_update_probability': 1,
-             'max_size_triangular': 2 ** 16}
+             'max_size_triangular': 2 ** 4, 'split': True}
 
 
 def get_optim(optim, params, **kwargs):
@@ -25,15 +26,13 @@ def trial(model, data, loss_fn, win_condition, steps, opt, dtype, size, batch, w
     if "soap" not in opt.__name__.lower() and method != 'qr':
         return
 
-    print(f'{opt.__name__} | {dtype} {size=} {batch=} {weight_decay=} {method=} {length=} {depth=}')
-
     heavyball.utils.zeroth_power_mode = method
 
     lr = 1e-3
     losses = []
     lrs = []
     loss0 = None
-    for _ in range(trials):
+    for attempt in range(trials):
         torch.cuda.empty_cache()
         gc.collect()
         torch.manual_seed(0x1239121)
@@ -45,6 +44,7 @@ def trial(model, data, loss_fn, win_condition, steps, opt, dtype, size, batch, w
 
         start = datetime.datetime.now()
         loss_hist = []
+        rng = random.Random(0x9128391)
 
         for i in range(steps):
             inp, tgt = data()
@@ -59,23 +59,29 @@ def trial(model, data, loss_fn, win_condition, steps, opt, dtype, size, batch, w
             if win_condition(loss_hist[-1]):
                 dist = datetime.datetime.now() - start
                 print(f'Took {dist} | {opt.__name__}, {dtype=}, {size=}, {length=}, {batch=}, {lr=}, {weight_decay=}, '
-                      f'{method=} | Iteration: {i}')
+                      f'{method=} | Iteration: {i} | Attempt: {attempt + 1} | Loss: {loss_hist[-1]}')
                 return
             if loss_hist[-1] > failure_threshold * loss0 or not np.isfinite(loss_hist[-1]):
                 print(f'{opt.__name__} diverged at {i=}, loss={loss_hist[-1]}, {loss0}')
                 loss_hist[-1] = 1e6 + lr
                 break
 
-        print(f'{lr=} did not converge')
         lrs.append(lr)
         lrs = sorted(lrs)
         losses.insert(lrs.index(lr), loss_hist[-1])
 
+        if len(losses) > 1 and all(ls == losses[0] for ls in losses):
+            if rng.random() > 0.5:
+                lr /= 7
+            else:
+                lr *= 4
+            continue
+
         argmin = np.argmin(losses)
         if argmin == 0:
-            lr /= 2
+            lr /= 3
         elif argmin == len(losses) - 1:
-            lr *= 3
+            lr *= 5
         else:
             lr = (lrs[argmin - 1] + lrs[argmin + 1]) / 2
 

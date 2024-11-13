@@ -33,12 +33,12 @@ class ForeachAdamW(torch.optim.Optimizer):
             active_p = [p for p in group['params'] if p.grad is not None]
 
             for p in active_p:
-                if 'exp_avg' not in self.state[p]:
-                    self.state[p]['exp_avg'] = torch.zeros_like(p.data, dtype=torch.float32)
-                    self.state[p]['exp_avg_sq'] = torch.zeros_like(p.data, dtype=torch.float32)
+                if 'exp_avg' not in self.state[p.data_ptr()]:
+                    self.state[p.data_ptr()]['exp_avg'] = torch.zeros_like(p.data, dtype=torch.float32)
+                    self.state[p.data_ptr()]['exp_avg_sq'] = torch.zeros_like(p.data, dtype=torch.float32)
 
             y, grad, exp_avg_sq, exp_avg = zip(
-                *[(p.data, p.grad.float(), self.state[p]['exp_avg_sq'], self.state[p]['exp_avg']) for p in active_p])
+                *[(p.data, p.grad.float(), self.state[p.data_ptr()]['exp_avg_sq'], self.state[p.data_ptr()]['exp_avg']) for p in active_p])
 
             # Decay the first and second moment running average coefficient
             torch._foreach_lerp_(exp_avg, grad, 1 - beta_debias(group['betas'][0], k + 1))

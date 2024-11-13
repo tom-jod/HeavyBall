@@ -4,7 +4,7 @@ import torch
 import torch.optim as optim
 
 from .utils import init_preconditioner, update_preconditioner, project, beta_debias, exp_avg_sq_, update_param_, \
-    precond_schedule, set_
+    precond_schedule, set_, merge_group, split_p_and_g_in_group
 
 
 class PrecondSchedulePaLMForeachSOAP(optim.Optimizer):
@@ -33,14 +33,14 @@ class PrecondSchedulePaLMForeachSOAP(optim.Optimizer):
                  weight_decay: float = 0.01, precondition_frequency: int = 2, max_precond_dim: int = 2048,  #
                  merge_dims: bool = True, precondition_1d: bool = False, normalize_grads: bool = False,
                  data_format: str = "channels_first", correct_bias: bool = True, warmup_steps: int = 1,
-                 precond_scheduler=(1 / 3, 9), betas=(None, None), beta2_scale: float = 0.8):
+                 precond_scheduler=(1 / 3, 9), betas=(None, None), beta2_scale: float = 0.8, split: bool = False):
         if betas[0] is not None:
             beta = betas[0]
         defaults = {"lr": lr, "beta": beta, "shampoo_beta": shampoo_beta, "eps": eps, "weight_decay": weight_decay,
                     "precondition_frequency": precondition_frequency, "max_precond_dim": max_precond_dim,
                     "merge_dims": merge_dims, "precondition_1d": precondition_1d, "normalize_grads": normalize_grads,
                     "correct_bias": correct_bias, 'warmup_steps': warmup_steps, 'precond_scheduler': precond_scheduler,
-                    'beta2_scale': beta2_scale}
+                    'beta2_scale': beta2_scale, 'split': split}
         super().__init__(params, defaults)
         self._data_format = data_format
         self.rng = random.Random(0x120983109)
@@ -62,32 +62,25 @@ class PrecondSchedulePaLMForeachSOAP(optim.Optimizer):
             vals = []
             step = 0
 
-            for p in group["params"]:
-                if p.grad is None:
-                    continue
+            max_precond_dim = group['max_precond_dim']
+            precondition_1d = group['precondition_1d']
 
-                merge_dims = group['merge_dims']
-                max_precond_dim = group['max_precond_dim']
-                precondition_1d = group['precondition_1d']
-
-                grad = p.grad.float()
-                p.grad = None
-
-                state = self.state[p]
+            for p, g in split_p_and_g_in_group(group):
+                state = self.state[p.data_ptr()]
                 step = state['step'] = state.get("step", -1) + 1
 
                 if "exp_avg" not in state:
-                    state["exp_avg"] = torch.zeros_like(grad, dtype=torch.float32)
-                    state["exp_avg_sq"] = torch.zeros_like(grad, dtype=torch.float32)
-                    init_preconditioner(grad, state, max_precond_dim, precondition_1d, merge_dims)
-                    update_preconditioner(grad, state, max_precond_dim, merge_dims, precondition_1d, 0, True)
+                    state["exp_avg"] = torch.zeros_like(g, dtype=torch.float32)
+                    state["exp_avg_sq"] = torch.zeros_like(g, dtype=torch.float32)
+                    init_preconditioner(g, state, max_precond_dim, precondition_1d)
+                    update_preconditioner(g, state, max_precond_dim, precondition_1d, 0, True)
                     continue  # first step is skipped so that we never use the current gradients in the projection.
 
                 # Projecting gradients to the eigenbases of Shampoo's preconditioner
                 # i.e. projecting to the eigenbases of matrices in state['GG']
-                grad_projected = project(grad, state['Q'], merge_dims, max_precond_dim, False)
+                grad_projected = project(g, state['Q'], False)
                 exp_avg, exp_avg_sq = state["exp_avg"], state["exp_avg_sq"]
-                vals.append((p, grad, grad_projected, exp_avg, exp_avg_sq))
+                vals.append((p, g, grad_projected, exp_avg, exp_avg_sq))
 
             if not vals:
                 continue
@@ -107,18 +100,18 @@ class PrecondSchedulePaLMForeachSOAP(optim.Optimizer):
 
             update_precond = precond_schedule(step, group['precond_scheduler'], self.rng)
             for p, g, ea, d in zip(p_list, grad, exp_avg, denom):
-                state = self.state[p]
+                state = self.state[p.data_ptr()]
                 # Projecting the exponential moving average of gradients to the eigenbases of Shampoo's preconditioner
                 # i.e. projecting to the eigenbases of matrices in state['GG']
-                exp_avg_projected = project(ea, state['Q'], merge_dims, max_precond_dim, False)
+                exp_avg_projected = project(ea, state['Q'], False)
 
                 # Projecting back the preconditioned (by Adam) exponential moving average of gradients
                 # to the original space
                 # CANT DO /= HERE AS EXP_AVG MAY POINT TO THE BUFFER
                 exp_avg_projected = exp_avg_projected / d
-                set_(d, project(exp_avg_projected, state['Q'], merge_dims, max_precond_dim, True))
+                set_(d, project(exp_avg_projected, state['Q'], True))
 
-                update_preconditioner(g, state, max_precond_dim, merge_dims, precondition_1d, old_debiased2,
+                update_preconditioner(g, state, max_precond_dim, precondition_1d, old_debiased2,
                                       update_precond)
 
             # Why does this have to be rebiased here?

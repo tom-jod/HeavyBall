@@ -7,7 +7,7 @@ Source available at https://github.com/evanatyourservice/kron_torch/blob/97a2b5e
 import torch
 
 from .utils import promote, update_param_, warmup, psgd_precond_grad, init_Q_exprs, PSGDBase, \
-    precond_update_prob_schedule, merge_group
+    precond_update_prob_schedule, merge_group, split_p_and_g_in_group
 
 
 class ForeachPurePSGD(PSGDBase):
@@ -35,7 +35,8 @@ class ForeachPurePSGD(PSGDBase):
 
     def __init__(self, params, lr=0.001, weight_decay=0.0, preconditioner_update_probability=None,
                  max_size_triangular=2048, min_ndim_triangular=2, memory_save_mode=None,
-                 momentum_into_precond_update=True, warmup_steps: int = 1, merge_dims: bool = False):
+                 momentum_into_precond_update=True, warmup_steps: int = 1, merge_dims: bool = False,
+                 split: bool = False):
         if not 0.0 <= lr:
             raise ValueError(f"Invalid learning rate: {lr}")
         if not 0.0 <= weight_decay:
@@ -50,7 +51,7 @@ class ForeachPurePSGD(PSGDBase):
                         momentum_into_precond_update=momentum_into_precond_update, precond_lr=0.1,
                         # precond lr hardcoded to 0.1
                         precond_init_scale=1.0,  # precond init scale hardcoded to 1.0
-                        step=0, warmup_steps=warmup_steps, merge_dims=merge_dims)
+                        step=0, warmup_steps=warmup_steps, merge_dims=merge_dims, split=split)
         super().__init__(params, defaults)
 
         self._prob_step = 0
@@ -80,22 +81,15 @@ class ForeachPurePSGD(PSGDBase):
 
             vals = []
 
-            for p in group["params"]:
-                if p.grad is None:
-                    continue
-
-                grad = promote(p.grad)
-                p.grad = None
-                state = self.state[p]
-
-                grad, p_view = merge_group(group, grad, p)
+            for p, g in split_p_and_g_in_group(group):
+                state = self.state[p.data_ptr()]
 
                 if 'step' not in state:
-                    state["Q"], state["exprs"] = init_Q_exprs(p_view, precond_init_scale, max_size_triangular,
-                                                              min_ndim_triangular, memory_save_mode, dtype=grad.dtype)
+                    state["Q"], state["exprs"] = init_Q_exprs(p, precond_init_scale, max_size_triangular,
+                                                              min_ndim_triangular, memory_save_mode, dtype=g.dtype)
                     state['step'] = 0
 
-                vals.append((p, grad, state["Q"]))
+                vals.append((p, g, state["Q"]))
 
             if not vals:
                 continue
@@ -110,7 +104,7 @@ class ForeachPurePSGD(PSGDBase):
                 self.do_update(p_list, grad_list, Q_list, precond_lr)
 
             for p, Q, g in zip(p_list, Q_list, grad_list):
-                psgd_precond_grad(Q, self.state[p]["exprs"], g, inplace=True)
+                psgd_precond_grad(Q, self.state[p.data_ptr()]["exprs"], g, inplace=True)
 
             lr = -warmup(lr, group['step'], group['warmup_steps'])
             update_param_(p_list, grad_list, lr, weight_decay)
