@@ -1,5 +1,4 @@
 import torch
-import torch.optim as optim
 
 from .utils import init_preconditioner, update_preconditioner, project, beta_debias, exp_avg_sq_, update_param_, set_, \
     split_p_and_g_in_group, StatefulOptimizer

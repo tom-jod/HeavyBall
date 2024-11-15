@@ -6,8 +6,8 @@ Source available at https://github.com/evanatyourservice/kron_torch/blob/97a2b5e
 
 import torch
 
-from .utils import promote, update_param_, warmup, psgd_precond_grad, init_Q_exprs, PSGDBase, \
-    precond_update_prob_schedule, exp_avg_sq_, beta_debias, merge_group, split_p_and_g_in_group
+from .utils import update_param_, warmup, psgd_precond_grad, init_Q_exprs, PSGDBase, \
+    precond_update_prob_schedule, exp_avg_sq_, beta_debias, split_p_and_g_in_group
 
 
 class ForeachPaLMPAdam(PSGDBase):

@@ -361,9 +361,11 @@ def project(grad, Q, back: bool):
         grad = torch.einsum(f'{param},{preconditioners}->{out}', grad, *[q for q in Q if len(q) > 0])
     return grad
 
+
 class StatefulOptimizer(torch.optim.Optimizer):
     def state_(self, arg: torch.Tensor):
         return self.state[(arg.data_ptr(), tuple(arg.shape))]
+
 
 class ScheduleFree(StatefulOptimizer):
     def eval(self):

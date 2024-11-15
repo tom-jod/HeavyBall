@@ -3,8 +3,7 @@ import random
 import torch
 
 from .utils import init_preconditioner, update_preconditioner, project, set_, adaptive_gradient_clipping_, \
-    exp_avg_sq_, beta_debias, schedule_free_, warmup, ScheduleFree, precond_schedule, merge_group, \
-    split_p_and_g_in_group
+    exp_avg_sq_, beta_debias, schedule_free_, warmup, ScheduleFree, precond_schedule, split_p_and_g_in_group
 
 
 class PrecondScheduleSFPaLMSOAP(ScheduleFree):

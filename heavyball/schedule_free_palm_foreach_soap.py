@@ -90,7 +90,7 @@ class SFPaLMForeachSOAP(ScheduleFree):
 
                 # Projecting gradients to the eigenbases of Shampoo's preconditioner
                 # i.e. projecting to the eigenbases of matrices in state['GG']
-                grad_projected = project(g, state['Q'],False)
+                grad_projected = project(g, state['Q'], False)
                 z, exp_avg_sq = state["z"], state["exp_avg_sq"]
                 vals.append((p, g, grad_projected, z, exp_avg_sq))
 
