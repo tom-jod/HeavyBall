@@ -4,6 +4,7 @@ import random
 import string
 from typing import List
 
+import namedtreemap
 import numpy as np
 import torch
 from torch.backends import cudnn, opt_einsum
@@ -368,12 +369,14 @@ class StatefulOptimizer(torch.optim.Optimizer):
 
     def state_size(self) -> int:
         total_bytes = 0
-        for group in self.param_groups:
-            for p in group['params']:
-                state = self.state_(p)
-                for k, v in state.items():
-                    if isinstance(v, torch.Tensor):
-                        total_bytes += v.numel() * v.element_size()
+
+        def _add(prefix, x):
+            nonlocal total_bytes
+            if isinstance(x, torch.Tensor):
+                total_bytes += x.numel() * x.element_size()
+
+        namedtreemap.named_treemap(_add, self.param_groups)
+
         return total_bytes
 
 
