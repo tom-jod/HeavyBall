@@ -77,6 +77,13 @@ The default preconditioner schedule (`f`) would yield the following update inter
 | 100,000   | 100.2         | 4,049            | 50,000 (12.3x)            | 6,250 (1.5x)               |
 | 1,000,000 | 513           | 7,245            | 500,000 (69.0x)           | 62,500 (8.6x)              |
 
+## Memory
+
+Second order optimizers make it difficult to estimate memory usage, as it depends on shapes and hyperparameters. To
+estimate your memory usage, you may use `test/test_memory.py` which attempts to ensure there are no regressions.\
+Furthermore, you can find real-world memory usage of a 300M parameters video diffusion model below:
+![img.png](assets/img.png)
+
 ## Utils
 
 To access `heavyball.utils`, you need to explicitly `import heavyball.utils`.\
