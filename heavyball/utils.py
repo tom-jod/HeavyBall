@@ -8,7 +8,7 @@ import namedtreemap
 import numpy as np
 import torch
 from torch.backends import cudnn, opt_einsum
-
+from torch.utils._pytree import tree_map
 compile_mode = None
 zeroth_power_mode = 'qr'  # 'qr' is baseline, 'newtonschulz' converges better and faster, 'eigh' is perfect but slow
 
@@ -378,14 +378,14 @@ class StatefulOptimizer(torch.optim.Optimizer):
     def state_size(self) -> int:
         total_bytes = 0
 
-        def _add(_prefix, x):
+        def _add(x):
             nonlocal total_bytes
             if isinstance(x, torch.Tensor):
                 total_bytes += x.numel() * x.element_size()
 
         for group in self.param_groups:
             for p, _ in split_p_and_g_in_group(group, skip_none=False):
-                namedtreemap.named_treemap(_add, self.state_(p))
+                tree_map(_add, self.state_(p))
         return total_bytes
 
 
