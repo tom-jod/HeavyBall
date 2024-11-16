@@ -1,8 +1,9 @@
+import functools
 import gc
 import math
 import random
 import string
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 import numpy as np
 import torch
@@ -12,11 +13,21 @@ from torch.utils._pytree import tree_map
 compile_mode = None
 zeroth_power_mode = 'qr'  # 'qr' is baseline, 'newtonschulz' converges better and faster, 'eigh' is perfect but slow
 
-if compile_mode is None:
-    def decorator(func):
-        return func
-else:
-    decorator = torch.compile(fullgraph=False, dynamic=True, mode=compile_mode)
+
+def decorator(func):
+    compiled = None
+
+    @functools.wraps(func)
+    def _fn(*args, **kwargs):
+        if compile_mode is None:
+            return func(*args, **kwargs)
+        nonlocal compiled
+        if compiled is None:
+            compiled = torch.compile(func, fullgraph=True, dynamic=False, mode=compile_mode)
+        return compiled(*args, **kwargs)
+
+    return _fn
+
 
 _einsum_base = string.ascii_lowercase + string.ascii_uppercase
 
@@ -163,6 +174,7 @@ def set_torch():
     opt_einsum.strategy = "auto-hq"
 
 
+@decorator
 def zeropower_via_newtonschulz5(G, init, steps=2, eps=1e-7):
     """
     Modified from "modded-nanogpt" under the MIT license:
@@ -201,7 +213,6 @@ def ortho(x):
     raise NotImplementedError(f"Unknown zeroth_power_mode: {zeroth_power_mode}")
 
 
-@decorator
 def get_orthogonal_matrix_QR(GG, Q, exp_avg_sq):
     """
     Computes the eigenbases of the preconditioner using one round of power iteration
@@ -364,9 +375,9 @@ def project(grad, Q, back: bool):
     :return:
     """
     param = _einsum_base[:grad.dim()]
-    preconditioners = ",".join((g + g.upper())[::-1 if back else 1] for m, g in zip(Q, param) if len(m) > 0)
+    preconditioners = ",".join([(g + g.upper())[::-1 if back else 1] for m, g in zip(Q, param) if len(m) > 0])
     if preconditioners:
-        out = ''.join(c.upper() if c.upper() in preconditioners else c for c in param)
+        out = ''.join([c.upper() if c.upper() in preconditioners else c for c in param])
         grad = torch.einsum(f'{param},{preconditioners}->{out}', grad, *[q for q in Q if len(q) > 0])
     return grad
 
@@ -623,6 +634,7 @@ def psgd_update_precond(Q, exprs, V, G, step, tiny):
             q.addmm_(term1, q, alpha=-1)
 
 
+@decorator
 def psgd_precond_grad(Q, exprs, G, inplace: bool = False):
     """Precondition gradient G with preconditioner Q."""
     out = torch.einsum(exprs[-1], *[q.conj() for q in Q], *Q, G)
@@ -642,14 +654,29 @@ def trust_region_clip_(grad, lerp: float, scale: float):
     torch._foreach_mul_(grad, scale)
 
 
-def triu_to_line(Q_list):
-    return [(q.shape, q[*torch.triu_indices(*q.shape, device=q.device)]) if q.ndim == 2 else (None, q) for q in Q_list]
+@decorator
+def triu_to_line(Q_list: List[torch.Tensor]):
+    out = []
+    for q in Q_list:
+        if q.dim() < 2:
+            out.append((None, q))
+        else:
+            out.append((q.shape, q[*torch.triu_indices(*q.shape)]))
+    return out
 
 
-def line_to_triu(Q_list):
+def _triu_shape(numel):
+    n = int((2 * numel) ** 0.5)
+    assert n * (n + 1) == 2 * numel
+    return n, n
+
+
+@decorator
+def line_to_triu(Q_list: List[Tuple[Optional[List[int]], torch.Tensor]]):
     new = []
     for shape, q in Q_list:
         if shape is not None:
+            shape = _triu_shape(q.numel())
             x = torch.zeros(shape, device=q.device, dtype=q.dtype)
             x[*torch.triu_indices(*shape, device=q.device)] = q
             q = x
