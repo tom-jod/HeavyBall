@@ -92,9 +92,9 @@ def dim_merger(grad, max_precond_dim, split: bool = False):
         if sh <= max_precond_dim:
             continue
         grads = [a for g in grads for a in g.split(max_precond_dim, dim=i)]
-    if len(grads) == 1 and grads[0].shape == new_shape:
+    if len(grads) == 1:
         return new_grad
-    return [dim_merger(g, max_precond_dim) for g in grads]
+    return [dim_merger(g, max_precond_dim, split=split) for g in grads]
 
 
 def beta_debias(beta, step):
