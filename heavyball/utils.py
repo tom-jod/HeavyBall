@@ -538,12 +538,12 @@ def init_Q_exprs(t, scale, max_size, min_ndim_triangular, memory_save_mode, dtyp
     return [Q, (exprA, tuple(exprGs), exprP)]
 
 
-@torch.compile(fullgraph=True, dynamic=False)
+@decorator
 def psgd_balance_Q(Q_in):
     norms = torch.stack([q.norm(float("inf")) for q in Q_in])
     geometric_mean = norms.log().mean().exp()
     norms = geometric_mean / norms
-    return list(norms)
+    torch._foreach_mul_(Q_in, list(norms))
 
 
 def psgd_calc_A_and_conjB(exprA, G, Q, V):
@@ -640,14 +640,9 @@ class PSGDBase(StatefulOptimizer):
         if not do_update or self.rng.random() > 0.01:
             return
 
-        filtered_q = []
-        norms = []
         for g, q in zip(grad_list, Q_list):
             if g.dim() > 1:
-                norms.extend(psgd_balance_Q(q))
-                filtered_q.extend(q)
-        if filtered_q:
-            torch._foreach_mul_(filtered_q, norms)
+                psgd_balance_Q(q)
 
     def do_update(self, p_list, grad_list, q_list, precond_lr):
         for p, grad, Q in zip(p_list, grad_list, q_list):

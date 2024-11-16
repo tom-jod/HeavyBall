@@ -87,12 +87,11 @@ class ForeachPaLMPAdam(PSGDBase):
             for p, g in split_p_and_g_in_group(group):
                 state = self.state_(p)
 
-                if 'step' not in state:
+                if 'Q' not in state:
                     state['exp_avg'] = torch.zeros_like(g)
                     state['exp_avg_sq'] = torch.zeros_like(g)
                     state["Q"], state["exprs"] = init_Q_exprs(p, precond_init_scale, max_size_triangular,
                                                               min_ndim_triangular, memory_save_mode, dtype=g.dtype)
-                    state['step'] = 0
 
                 vals.append((p, g, state["Q"], state['exp_avg'], state['exp_avg_sq']))
 
