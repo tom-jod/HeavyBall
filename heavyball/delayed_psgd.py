@@ -107,9 +107,8 @@ class ForeachDelayedPSGD(PSGDBase):
 
             torch._foreach_lerp_(exp_avg_list, grad_list, (1 - beta) / (1 - beta ** group["step"]))
 
-            grad_list, Q_list, exp_avg_list = list(grad_list), list(Q_list), list(exp_avg_list)
-            for i, p in enumerate(p_list):
-                g = grad_list.pop(0)
+            Q_list, exp_avg_list = list(Q_list), list(exp_avg_list)
+            for i, (p, g) in enumerate(zip(p_list, grad_list)):
                 q = Q_list.pop(0)
                 ea = exp_avg_list.pop(0)
                 q = line_to_triu(q)
