@@ -4,11 +4,11 @@ import random
 import string
 from typing import List
 
-import namedtreemap
 import numpy as np
 import torch
 from torch.backends import cudnn, opt_einsum
 from torch.utils._pytree import tree_map
+
 compile_mode = None
 zeroth_power_mode = 'qr'  # 'qr' is baseline, 'newtonschulz' converges better and faster, 'eigh' is perfect but slow
 
@@ -640,6 +640,21 @@ def trust_region_clip_(grad, lerp: float, scale: float):
     grad = [p.copysign_(t) for t, p in zip(tanh, grad)]  # torch doesn't have a foreach copysign
     torch._foreach_lerp_(grad, tanh, lerp)  # sgn(x) * log(1 + |x|) * 0.1 + tanh(x) * 0.9
     torch._foreach_mul_(grad, scale)
+
+
+def triu_to_line(Q_list):
+    return [(q.shape, q[*torch.triu_indices(*q.shape, device=q.device)]) if q.ndim == 2 else (None, q) for q in Q_list]
+
+
+def line_to_triu(Q_list):
+    new = []
+    for shape, q in Q_list:
+        if shape is not None:
+            x = torch.zeros(shape, device=q.device, dtype=q.dtype)
+            x[*torch.triu_indices(*shape, device=q.device)] = q
+            q = x
+        new.append(q)
+    return new
 
 
 class PSGDBase(StatefulOptimizer):

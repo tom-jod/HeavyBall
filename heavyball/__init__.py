@@ -12,10 +12,11 @@ from .precond_schedule_sfpsoap import PrecondScheduleSFPaLMSOAP
 from .psgd_kron import ForeachPSGDKron
 from .pure_psgd import ForeachPurePSGD
 from .schedule_free_palm_foreach_soap import SFPaLMForeachSOAP
+from .delayed_psgd import ForeachDelayedPSGD
 
 PalmForEachSoap = PaLMForeachSOAP
 
 __all__ = ['PalmForEachSoap', 'PaLMForeachSFAdamW', 'PaLMForeachSOAP', 'SFPaLMForeachSOAP', 'PrecondScheduleSFPaLMSOAP',
            'ForeachSOAP', 'ForeachSFAdamW', 'ForeachLaProp', 'ForeachADOPT', 'PrecondScheduleForeachSOAP',
            'PrecondSchedulePaLMForeachSOAP', 'ForeachPSGDKron', 'ForeachAdamW', 'ForeachPurePSGD',
-           'ForeachPaLMPAdam']
+           'ForeachPaLMPAdam', 'ForeachDelayedPSGD']

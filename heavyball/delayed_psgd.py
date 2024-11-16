@@ -6,18 +6,19 @@ Source available at https://github.com/evanatyourservice/kron_torch/blob/97a2b5e
 
 import torch
 
-from .utils import update_param_, warmup, psgd_precond_grad, init_Q_exprs, PSGDBase, \
-    precond_update_prob_schedule, split_p_and_g_in_group, line_to_triu, triu_to_line
+from .utils import update_param_, warmup, psgd_precond_grad, init_Q_exprs, trust_region_clip_, PSGDBase, \
+    precond_update_prob_schedule, split_p_and_g_in_group, triu_to_line, line_to_triu, set_
 
 
-class ForeachPurePSGD(PSGDBase):
+class ForeachDelayedPSGD(PSGDBase):
     """
-    Kronecker Factorized PSGD WITHOUT Momentum
+    Implements PSGD with off-by-one preconditioning (akin to ADOPT and SOAP)
 
     Args:
         params (iterable): Iterable of parameters to optimize or dicts defining
             parameter groups.
         lr (float): Learning rate.
+        b1 (float): Momentum parameter.
         weight_decay (float): Weight decay (L2 penalty).
         preconditioner_update_probability (callable or float, optional): Probability of
             updating the preconditioner. If None, defaults to a schedule that anneals
@@ -33,12 +34,14 @@ class ForeachPurePSGD(PSGDBase):
             update instead of raw gradients.
     """
 
-    def __init__(self, params, lr=0.001, weight_decay=0.0, preconditioner_update_probability=None,
+    def __init__(self, params, lr=0.001, beta=0.9, weight_decay=0.0, preconditioner_update_probability=None,
                  max_size_triangular=2048, min_ndim_triangular=2, memory_save_mode=None,
                  momentum_into_precond_update=True, warmup_steps: int = 1, merge_dims: bool = False,
                  split: bool = False):
         if not 0.0 <= lr:
             raise ValueError(f"Invalid learning rate: {lr}")
+        if not 0.0 <= beta < 1.0:
+            raise ValueError(f"Invalid beta parameter: {beta}")
         if not 0.0 <= weight_decay:
             raise ValueError(f"Invalid weight_decay value: {weight_decay}")
 
@@ -46,7 +49,7 @@ class ForeachPurePSGD(PSGDBase):
             preconditioner_update_probability = precond_update_prob_schedule()
         self.preconditioner_update_probability = preconditioner_update_probability
 
-        defaults = dict(lr=lr, weight_decay=weight_decay, max_size_triangular=max_size_triangular,
+        defaults = dict(lr=lr, beta=beta, weight_decay=weight_decay, max_size_triangular=max_size_triangular,
                         min_ndim_triangular=min_ndim_triangular, memory_save_mode=memory_save_mode,
                         momentum_into_precond_update=momentum_into_precond_update, precond_lr=0.1,
                         # precond lr hardcoded to 0.1
@@ -71,6 +74,7 @@ class ForeachPurePSGD(PSGDBase):
         self._prob_step += 1
 
         for group in self.param_groups:
+            momentum_into_precond_update = group.get("momentum_into_precond_update", True)
             precond_init_scale = group['precond_init_scale']
             max_size_triangular = group['max_size_triangular']
             min_ndim_triangular = group['min_ndim_triangular']
@@ -78,6 +82,7 @@ class ForeachPurePSGD(PSGDBase):
             precond_lr = group['precond_lr']
             weight_decay = group['weight_decay']
             lr = group['lr']
+            beta = group['beta']
 
             vals = []
 
@@ -85,33 +90,43 @@ class ForeachPurePSGD(PSGDBase):
                 state = self.state_(p)
 
                 if 'Q' not in state:
-                    Q, state["exprs"] = init_Q_exprs(p, precond_init_scale, max_size_triangular,
-                                                              min_ndim_triangular, memory_save_mode, dtype=g.dtype)
-                    state['Q'] = triu_to_line(Q)
+                    state["exp_avg"] = torch.zeros_like(g)
+                    Q, state["exprs"] = init_Q_exprs(p, precond_init_scale, max_size_triangular, min_ndim_triangular,
+                                                     memory_save_mode, dtype=g.dtype)
+                    state["Q"] = triu_to_line(Q)
 
-                vals.append((p, g, state["Q"]))
+                vals.append((p, g, state["exp_avg"], state["Q"]))
 
             if not vals:
                 continue
 
-            p_list, grad_list, Q_list = zip(*vals)
+            p_list, grad_list, exp_avg_list, Q_list = zip(*vals)
             del vals
 
             group["step"] += 1
 
+            torch._foreach_lerp_(exp_avg_list, grad_list, (1 - beta) / (1 - beta ** group["step"]))
+
             pre_grads = []
-            grad_list, Q_list = list(grad_list), list(Q_list)
+            grad_list, Q_list, exp_avg_list = list(grad_list), list(Q_list), list(exp_avg_list)
             for i, p in enumerate(p_list):
                 g = grad_list.pop(0)
                 q = Q_list.pop(0)
+                ea = exp_avg_list.pop(0)
                 q = line_to_triu(q)
-
                 self.balance(do_update, [g], [q])
+                new = psgd_precond_grad(q, self.state_(p)["exprs"], ea)
                 if do_update:
-                    self.do_update([p], [g], [q], precond_lr)
-                psgd_precond_grad(q, self.state_(p)["exprs"], g, inplace=True)
+                    self.do_update([p], [ea if momentum_into_precond_update else g], [q], precond_lr)
+                set_(g, new)
+            del grad_list
+
+            trust_region_clip_(pre_grads, 0.9, 1.5)
+
+            torch._foreach_maximum_(pre_grads, -2)
+            torch._foreach_minimum_(pre_grads, 2)
 
             lr = -warmup(lr, group['step'], group['warmup_steps'])
-            update_param_(p_list, grad_list, lr, weight_decay)
+            update_param_(p_list, pre_grads, lr, weight_decay)
 
         return loss

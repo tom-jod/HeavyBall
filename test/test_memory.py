@@ -37,13 +37,13 @@ def test_memory(opt, method, size, depth: int, iterations: int = 5, outer_iterat
     opt = getattr(heavyball, opt)
     heavyball.utils.zeroth_power_mode = method
 
-    torch.cuda.reset_peak_memory_stats()
-    torch.cuda.reset_max_memory_allocated()
-    torch.cuda.reset_max_memory_cached()
-    torch.cuda.reset_accumulated_memory_stats()
-
-    for i in range(iterations):
+    for i in range(outer_iterations):
         model = nn.Sequential(*[nn.Linear(size, size) for _ in range(depth)]).cuda()
+
+        torch.cuda.reset_peak_memory_stats()
+        torch.cuda.reset_max_memory_allocated()
+        torch.cuda.reset_max_memory_cached()
+        torch.cuda.reset_accumulated_memory_stats()
 
         model_allocated = get_memory()
         o = get_optim(opt, model.parameters(), lr=1e-3)
