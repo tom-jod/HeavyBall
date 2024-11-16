@@ -375,7 +375,7 @@ class StatefulOptimizer(torch.optim.Optimizer):
             if isinstance(x, torch.Tensor):
                 total_bytes += x.numel() * x.element_size()
 
-        namedtreemap.named_treemap(_add, self.param_groups)
+        namedtreemap.named_treemap(_add, self.state)
 
         return total_bytes
 
