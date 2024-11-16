@@ -366,6 +366,16 @@ class StatefulOptimizer(torch.optim.Optimizer):
     def state_(self, arg: torch.Tensor):
         return self.state[(arg.data_ptr(), tuple(arg.shape))]
 
+    def state_size(self) -> int:
+        total_bytes = 0
+        for group in self.param_groups:
+            for p in group['params']:
+                state = self.state_(p)
+                for k, v in state.items():
+                    if isinstance(v, torch.Tensor):
+                        total_bytes += v.numel() * v.element_size()
+        return total_bytes
+
 
 class ScheduleFree(StatefulOptimizer):
     def eval(self):
@@ -641,8 +651,7 @@ class PSGDBase(StatefulOptimizer):
 
     def do_update(self, p_list, grad_list, q_list, precond_lr):
         for p, grad, Q in zip(p_list, grad_list, q_list):
-            psgd_update_precond(Q, self.state_(p)["exprs"], torch.randn_like(grad), grad, precond_lr,
-                                self._tiny)
+            psgd_update_precond(Q, self.state_(p)["exprs"], torch.randn_like(grad), grad, precond_lr, self._tiny)
 
 
 def precond_update_prob_schedule(max_prob=1.0, min_prob=0.03, decay=0.001, flat_start=250):
