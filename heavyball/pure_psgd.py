@@ -5,9 +5,10 @@ Source available at https://github.com/evanatyourservice/kron_torch/blob/97a2b5e
 """
 
 import torch
+from heavyball.utils import copy_stochastic_list_
 
 from .utils import update_param_, warmup, psgd_precond_grad, init_Q_exprs, PSGDBase, \
-    precond_update_prob_schedule, split_p_and_g_in_group, line_to_triu, triu_to_line
+    precond_update_prob_schedule, split_p_and_g_in_group, line_to_triu, triu_to_line, set_
 
 
 class ForeachPurePSGD(PSGDBase):
@@ -99,16 +100,15 @@ class ForeachPurePSGD(PSGDBase):
 
             group["step"] += 1
 
-            pre_grads = []
             grad_list, Q_list = list(grad_list), list(Q_list)
             for i, p in enumerate(p_list):
                 g = grad_list.pop(0)
-                q = Q_list.pop(0)
-                q = line_to_triu(q)
+                q_orig = Q_list.pop(0)
+                q = line_to_triu(q_orig)
 
                 self.balance(do_update, [g], [q])
                 if do_update:
-                    self.do_update([p], [g], [q], precond_lr)
+                    self.do_update([p], [g], [q], precond_lr, [q_orig])
                 psgd_precond_grad(q, self.state_(p)["exprs"], g, inplace=True)
 
             lr = -warmup(lr, group['step'], group['warmup_steps'])

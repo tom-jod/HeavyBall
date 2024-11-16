@@ -2,7 +2,7 @@ import gc
 import math
 import random
 import string
-from typing import List
+from typing import List, Optional
 
 import numpy as np
 import torch
@@ -657,6 +657,12 @@ def line_to_triu(Q_list):
     return new
 
 
+def update_triu_(q_state, materialised):
+    for (shape0, q), (shape1, m) in zip(q_state, triu_to_line(materialised)):
+        assert shape0 == shape1
+        set_(q, m)
+
+
 class PSGDBase(StatefulOptimizer):
     def __init__(self, parameters, groups):
         super().__init__(parameters, groups)
@@ -671,9 +677,11 @@ class PSGDBase(StatefulOptimizer):
             if g.dim() > 1:
                 psgd_balance_Q(q)
 
-    def do_update(self, p_list, grad_list, q_list, precond_lr):
-        for p, grad, Q in zip(p_list, grad_list, q_list):
+    def do_update(self, p_list, grad_list, q_list, precond_lr, original_q: Optional[List] = None):
+        for i, (p, grad, Q) in enumerate(zip(p_list, grad_list, q_list)):
             psgd_update_precond(Q, self.state_(p)["exprs"], torch.randn_like(grad), grad, precond_lr, self._tiny)
+            if original_q:
+                update_triu_(original_q[i], Q)
 
 
 def precond_update_prob_schedule(max_prob=1.0, min_prob=0.03, decay=0.001, flat_start=250):

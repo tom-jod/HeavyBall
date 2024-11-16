@@ -108,13 +108,13 @@ class ForeachPSGDKron(PSGDBase):
 
             grad_list, Q_list, exp_avg_list = list(grad_list), list(Q_list), list(exp_avg_list)
             for i, (p, g) in enumerate(zip(p_list, grad_list)):
-                q = Q_list.pop(0)
+                q_orig = Q_list.pop(0)
                 ea = exp_avg_list.pop(0)
-                q = line_to_triu(q)
+                q = line_to_triu(q_orig)
 
                 self.balance(do_update, [g], [q])
                 if do_update:
-                    self.do_update([p], [ea if momentum_into_precond_update else g], [q], precond_lr)
+                    self.do_update([p], [ea if momentum_into_precond_update else g], [q], precond_lr, [q_orig])
                 set_(g, psgd_precond_grad(q, self.state_(p)["exprs"], ea))
 
             trust_region_clip_(grad_list, 0.9, 1.5)

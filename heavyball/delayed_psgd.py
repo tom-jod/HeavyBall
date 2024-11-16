@@ -6,6 +6,7 @@ Source available at https://github.com/evanatyourservice/kron_torch/blob/97a2b5e
 
 import torch
 
+from heavyball.utils import copy_stochastic_list_
 from .utils import update_param_, warmup, psgd_precond_grad, init_Q_exprs, trust_region_clip_, PSGDBase, \
     precond_update_prob_schedule, split_p_and_g_in_group, triu_to_line, line_to_triu, set_
 
@@ -109,13 +110,15 @@ class ForeachDelayedPSGD(PSGDBase):
 
             Q_list, exp_avg_list = list(Q_list), list(exp_avg_list)
             for i, (p, g) in enumerate(zip(p_list, grad_list)):
-                q = Q_list.pop(0)
+                q_orig = Q_list.pop(0)
                 ea = exp_avg_list.pop(0)
-                q = line_to_triu(q)
+                q = line_to_triu(q_orig)
                 self.balance(do_update, [g], [q])
                 new = psgd_precond_grad(q, self.state_(p)["exprs"], ea)
+
                 if do_update:
-                    self.do_update([p], [ea if momentum_into_precond_update else g], [q], precond_lr)
+                    self.do_update([p], [ea if momentum_into_precond_update else g], [q], precond_lr, [q_orig])
+                copy_stochastic_list_(q_orig, triu_to_line(q))
                 set_(g, new)
 
             trust_region_clip_(grad_list, 0.9, 1.5)
