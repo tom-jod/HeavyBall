@@ -118,7 +118,6 @@ class ForeachDelayedPSGD(PSGDBase):
 
                 if do_update:
                     self.do_update([p], [ea if momentum_into_precond_update else g], [q], precond_lr, [q_orig])
-                copy_stochastic_list_(q_orig, triu_to_line(q))
                 set_(g, new)
 
             trust_region_clip_(grad_list, 0.9, 1.5)
