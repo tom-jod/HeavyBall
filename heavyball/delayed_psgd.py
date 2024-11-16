@@ -107,7 +107,6 @@ class ForeachDelayedPSGD(PSGDBase):
 
             torch._foreach_lerp_(exp_avg_list, grad_list, (1 - beta) / (1 - beta ** group["step"]))
 
-            pre_grads = []
             grad_list, Q_list, exp_avg_list = list(grad_list), list(Q_list), list(exp_avg_list)
             for i, p in enumerate(p_list):
                 g = grad_list.pop(0)
@@ -119,14 +118,13 @@ class ForeachDelayedPSGD(PSGDBase):
                 if do_update:
                     self.do_update([p], [ea if momentum_into_precond_update else g], [q], precond_lr)
                 set_(g, new)
-            del grad_list
 
-            trust_region_clip_(pre_grads, 0.9, 1.5)
+            trust_region_clip_(grad_list, 0.9, 1.5)
 
-            torch._foreach_maximum_(pre_grads, -2)
-            torch._foreach_minimum_(pre_grads, 2)
+            torch._foreach_maximum_(grad_list, -2)
+            torch._foreach_minimum_(grad_list, 2)
 
             lr = -warmup(lr, group['step'], group['warmup_steps'])
-            update_param_(p_list, pre_grads, lr, weight_decay)
+            update_param_(p_list, grad_list, lr, weight_decay)
 
         return loss
