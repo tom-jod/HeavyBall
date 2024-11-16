@@ -369,14 +369,13 @@ class StatefulOptimizer(torch.optim.Optimizer):
 
     def state_size(self) -> int:
         total_bytes = 0
-
-        def _add(prefix, x):
+        def _add(_prefix, x):
             nonlocal total_bytes
             if isinstance(x, torch.Tensor):
                 total_bytes += x.numel() * x.element_size()
-
-        namedtreemap.named_treemap(_add, self.state)
-
+        for group in self.param_groups:
+            for p in group['params']:
+                namedtreemap.named_treemap(_add, self.state_(p))
         return total_bytes
 
 
