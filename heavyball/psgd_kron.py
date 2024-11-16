@@ -5,6 +5,7 @@ Source available at https://github.com/evanatyourservice/kron_torch/blob/97a2b5e
 """
 
 import torch
+from typing import Optional
 
 from .utils import update_param_, warmup, psgd_precond_grad, init_Q_exprs, trust_region_clip_, PSGDBase, \
     precond_update_prob_schedule, split_p_and_g_in_group, line_to_triu, triu_to_line, set_
@@ -36,7 +37,7 @@ class ForeachPSGDKron(PSGDBase):
     def __init__(self, params, lr=0.001, beta=0.9, weight_decay=0.0, preconditioner_update_probability=None,
                  max_size_triangular=2048, min_ndim_triangular=2, memory_save_mode=None,
                  momentum_into_precond_update=True, warmup_steps: int = 1, merge_dims: bool = False,
-                 split: bool = False):
+                 split: bool = False, clip_fn: Optional[callable] = None):
         if not 0.0 <= lr:
             raise ValueError(f"Invalid learning rate: {lr}")
         if not 0.0 <= beta < 1.0:
@@ -46,7 +47,10 @@ class ForeachPSGDKron(PSGDBase):
 
         if preconditioner_update_probability is None:
             preconditioner_update_probability = precond_update_prob_schedule()
+        if clip_fn is None:
+            clip_fn = lambda x: trust_region_clip_(x, 0.9, 1.5)
         self.preconditioner_update_probability = preconditioner_update_probability
+        self.clip_fn = clip_fn
 
         defaults = dict(lr=lr, beta=beta, weight_decay=weight_decay, max_size_triangular=max_size_triangular,
                         min_ndim_triangular=min_ndim_triangular, memory_save_mode=memory_save_mode,
@@ -117,10 +121,7 @@ class ForeachPSGDKron(PSGDBase):
                     self.do_update([p], [ea if momentum_into_precond_update else g], [q], precond_lr, [q_orig])
                 set_(g, psgd_precond_grad(q, self.state_(p)["exprs"], ea))
 
-            trust_region_clip_(grad_list, 0.9, 1.5)
-
-            torch._foreach_maximum_(grad_list, -2)
-            torch._foreach_minimum_(grad_list, 2)
+            grad_list = self.clip_fn(grad_list)
 
             lr = -warmup(lr, group['step'], group['warmup_steps'])
             update_param_(p_list, grad_list, lr, weight_decay)

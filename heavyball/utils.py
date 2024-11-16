@@ -644,7 +644,50 @@ def psgd_precond_grad(Q, exprs, G, inplace: bool = False):
     return out
 
 
-def trust_region_clip_(grad, lerp: float, scale: float):
+def norm_clip_(x, scale=None):
+    norm = torch._foreach_norm(x)
+    if scale is not None:
+        torch._foreach_div_(norm, scale)
+    torch._foreach_div_(x, norm)
+    return x
+
+
+def mu_law_compress(x, mu=127.0):
+    """
+    Foreach version of https://github.com/opooladz/modded-nanogpt-psgd/blob/dc7c78082ac15fbf326f1bacd9e0ead0a2b45908/kron_mu.py
+
+    μ-law compression
+    Args:
+        x: Input tensor
+        mu: Compression parameter (default 127.0 for behavior similar to trust_region=1.5)
+    """
+    xa = torch._foreach_abs_(x)
+    torch._foreach_mul_(xa, mu)
+    torch._foreach_log1p_(xa)
+    torch._foreach_div_(xa, math.log1p(mu))
+    return [xa_.copysign_(x_) for x_, xa_ in zip(x, xa)]
+
+
+def a_law_compress(x, A=87.6):
+    """
+    Foreach version of https://github.com/opooladz/modded-nanogpt-psgd/blob/dc7c78082ac15fbf326f1bacd9e0ead0a2b45908/kron_mu.py
+
+    A-law compression
+    Args:
+        x: Input tensor
+        A: Compression parameter (default 87.6 - European PCM standard)
+    """
+    xa = torch._foreach_abs(x)
+    torch._foreach_mul_(xa, A)
+    [torch.where(x_ < 1, x_, 1 + torch.log_(x_), out=x_) for x_ in xa]
+    [xa_.copysign(x_) for x_, xa_ in zip(x, xa)]
+    torch._foreach_mul_(xa, 1 / (1 + math.log(A)))
+    return xa
+
+def identity(x):
+    return x
+
+def trust_region_clip_(grad, lerp: float = 0.9, scale: float = 1.5):
     torch._foreach_mul_(grad, 1 / scale)
     tanh = torch._foreach_tanh(grad)
     torch._foreach_abs_(grad)
@@ -652,6 +695,10 @@ def trust_region_clip_(grad, lerp: float, scale: float):
     grad = [p.copysign_(t) for t, p in zip(tanh, grad)]  # torch doesn't have a foreach copysign
     torch._foreach_lerp_(grad, tanh, lerp)  # sgn(x) * log(1 + |x|) * 0.1 + tanh(x) * 0.9
     torch._foreach_mul_(grad, scale)
+
+    torch._foreach_maximum_(grad, -2)
+    torch._foreach_minimum_(grad, 2)
+    return grad
 
 
 @decorator

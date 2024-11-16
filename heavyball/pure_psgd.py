@@ -5,10 +5,9 @@ Source available at https://github.com/evanatyourservice/kron_torch/blob/97a2b5e
 """
 
 import torch
-from heavyball.utils import copy_stochastic_list_
 
-from .utils import update_param_, warmup, psgd_precond_grad, init_Q_exprs, PSGDBase, \
-    precond_update_prob_schedule, split_p_and_g_in_group, line_to_triu, triu_to_line, set_
+from .utils import update_param_, warmup, psgd_precond_grad, init_Q_exprs, PSGDBase, precond_update_prob_schedule, \
+    split_p_and_g_in_group, line_to_triu, triu_to_line
 
 
 class ForeachPurePSGD(PSGDBase):
@@ -37,7 +36,7 @@ class ForeachPurePSGD(PSGDBase):
     def __init__(self, params, lr=0.001, weight_decay=0.0, preconditioner_update_probability=None,
                  max_size_triangular=2048, min_ndim_triangular=2, memory_save_mode=None,
                  momentum_into_precond_update=True, warmup_steps: int = 1, merge_dims: bool = False,
-                 split: bool = False):
+                 split: bool = False, clip_fn: callable = None):
         if not 0.0 <= lr:
             raise ValueError(f"Invalid learning rate: {lr}")
         if not 0.0 <= weight_decay:
@@ -45,7 +44,10 @@ class ForeachPurePSGD(PSGDBase):
 
         if preconditioner_update_probability is None:
             preconditioner_update_probability = precond_update_prob_schedule()
+        if clip_fn is None:
+            clip_fn = lambda x: x
         self.preconditioner_update_probability = preconditioner_update_probability
+        self.clip_fn = clip_fn
 
         defaults = dict(lr=lr, weight_decay=weight_decay, max_size_triangular=max_size_triangular,
                         min_ndim_triangular=min_ndim_triangular, memory_save_mode=memory_save_mode,
@@ -86,8 +88,8 @@ class ForeachPurePSGD(PSGDBase):
                 state = self.state_(p)
 
                 if 'Q' not in state:
-                    Q, state["exprs"] = init_Q_exprs(p, precond_init_scale, max_size_triangular,
-                                                              min_ndim_triangular, memory_save_mode, dtype=g.dtype)
+                    Q, state["exprs"] = init_Q_exprs(p, precond_init_scale, max_size_triangular, min_ndim_triangular,
+                                                     memory_save_mode, dtype=g.dtype)
                     state['Q'] = triu_to_line(Q)
 
                 vals.append((p, g, state["Q"]))
@@ -100,9 +102,8 @@ class ForeachPurePSGD(PSGDBase):
 
             group["step"] += 1
 
-            grad_list, Q_list = list(grad_list), list(Q_list)
-            for i, p in enumerate(p_list):
-                g = grad_list.pop(0)
+            Q_list = list(Q_list)
+            for i, (p, g) in enumerate(zip(p_list, grad_list)):
                 q_orig = Q_list.pop(0)
                 q = line_to_triu(q_orig)
 
@@ -110,6 +111,8 @@ class ForeachPurePSGD(PSGDBase):
                 if do_update:
                     self.do_update([p], [g], [q], precond_lr, [q_orig])
                 psgd_precond_grad(q, self.state_(p)["exprs"], g, inplace=True)
+
+            grad_list = self.clip_fn(grad_list)
 
             lr = -warmup(lr, group['step'], group['warmup_steps'])
             update_param_(p_list, grad_list, lr, weight_decay)

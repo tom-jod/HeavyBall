@@ -6,8 +6,8 @@ Source available at https://github.com/evanatyourservice/kron_torch/blob/97a2b5e
 
 import torch
 
-from .utils import update_param_, warmup, psgd_precond_grad, init_Q_exprs, PSGDBase, \
-    precond_update_prob_schedule, exp_avg_sq_, beta_debias, split_p_and_g_in_group
+from .utils import update_param_, warmup, psgd_precond_grad, init_Q_exprs, PSGDBase, precond_update_prob_schedule, \
+    exp_avg_sq_, beta_debias, split_p_and_g_in_group
 
 
 class ForeachPaLMPAdam(PSGDBase):
@@ -36,7 +36,7 @@ class ForeachPaLMPAdam(PSGDBase):
     def __init__(self, params, lr=0.001, weight_decay=0.0, preconditioner_update_probability=None,
                  max_size_triangular=2048, min_ndim_triangular=2, memory_save_mode=None,
                  momentum_into_precond_update=True, warmup_steps: int = 1, betas=(None, None), beta: float = 0.9,
-                 beta2_scale: float = 0.8, merge_dims: bool = False, split: bool = False):
+                 beta2_scale: float = 0.8, merge_dims: bool = False, split: bool = False, clip_fn: callable = None):
         if not 0.0 <= lr:
             raise ValueError(f"Invalid learning rate: {lr}")
         if not 0.0 <= weight_decay:
@@ -46,7 +46,10 @@ class ForeachPaLMPAdam(PSGDBase):
 
         if preconditioner_update_probability is None:
             preconditioner_update_probability = precond_update_prob_schedule()
+        if clip_fn is None:
+            clip_fn = lambda x: x
         self.preconditioner_update_probability = preconditioner_update_probability
+        self.clip_fn = clip_fn
 
         defaults = dict(lr=lr, weight_decay=weight_decay, max_size_triangular=max_size_triangular,
                         min_ndim_triangular=min_ndim_triangular, memory_save_mode=memory_save_mode,
@@ -120,6 +123,9 @@ class ForeachPaLMPAdam(PSGDBase):
                 divide by g here, because g == denom (from exp_avg_sq_(out=g)), avoids denom allocation
                 divide into g so we can deallocate ea, avoids one allocation (-> less memory than equivalent foreach)
                 """
+
+            grad_list = self.clip_fn(grad_list)
+
             lr = -warmup(lr, group['step'], group['warmup_steps'])
             update_param_(p_list, grad_list, lr, weight_decay)
 
