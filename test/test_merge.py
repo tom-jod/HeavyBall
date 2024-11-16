@@ -1,3 +1,5 @@
+from typing import List
+
 import pytest
 import torch
 from torch import nn
@@ -14,14 +16,15 @@ class Param(nn.Module):
         self.weight = nn.Parameter(torch.randn(size))
 
     def forward(self, inp):
-        return self.weight.sum() + inp
+        return self.weight.mean() * inp
 
 
-@pytest.mark.parametrize("opt", ['ForeachSOAP'])
+@pytest.mark.parametrize("opt", ['ForeachSOAP', 'PrecondSchedulePaLMForeachSOAP'])
 @pytest.mark.parametrize("method", ['qr', 'newtonschulz2', 'svd', 'eigh'])
-@pytest.mark.parametrize("size", [(16, 16, 16, 16), (4, 4, 4, 4), (512, 1, 128)])
+@pytest.mark.parametrize("size", [(16, 16, 16, 16), (4, 4, 4, 4), (512, 1, 128), (32128, 768)])
 @pytest.mark.parametrize("merge,split", [(False, False), (True, False), (True, True)])
-def test_memory(opt, method, size, merge, split, depth: int = 2, iterations: int = 5):
+def test_merge(opt, method, size: List[int], merge, split, depth: int = 2, iterations: int = 5,
+               outer_iterations: int = 3):
     if 'soap' not in opt.lower() and method != 'qr':
         return
     set_torch()
@@ -29,13 +32,16 @@ def test_memory(opt, method, size, merge, split, depth: int = 2, iterations: int
     opt = getattr(heavyball, opt)
     heavyball.utils.zeroth_power_mode = method
 
-    for i in range(iterations):
+    for _ in range(outer_iterations):
         model = nn.Sequential(*[Param(size) for _ in range(depth)]).cuda()
         # We don't know if merging will use more or less memory, but we do know that it shouldn't crash. This test is to check if it crashes
         o = get_optim(opt, model.parameters(), lr=1e-3, merge_dims=merge, split=split, max_precond_dim=256,
                       max_size_triangular=256)
-        model(torch.randn((1, *size)).cuda()).sum().backward()
-        o.step()
-        o.zero_grad()
+
+        for i in range(iterations):
+            model(torch.randn((1, size[0]), device='cuda')).sum().backward()
+            o.step()
+            o.zero_grad()
+            print(o.state_size())
 
         del model, o

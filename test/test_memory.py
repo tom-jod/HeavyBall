@@ -17,14 +17,13 @@ def get_memory():
 
 
 expected_memory = {'adamw': {'after': 4, 'peak': 5.1}, 'soap': {'after': 7, 'peak': 14},
-                   'psgd': {'after': 4, 'peak': 10.5},
-                   'padam': {'after': 5, 'peak': 11.4}}
+                   'psgd': {'after': 4, 'peak': 10.5}, 'padam': {'after': 5, 'peak': 11.4}}
 
 
 @pytest.mark.parametrize("opt", ['ForeachPaLMPAdam', 'ForeachPSGDKron'])
 @pytest.mark.parametrize("method", ['qr', 'newtonschulz2', 'svd', 'eigh'])
 @pytest.mark.parametrize("size,depth", [(8192, 1), (2048, 16)])
-def test_memory(opt, method, size, depth: int, iterations: int = 5):
+def test_memory(opt, method, size, depth: int, iterations: int = 5, outer_iterations: int = 3):
     if 'soap' not in opt.lower() and method != 'qr':
         return
     set_torch()
@@ -48,11 +47,12 @@ def test_memory(opt, method, size, depth: int, iterations: int = 5):
 
         model_allocated = get_memory()
         o = get_optim(opt, model.parameters(), lr=1e-3)
-        model(torch.randn((1, size)).cuda()).sum().backward()
-        o.step()
+        for _ in range(iterations):
+            model(torch.randn((1, size)).cuda()).sum().backward()
+            o.step()
 
-        opt_allocated = get_memory()
-        o.zero_grad()
+            opt_allocated = get_memory()
+            o.zero_grad()
 
         del model, o
         peak = torch.cuda.memory_stats()['allocated_bytes.all.peak']

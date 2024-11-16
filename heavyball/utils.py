@@ -51,6 +51,13 @@ def schedule_free_(lr: float, weight_lr_power: float, weight_sum: float, beta1: 
     return weight_sum
 
 
+def append_or_extend(base, new):
+    if isinstance(new, list):
+        base.extend(new)
+    else:
+        base.append(new)
+
+
 def dim_merger(grad, max_precond_dim, split: bool = False):
     """
     Merges dimensions of the gradient tensor till the product of the dimensions is less than or equal to max_precond_dim.
@@ -95,7 +102,10 @@ def dim_merger(grad, max_precond_dim, split: bool = False):
         grads = [a for g in grads for a in g.split(max_precond_dim, dim=i)]
     if len(grads) == 1:
         return new_grad
-    return [dim_merger(g, max_precond_dim, split=split) for g in grads]
+    new_grads = []
+    for g in grads:
+        append_or_extend(new_grads, dim_merger(g, max_precond_dim, split))
+    return new_grads
 
 
 def beta_debias(beta, step):
@@ -131,6 +141,8 @@ def adaptive_gradient_clipping_(parameters: List[torch.Tensor], gradients: List[
 def set_(dst: torch.Tensor, src: torch.Tensor):
     if src.data_ptr() == dst.data_ptr():
         return
+    if src.shape != dst.shape:
+        src = src.reshape_as(dst)
     if src.is_contiguous() and dst.is_contiguous() and src.dtype == dst.dtype:
         dst.set_(src)
     else:
@@ -232,13 +244,9 @@ def get_orthogonal_matrix_QR(GG, Q, exp_avg_sq):
         else:
             set_(q, ortho(tmp[:, sort_idx]))
 
-    exp_avg_sq_new = exp_avg_sq
-
-    indices = tuple(slice(None) if ind is None else ind.view(*(1,) * i, -1, *(1,) * (exp_avg_sq_new.dim() - i - 1))  #
+    indices = tuple(slice(None) if ind is None else ind.view(*(1,) * i, -1, *(1,) * (exp_avg_sq.dim() - i - 1))  #
                     for i, ind in enumerate(indices))
-    exp_avg_sq_new = exp_avg_sq_new[indices]
-
-    set_(exp_avg_sq, exp_avg_sq_new)
+    set_(exp_avg_sq, exp_avg_sq[indices])
 
 
 def get_orthogonal_matrix(mat):
@@ -369,12 +377,14 @@ class StatefulOptimizer(torch.optim.Optimizer):
 
     def state_size(self) -> int:
         total_bytes = 0
+
         def _add(_prefix, x):
             nonlocal total_bytes
             if isinstance(x, torch.Tensor):
                 total_bytes += x.numel() * x.element_size()
+
         for group in self.param_groups:
-            for p in group['params']:
+            for p, _ in split_p_and_g_in_group(group, skip_none=False):
                 namedtreemap.named_treemap(_add, self.state_(p))
         return total_bytes
 
@@ -679,22 +689,29 @@ def merge_group(group, *tensors):
         return tensors
     if isinstance(tensors[0], list):
         return [merge_group(group, *t) for t in tensors]
-    return [dim_merger(t, group['max_size_triangular'] if 'max_size_triangular' in group else group['max_precond_dim'],
-                       group.get('split', False))  #
-            for t in tensors]
+
+    out = []
+    for t in tensors:
+        append_or_extend(out, dim_merger(t, group['max_size_triangular'] if 'max_size_triangular' in group else group[
+            'max_precond_dim'], group.get('split', False)))
+    return out
 
 
-def split_p_and_g_in_group(group: dict):
+def split_p_and_g_in_group(group: dict, skip_none: bool = True):
     for p in group["params"]:
-        if p.grad is None:
+        if skip_none and p.grad is None:
             continue
 
-        grad = promote(p.grad)
+        grad = None if p.grad is None else promote(p.grad)
         p.grad = None
 
-        p_views, grad = merge_group(group, p, grad)
-        if isinstance(grad, torch.Tensor):
+        p_views = merge_group(group, p)
+        if grad is not None:
+            grad = merge_group(group, grad)
+        if isinstance(p_views, torch.Tensor):
             yield p_views, grad
             continue
-
+        if grad is None:
+            yield from zip(p_views, [None] * len(p_views))
+            continue
         yield from zip(p_views, grad)
