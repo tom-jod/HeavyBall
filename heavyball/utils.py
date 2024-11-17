@@ -708,7 +708,7 @@ def triu_to_line(Q_list: List[torch.Tensor]):
         if q.dim() < 2:
             out.append((None, q))
         else:
-            out.append((q.shape, q[*torch.triu_indices(*q.shape)]))
+            out.append((q.shape, q[tuple(torch.triu_indices(*q.shape))]))
     return out
 
 
@@ -725,7 +725,7 @@ def line_to_triu(Q_list: List[Tuple[Optional[List[int]], torch.Tensor]]):
         if shape is not None:
             shape = _triu_shape(q.numel())
             x = torch.zeros(shape, device=q.device, dtype=q.dtype)
-            x[*torch.triu_indices(*shape, device=q.device)] = q
+            x[tuple(torch.triu_indices(*shape, device=q.device))] = q
             q = x
         new.append(q)
     return new

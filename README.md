@@ -8,7 +8,7 @@ A simple package of efficient optimizers
 The goal is not to thrive for completeness, full maintenance or abstraction, but instead to provide a simple
 largely static alternative to `torch.optim` with more and better optimizers.
 
-Currently (2024-11-16, 0.14.3), the recommended stable optimizer is `PrecondSchedulePaLMForeachSOAP` (see below). The
+Currently (2024-11-17, 0.15.0), the recommended stable optimizer is `PrecondSchedulePaLMForeachSOAP` (see below). The
 recommended experimental optimizer is `ForeachPSGDKron`.
 
 ## Features
@@ -82,7 +82,19 @@ The default preconditioner schedule (`f`) would yield the following update inter
 Second order optimizers make it difficult to estimate memory usage, as it depends on shapes and hyperparameters. To
 estimate your memory usage, you may use `test/test_memory.py` which attempts to ensure there are no regressions.\
 Furthermore, you can find real-world memory usage of a 300M parameters video diffusion model below:
-![img.png](assets/img.png)
+![img.png](assets/memory.png)
+
+## PSGD
+
+HeavyBall offers various configurations of PSGD:
+
+* "PSGDKron" is the baseline, equivalent to [kron_torch](https://github.com/evanatyourservice/kron_torch/), but with
+  lower compute and memory
+  overhead.
+* "PurePSGD" has no momentum, further reducing memory and compute
+* "DelayedPSGD" implements SOAP/ADOPT-style off-by-one momentum, which has worse initial convergence but higher
+  stability
+  ![img.png](assets/delayed_psgd.png)
 
 ## Utils
 
