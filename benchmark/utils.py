@@ -1,15 +1,15 @@
+import copy
 import datetime
 import gc
 import inspect
 import random
 
+import heavyball.utils
 import numpy as np
 import torch
 
-import heavyball.utils
-
 base_args = {'betas': (0.9, 0.999), 'precondition_frequency': 1, 'merge_dims': True, 'warmup_steps': 100,
-             'max_precond_dim': 2 ** 16, 'beta': 0.9, 'preconditioner_update_probability': 1,
+             'max_precond_dim': 2 ** 16, 'beta': 0.9,
              'max_size_triangular': 2 ** 16, 'split': False}
 
 
@@ -21,14 +21,14 @@ def get_optim(optim, params, **kwargs):
 
 
 def trial(model, data, loss_fn, win_condition, steps, opt, dtype, size, batch, weight_decay, method, length, depth,
-          trials=10, failure_threshold=3):
+          trials=10, failure_threshold=3, group=1000, base_lr: float = 1e-3):
     opt = getattr(heavyball, opt)
     if "soap" not in opt.__name__.lower() and method != 'qr':
         return
 
     heavyball.utils.zeroth_power_mode = method
 
-    lr = 1e-3
+    lr = base_lr
     losses = []
     lrs = []
     loss0 = None
@@ -37,7 +37,7 @@ def trial(model, data, loss_fn, win_condition, steps, opt, dtype, size, batch, w
         gc.collect()
         torch.manual_seed(0x1239121)
 
-        m = torch.compile(model.to(dtype).cuda(), mode='max-autotune', fullgraph=False, dynamic=False)
+        m = torch.compile(copy.deepcopy(model).to(dtype).cuda(), mode='max-autotune', fullgraph=False, dynamic=False)
         o = get_optim(opt, m.parameters(), lr=lr, weight_decay=weight_decay)
         torch.cuda.empty_cache()
         gc.collect()
@@ -46,29 +46,40 @@ def trial(model, data, loss_fn, win_condition, steps, opt, dtype, size, batch, w
         loss_hist = []
         rng = random.Random(0x9128391)
 
-        for i in range(steps):
-            inp, tgt = data()
-            out = m(inp)
-            loss = loss_fn(out, tgt)
-            loss.backward()
-            o.step()
-            o.zero_grad()
-            loss_hist.append(loss.item())
-            if loss0 is None:
-                loss0 = loss.item()
-            if win_condition(loss_hist[-1]):
-                dist = datetime.datetime.now() - start
-                print(f'Took {dist} | {opt.__name__}, {dtype=}, {size=}, {length=}, {batch=}, {lr=}, {weight_decay=}, '
-                      f'{method=} | Iteration: {i} | Attempt: {attempt + 1} | Loss: {loss_hist[-1]}')
-                return
-            if loss_hist[-1] > failure_threshold * loss0 or not np.isfinite(loss_hist[-1]):
-                print(f'{opt.__name__} diverged at {i=}, loss={loss_hist[-1]}, {loss0}')
-                loss_hist[-1] = 1e6 + lr
+        for i in range(steps // group):
+            for _ in range(group):
+                inp, tgt = data()
+                out = m(inp)
+                loss = loss_fn(out, tgt)
+                loss.backward()
+                o.step()
+                o.zero_grad()
+                loss_hist.append(loss.detach())
+                if loss0 is None:
+                    loss0 = loss_hist[-1].item()
+            for j, loss in enumerate(loss_hist[-group:], group * i):
+                loss = loss.item()
+                if win_condition(loss):
+                    dist = datetime.datetime.now() - start
+                    print(
+                        f'Took {dist} | {opt.__name__}, {dtype=}, {size=}, {length=}, {batch=}, {lr=}, {weight_decay=}, '
+                        f'{method=} | Iteration: {j} | Attempt: {attempt + 1} | Loss: {loss}')
+                    return
+                if loss > failure_threshold * loss0 or not np.isfinite(loss):
+                    print(f'{opt.__name__} diverged at {j=}, loss={loss}, {loss0}')
+                    loss = 1e6 + lr
+                    break
+            if loss > failure_threshold * loss0 or not np.isfinite(loss):
                 break
+            print(datetime.datetime.now() - start, i + 1, sum(loss_hist[-group:]).div(group).item())
 
         lrs.append(lr)
         lrs = sorted(lrs)
-        losses.insert(lrs.index(lr), loss_hist[-1])
+        losses.insert(lrs.index(lr), loss)
+
+        print(
+            f'{opt.__name__} failed at attempt {attempt + 1} | {datetime.datetime.now() - start} | {dtype=}, {size=}, {length=}, {batch=}, {lr=}, {weight_decay=}, '
+            f'{method=}')
 
         if len(losses) > 1 and all(ls == losses[0] for ls in losses):
             if rng.random() > 0.5:

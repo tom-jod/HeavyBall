@@ -32,9 +32,9 @@ def win(loss):
 
 @app.command()
 def main(method: List[str] = typer.Option(['qr'], help='Eigenvector method to use (for SOAP)'),
-         dtype: List[str] = typer.Option(["float32"], help='Data type to use'), length: int = 6, size: int = 32,
-         depth: int = 1, batch: int = 32, steps: int = 100_000, weight_decay: float = 0,
-         opt: List[str] = typer.Option(['ForeachPaLMPAdam', 'ForeachPSGDKron'], help='Optimizers to use')):
+         dtype: List[str] = typer.Option(["float32"], help='Data type to use'), length: int = 128, size: int = 128,
+         depth: int = 1, batch: int = 256, steps: int = 100_000, weight_decay: float = 0,
+         opt: List[str] = typer.Option(['ForeachAdamW', 'ForeachADOPT', 'ForeachLaProp', 'ForeachSOAP'], help='Optimizers to use')):
     dtype = [getattr(torch, d) for d in dtype]
 
     for args in itertools.product(method, dtype, [(length, size, depth, batch)], opt, [weight_decay]):
