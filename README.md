@@ -1,7 +1,7 @@
 # HeavyBall
 
 > [!IMPORTANT]  
-> It's recommended to use `heavyball.utils.set_torch()` for more efficient contractions
+> It's recommended to use `heavyball.utils.set_torch()` for faster training and less memory usage.
 
 A simple package of efficient optimizers
 
