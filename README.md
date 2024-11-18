@@ -1,7 +1,7 @@
 # HeavyBall
 
 > [!IMPORTANT]  
-> The SOAP implementation was broken until 0.9.0. Please upgrade to 0.9.0 or later.
+> It's recommended to use `heavyball.utils.set_torch()` for more efficient contractions
 
 A simple package of efficient optimizers
 
