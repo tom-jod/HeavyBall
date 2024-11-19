@@ -4,21 +4,23 @@ Modified under Creative Commons Attribution 4.0 International
 Source available at https://github.com/evanatyourservice/kron_torch/blob/97a2b5ee8a1a4c29e4780bbf6c521e545189eff9/kron_torch/kron.py
 """
 
+from typing import Optional
+
 import torch
-from heavyball.utils import triu_to_line, line_to_triu
+from heavyball.utils import einsum_base
 
-from .utils import update_param_, warmup, psgd_precond_grad, init_Q_exprs, PSGDBase, precond_update_prob_schedule, \
-    exp_avg_sq_, beta_debias, split_p_and_g_in_group
+from .utils import update_param_, warmup, psgd_precond_grad, init_Q_exprs, trust_region_clip_, PSGDBase, \
+    precond_update_prob_schedule, split_p_and_g_in_group, line_to_triu, triu_to_line, set_, einsum_base
 
 
-class ForeachPaLMPAdam(PSGDBase):
-    """
-    Kronecker Factorized Adam with PSGD preconditioner
+class ForeachCachedPSGDKron(PSGDBase):
+    """Implements PSGD Kron from https://github.com/lixilinx/psgd_torch with cached preconditioners.
 
     Args:
         params (iterable): Iterable of parameters to optimize or dicts defining
             parameter groups.
         lr (float): Learning rate.
+        b1 (float): Momentum parameter.
         weight_decay (float): Weight decay (L2 penalty).
         preconditioner_update_probability (callable or float, optional): Probability of
             updating the preconditioner. If None, defaults to a schedule that anneals
@@ -34,32 +36,31 @@ class ForeachPaLMPAdam(PSGDBase):
             update instead of raw gradients.
     """
 
-    def __init__(self, params, lr=0.001, weight_decay=0.0, preconditioner_update_probability=None,
+    def __init__(self, params, lr=0.001, beta=0.9, weight_decay=0.0, preconditioner_update_probability=None,
                  max_size_triangular=2048, min_ndim_triangular=2, memory_save_mode=None,
-                 momentum_into_precond_update=True, warmup_steps: int = 1, betas=(None, None), beta: float = 0.9,
-                 beta2_scale: float = 0.8, merge_dims: bool = False, split: bool = False, clip_fn: callable = None,
-                 store_triu_as_line: bool = True):
+                 momentum_into_precond_update=True, warmup_steps: int = 1, merge_dims: bool = False,
+                 split: bool = False, clip_fn: Optional[callable] = None, store_triu_as_line: bool = True):
         if not 0.0 <= lr:
             raise ValueError(f"Invalid learning rate: {lr}")
+        if not 0.0 <= beta < 1.0:
+            raise ValueError(f"Invalid beta parameter: {beta}")
         if not 0.0 <= weight_decay:
             raise ValueError(f"Invalid weight_decay value: {weight_decay}")
-        if betas[0] is not None:
-            beta = betas[0]
 
         if preconditioner_update_probability is None:
             preconditioner_update_probability = precond_update_prob_schedule()
         if clip_fn is None:
-            clip_fn = lambda x: x
+            clip_fn = lambda x: trust_region_clip_(x, 0.9, 1.5)
         self.preconditioner_update_probability = preconditioner_update_probability
         self.clip_fn = clip_fn
 
-        defaults = dict(lr=lr, weight_decay=weight_decay, max_size_triangular=max_size_triangular,
+        defaults = dict(lr=lr, beta=beta, weight_decay=weight_decay, max_size_triangular=max_size_triangular,
                         min_ndim_triangular=min_ndim_triangular, memory_save_mode=memory_save_mode,
                         momentum_into_precond_update=momentum_into_precond_update, precond_lr=0.1,
                         # precond lr hardcoded to 0.1
                         precond_init_scale=1.0,  # precond init scale hardcoded to 1.0
-                        step=0, warmup_steps=warmup_steps, beta=beta, beta2_scale=beta2_scale, merge_dims=merge_dims,
-                        split=split, store_triu_as_line=store_triu_as_line)
+                        step=0, warmup_steps=warmup_steps, merge_dims=merge_dims, split=split,
+                        store_triu_as_line=store_triu_as_line)
         super().__init__(params, defaults)
 
         self._prob_step = 0
@@ -72,6 +73,7 @@ class ForeachPaLMPAdam(PSGDBase):
         do_update = self.rng.random() < update_prob
         self._prob_step += 1
 
+        momentum_into_precond_update = group.get("momentum_into_precond_update", True)
         precond_init_scale = group['precond_init_scale']
         max_size_triangular = group['max_size_triangular']
         min_ndim_triangular = group['min_ndim_triangular']
@@ -79,6 +81,7 @@ class ForeachPaLMPAdam(PSGDBase):
         precond_lr = group['precond_lr']
         weight_decay = group['weight_decay']
         lr = group['lr']
+        beta = group['beta']
         store_triu_as_line = group['store_triu_as_line']
 
         vals = []
@@ -87,41 +90,51 @@ class ForeachPaLMPAdam(PSGDBase):
             state = self.state_(p)
 
             if 'Q' not in state:
-                state['exp_avg'] = torch.zeros_like(g)
-                state['exp_avg_sq'] = torch.zeros_like(g)
-                Q, state["exprs"] = init_Q_exprs(p, precond_init_scale, max_size_triangular,
-                                                          min_ndim_triangular, memory_save_mode, dtype=g.dtype)
+                state["exp_avg"] = torch.zeros_like(g)
+                Q, state["exprs"] = init_Q_exprs(p, precond_init_scale, max_size_triangular, min_ndim_triangular,
+                                                 memory_save_mode, dtype=g.dtype)
                 state['Q'] = triu_to_line(Q) if store_triu_as_line else Q
+                state['Q_cache'] = [torch.empty_like(q) for q in Q]
 
-            vals.append((p, g, state["Q"], state['exp_avg'], state['exp_avg_sq']))
+                expr = [f'{c.upper()}{c}' if q_.ndim == 2 else c for c, q_ in zip(einsum_base, Q)]
+                expr = ','.join(expr)
+                grad_expr = ''.join(c for c, _ in zip(einsum_base, g.shape))
+                out_expr = ''.join(c.upper() if c.upper() in expr else c for c in grad_expr)
+                expr = f'{expr},{grad_expr}->{out_expr}'
+
+                state['cache_expr'] = expr
+
+            vals.append((p, g, state["exp_avg"], state["Q"], state['Q_cache']))
 
         if not vals:
             return
 
-        p_list, grad_list, Q_list, exp_avg, exp_avg_sq = zip(*vals)
+        p_list, grad_list, exp_avg_list, Q_list, Q_cache_list = zip(*vals)
         del vals
 
         group["step"] += 1
 
-        Q_triu = [line_to_triu(q) if store_triu_as_line else q for q in Q_list]
-        if do_update:
-            self.balance(grad_list, Q_triu)
-            self.do_update(p_list, grad_list, Q_triu, precond_lr, Q_list if store_triu_as_line else None)
+        torch._foreach_lerp_(exp_avg_list, grad_list, (1 - beta) / (1 - beta ** group["step"]))
 
-        torch._foreach_lerp_(exp_avg, grad_list, 1 - beta_debias(group['beta'], group['step']))
+        grad_list, Q_list, Q_cache_list, exp_avg_list = list(grad_list), list(Q_list), list(Q_cache_list), list(
+            exp_avg_list)
+        for i, (p, g) in enumerate(zip(p_list, grad_list)):
+            cached_q = Q_cache_list.pop(0)
+            q_orig = Q_list.pop(0)
+            ea = exp_avg_list.pop(0)
 
-        beta2 = 1 - group['step'] ** -group['beta2_scale']
+            if do_update:
+                q = line_to_triu(q_orig) if store_triu_as_line else q_orig
+                self.balance([g], [q])
+                self.do_update([p], [ea if momentum_into_precond_update else g], [q], precond_lr,
+                               [q_orig] if store_triu_as_line else None)
+                for c_, q_ in zip(cached_q, q):
+                    if q_.ndim == 2:
+                        torch.matmul(q_.T.conj(), q_, out=c_)
+                    else:
+                        torch.mul(q_.conj(), q_, out=c_)
 
-        for p, Q, g, ea, eas in zip(p_list, Q_triu, grad_list, exp_avg, exp_avg_sq):
-            psgd_precond_grad(Q, self.state_(p)["exprs"], g, inplace=True)
-            ea = psgd_precond_grad(Q, self.state_(p)["exprs"], ea)
-            exp_avg_sq_(eas, g, beta_debias(beta2, group['step']), 1e-8, out=g)
-            torch.div(ea, g, out=g)
-            """
-            divide by g here, because g == denom (from exp_avg_sq_(out=g)), avoids denom allocation
-            divide into g so we can deallocate ea, avoids one allocation (-> less memory than equivalent foreach)
-            """
-
+            set_(g, torch.einsum(self.state_(p)['cache_expr'], *cached_q, ea))
         grad_list = self.clip_fn(grad_list)
 
         lr = -warmup(lr, group['step'], group['warmup_steps'])

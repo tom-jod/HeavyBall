@@ -29,7 +29,7 @@ def decorator(func):
     return _fn
 
 
-_einsum_base = string.ascii_lowercase + string.ascii_uppercase
+einsum_base = string.ascii_lowercase + string.ascii_uppercase
 
 
 def warmup(lr: float, step: int, warmup_steps: int):
@@ -317,8 +317,8 @@ def compute_ggt(grad, GG, max_precond_dim, precondition_1d, beta):
     for idx, sh in enumerate(grad.shape):
         if sh > max_precond_dim:
             continue
-        b = _einsum_base[idx]
-        g0 = _einsum_base[:grad.dim()]
+        b = einsum_base[idx]
+        g0 = einsum_base[:grad.dim()]
         g1 = g0.replace(b, b.upper())
         outer_product = torch.einsum(f'{g0},{g1}->{b + b.upper()}', grad, grad)
         GG[idx].lerp_(promote(outer_product), 1 - beta)
@@ -374,7 +374,7 @@ def project(grad, Q, back: bool):
     :param back: whether to project to Shampoo eigenbases or back to original space
     :return:
     """
-    param = _einsum_base[:grad.dim()]
+    param = einsum_base[:grad.dim()]
     preconditioners = ",".join([(g + g.upper())[::-1 if back else 1] for m, g in zip(Q, param) if len(m) > 0])
     if preconditioners:
         out = ''.join([c.upper() if c.upper() in preconditioners else c for c in param])
@@ -759,8 +759,8 @@ class PSGDBase(StatefulOptimizer):
         self.rng = random.Random(0x1923213)
         self._tiny = torch.finfo(torch.bfloat16).tiny
 
-    def balance(self, do_update, grad_list, Q_list):
-        if not do_update or self.rng.random() > 0.01:
+    def balance(self, grad_list, Q_list):
+        if self.rng.random() > 0.01:
             return
 
         for g, q in zip(grad_list, Q_list):
