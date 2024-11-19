@@ -5,8 +5,8 @@ Source available at https://github.com/evanatyourservice/kron_torch/blob/97a2b5e
 """
 
 import torch
-
 from heavyball.utils import copy_stochastic_list_
+
 from .utils import update_param_, warmup, psgd_precond_grad, init_Q_exprs, trust_region_clip_, PSGDBase, \
     precond_update_prob_schedule, split_p_and_g_in_group, triu_to_line, line_to_triu, set_
 
@@ -63,13 +63,7 @@ class ForeachDelayedPSGD(PSGDBase):
 
         self._prob_step = 0
 
-    @torch.no_grad()
-    def step(self, closure=None):
-        loss = None
-        if closure is not None:
-            with torch.enable_grad():
-                loss = closure()
-
+    def _step(self, group):
         # update preconditioners all together
         update_prob = self.preconditioner_update_probability
         if callable(update_prob):
@@ -77,55 +71,52 @@ class ForeachDelayedPSGD(PSGDBase):
         do_update = self.rng.random() < update_prob
         self._prob_step += 1
 
-        for group in self.param_groups:
-            momentum_into_precond_update = group.get("momentum_into_precond_update", True)
-            precond_init_scale = group['precond_init_scale']
-            max_size_triangular = group['max_size_triangular']
-            min_ndim_triangular = group['min_ndim_triangular']
-            memory_save_mode = group['memory_save_mode']
-            precond_lr = group['precond_lr']
-            weight_decay = group['weight_decay']
-            lr = group['lr']
-            beta = group['beta']
+        momentum_into_precond_update = group.get("momentum_into_precond_update", True)
+        precond_init_scale = group['precond_init_scale']
+        max_size_triangular = group['max_size_triangular']
+        min_ndim_triangular = group['min_ndim_triangular']
+        memory_save_mode = group['memory_save_mode']
+        precond_lr = group['precond_lr']
+        weight_decay = group['weight_decay']
+        lr = group['lr']
+        beta = group['beta']
 
-            vals = []
+        vals = []
 
-            for p, g in split_p_and_g_in_group(group):
-                state = self.state_(p)
+        for p, g in split_p_and_g_in_group(group):
+            state = self.state_(p)
 
-                if 'Q' not in state:
-                    state["exp_avg"] = torch.zeros_like(g)
-                    Q, state["exprs"] = init_Q_exprs(p, precond_init_scale, max_size_triangular, min_ndim_triangular,
-                                                     memory_save_mode, dtype=g.dtype)
-                    state["Q"] = triu_to_line(Q)
+            if 'Q' not in state:
+                state["exp_avg"] = torch.zeros_like(g)
+                Q, state["exprs"] = init_Q_exprs(p, precond_init_scale, max_size_triangular, min_ndim_triangular,
+                                                 memory_save_mode, dtype=g.dtype)
+                state["Q"] = triu_to_line(Q)
 
-                vals.append((p, g, state["exp_avg"], state["Q"]))
+            vals.append((p, g, state["exp_avg"], state["Q"]))
 
-            if not vals:
-                continue
+        if not vals:
+            return
 
-            p_list, grad_list, exp_avg_list, Q_list = zip(*vals)
-            del vals
+        p_list, grad_list, exp_avg_list, Q_list = zip(*vals)
+        del vals
 
-            group["step"] += 1
+        group["step"] += 1
 
-            torch._foreach_lerp_(exp_avg_list, grad_list, (1 - beta) / (1 - beta ** group["step"]))
+        torch._foreach_lerp_(exp_avg_list, grad_list, (1 - beta) / (1 - beta ** group["step"]))
 
-            Q_list, exp_avg_list = list(Q_list), list(exp_avg_list)
-            for i, (p, g) in enumerate(zip(p_list, grad_list)):
-                q_orig = Q_list.pop(0)
-                ea = exp_avg_list.pop(0)
-                q = line_to_triu(q_orig)
-                self.balance(do_update, [g], [q])
-                new = psgd_precond_grad(q, self.state_(p)["exprs"], ea)
+        Q_list, exp_avg_list = list(Q_list), list(exp_avg_list)
+        for i, (p, g) in enumerate(zip(p_list, grad_list)):
+            q_orig = Q_list.pop(0)
+            ea = exp_avg_list.pop(0)
+            q = line_to_triu(q_orig)
+            self.balance(do_update, [g], [q])
+            new = psgd_precond_grad(q, self.state_(p)["exprs"], ea)
 
-                if do_update:
-                    self.do_update([p], [ea if momentum_into_precond_update else g], [q], precond_lr, [q_orig])
-                set_(g, new)
+            if do_update:
+                self.do_update([p], [ea if momentum_into_precond_update else g], [q], precond_lr, [q_orig])
+            set_(g, new)
 
-            grad_list = self.clip_fn(grad_list)
+        grad_list = self.clip_fn(grad_list)
 
-            lr = -warmup(lr, group['step'], group['warmup_steps'])
-            update_param_(p_list, grad_list, lr, weight_decay)
-
-        return loss
+        lr = -warmup(lr, group['step'], group['warmup_steps'])
+        update_param_(p_list, grad_list, lr, weight_decay)

@@ -37,74 +37,60 @@ class PrecondScheduleForeachSOAP(StatefulOptimizer):
         self._data_format = data_format
         self.rng = random.Random(0x120983109)
 
-    @torch.no_grad()
-    def step(self, closure=None):
-        """
-        Performs a single optimization step.
+    def _step(self, group):
+        vals = []
+        step = 0
 
-        Arguments:
-            closure (`Callable`, *optional*): A closure that reevaluates the model and returns the loss.
-        """
-        if closure is None:
-            loss = None
-        else:
-            loss = closure()
+        max_precond_dim = group['max_precond_dim']
+        precondition_1d = group['precondition_1d']
 
-        for group in self.param_groups:
-            vals = []
-            step = 0
+        for p, g in split_p_and_g_in_group(group):
+            state = self.state_(p)
+            step = state['step'] = state.get("step", -1) + 1
 
-            max_precond_dim = group['max_precond_dim']
-            precondition_1d = group['precondition_1d']
+            if "exp_avg" not in state:
+                state["exp_avg"] = torch.zeros_like(g, dtype=torch.float32)
+                state["exp_avg_sq"] = torch.zeros_like(g, dtype=torch.float32)
+                init_preconditioner(g, state, max_precond_dim, precondition_1d)
+                update_preconditioner(g, state, max_precond_dim, precondition_1d, 0, True)
+                continue  # first step is skipped so that we never use the current gradients in the projection.
 
-            for p, g in split_p_and_g_in_group(group):
-                state = self.state_(p)
-                step = state['step'] = state.get("step", -1) + 1
+            # Projecting gradients to the eigenbases of Shampoo's preconditioner
+            # i.e. projecting to the eigenbases of matrices in state['GG']
+            grad_projected = project(g, state['Q'], False)
+            exp_avg, exp_avg_sq = state["exp_avg"], state["exp_avg_sq"]
+            vals.append((p, g, grad_projected, exp_avg, exp_avg_sq))
 
-                if "exp_avg" not in state:
-                    state["exp_avg"] = torch.zeros_like(g, dtype=torch.float32)
-                    state["exp_avg_sq"] = torch.zeros_like(g, dtype=torch.float32)
-                    init_preconditioner(g, state, max_precond_dim, precondition_1d)
-                    update_preconditioner(g, state, max_precond_dim, precondition_1d, 0, True)
-                    continue  # first step is skipped so that we never use the current gradients in the projection.
+        if not vals:
+            return
 
-                # Projecting gradients to the eigenbases of Shampoo's preconditioner
-                # i.e. projecting to the eigenbases of matrices in state['GG']
-                grad_projected = project(g, state['Q'], False)
-                exp_avg, exp_avg_sq = state["exp_avg"], state["exp_avg_sq"]
-                vals.append((p, g, grad_projected, exp_avg, exp_avg_sq))
+        p_list, grad, grad_projected, exp_avg, exp_avg_sq = zip(*vals)
+        beta1, beta2 = group["betas"]
 
-            if not vals:
-                continue
+        old_debiased1 = beta_debias(beta1, step)
+        old_debiased2 = beta_debias(beta2, step)
 
-            p_list, grad, grad_projected, exp_avg, exp_avg_sq = zip(*vals)
-            beta1, beta2 = group["betas"]
+        # Decay the first and second moment running average coefficient
+        # In-place operations to update the averages at the same time
+        torch._foreach_mul_(exp_avg, old_debiased1)
+        torch._foreach_add_(exp_avg, grad, alpha=1 - old_debiased1)
+        denom = exp_avg_sq_(exp_avg_sq, grad_projected, old_debiased2, group['eps'])
 
-            old_debiased1 = beta_debias(beta1, step)
-            old_debiased2 = beta_debias(beta2, step)
+        update_precond = precond_schedule(step, group['precond_scheduler'], self.rng)
+        for p, g, ea, d in zip(p_list, grad, exp_avg, denom):
+            state = self.state_(p)
+            # Projecting the exponential moving average of gradients to the eigenbases of Shampoo's preconditioner
+            # i.e. projecting to the eigenbases of matrices in state['GG']
+            exp_avg_projected = project(ea, state['Q'], False)
 
-            # Decay the first and second moment running average coefficient
-            # In-place operations to update the averages at the same time
-            torch._foreach_mul_(exp_avg, old_debiased1)
-            torch._foreach_add_(exp_avg, grad, alpha=1 - old_debiased1)
-            denom = exp_avg_sq_(exp_avg_sq, grad_projected, old_debiased2, group['eps'])
+            # Projecting back the preconditioned (by Adam) exponential moving average of gradients
+            # to the original space
+            # CANT DO /= HERE AS EXP_AVG MAY POINT TO THE BUFFER
+            set_(d, project(exp_avg_projected / d, state['Q'], True))
 
-            update_precond = precond_schedule(step, group['precond_scheduler'], self.rng)
-            for p, g, ea, d in zip(p_list, grad, exp_avg, denom):
-                state = self.state_(p)
-                # Projecting the exponential moving average of gradients to the eigenbases of Shampoo's preconditioner
-                # i.e. projecting to the eigenbases of matrices in state['GG']
-                exp_avg_projected = project(ea, state['Q'], False)
+            update_preconditioner(g, state, max_precond_dim, precondition_1d, old_debiased2,
+                                  update_precond)
 
-                # Projecting back the preconditioned (by Adam) exponential moving average of gradients
-                # to the original space
-                # CANT DO /= HERE AS EXP_AVG MAY POINT TO THE BUFFER
-                set_(d, project(exp_avg_projected / d, state['Q'], True))
-
-                update_preconditioner(g, state, max_precond_dim, precondition_1d, old_debiased2,
-                                      update_precond)
-
-            # Why does this have to be rebiased here?
-            step_size = -group["lr"] * min(step / group['warmup_steps'], 1)
-            update_param_(p_list, denom, step_size, group["weight_decay"])
-        return loss
+        # Why does this have to be rebiased here?
+        step_size = -group["lr"] * min(step / group['warmup_steps'], 1)
+        update_param_(p_list, denom, step_size, group["weight_decay"])

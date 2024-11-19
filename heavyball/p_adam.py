@@ -62,13 +62,7 @@ class ForeachPaLMPAdam(PSGDBase):
 
         self._prob_step = 0
 
-    @torch.no_grad()
-    def step(self, closure=None):
-        loss = None
-        if closure is not None:
-            with torch.enable_grad():
-                loss = closure()
-
+    def _step(self, group):
         # update preconditioners all together
         update_prob = self.preconditioner_update_probability
         if callable(update_prob):
@@ -76,57 +70,54 @@ class ForeachPaLMPAdam(PSGDBase):
         do_update = self.rng.random() < update_prob
         self._prob_step += 1
 
-        for group in self.param_groups:
-            precond_init_scale = group['precond_init_scale']
-            max_size_triangular = group['max_size_triangular']
-            min_ndim_triangular = group['min_ndim_triangular']
-            memory_save_mode = group['memory_save_mode']
-            precond_lr = group['precond_lr']
-            weight_decay = group['weight_decay']
-            lr = group['lr']
+        precond_init_scale = group['precond_init_scale']
+        max_size_triangular = group['max_size_triangular']
+        min_ndim_triangular = group['min_ndim_triangular']
+        memory_save_mode = group['memory_save_mode']
+        precond_lr = group['precond_lr']
+        weight_decay = group['weight_decay']
+        lr = group['lr']
 
-            vals = []
+        vals = []
 
-            for p, g in split_p_and_g_in_group(group):
-                state = self.state_(p)
+        for p, g in split_p_and_g_in_group(group):
+            state = self.state_(p)
 
-                if 'Q' not in state:
-                    state['exp_avg'] = torch.zeros_like(g)
-                    state['exp_avg_sq'] = torch.zeros_like(g)
-                    state["Q"], state["exprs"] = init_Q_exprs(p, precond_init_scale, max_size_triangular,
-                                                              min_ndim_triangular, memory_save_mode, dtype=g.dtype)
+            if 'Q' not in state:
+                state['exp_avg'] = torch.zeros_like(g)
+                state['exp_avg_sq'] = torch.zeros_like(g)
+                state["Q"], state["exprs"] = init_Q_exprs(p, precond_init_scale, max_size_triangular,
+                                                          min_ndim_triangular, memory_save_mode, dtype=g.dtype)
 
-                vals.append((p, g, state["Q"], state['exp_avg'], state['exp_avg_sq']))
+            vals.append((p, g, state["Q"], state['exp_avg'], state['exp_avg_sq']))
 
-            if not vals:
-                continue
+        if not vals:
+            return
 
-            p_list, grad_list, Q_list, exp_avg, exp_avg_sq = zip(*vals)
-            del vals
+        p_list, grad_list, Q_list, exp_avg, exp_avg_sq = zip(*vals)
+        del vals
 
-            group["step"] += 1
+        group["step"] += 1
 
-            self.balance(do_update, grad_list, Q_list)
-            if do_update:
-                self.do_update(p_list, grad_list, Q_list, precond_lr)
+        self.balance(do_update, grad_list, Q_list)
+        if do_update:
+            self.do_update(p_list, grad_list, Q_list, precond_lr)
 
-            torch._foreach_lerp_(exp_avg, grad_list, 1 - beta_debias(group['beta'], group['step']))
+        torch._foreach_lerp_(exp_avg, grad_list, 1 - beta_debias(group['beta'], group['step']))
 
-            beta2 = 1 - group['step'] ** -group['beta2_scale']
+        beta2 = 1 - group['step'] ** -group['beta2_scale']
 
-            for p, Q, g, ea, eas in zip(p_list, Q_list, grad_list, exp_avg, exp_avg_sq):
-                psgd_precond_grad(Q, self.state_(p)["exprs"], g, inplace=True)
-                ea = psgd_precond_grad(Q, self.state_(p)["exprs"], ea)
-                exp_avg_sq_(eas, g, beta_debias(beta2, group['step']), 1e-8, out=g)
-                torch.div(ea, g, out=g)
-                """
-                divide by g here, because g == denom (from exp_avg_sq_(out=g)), avoids denom allocation
-                divide into g so we can deallocate ea, avoids one allocation (-> less memory than equivalent foreach)
-                """
+        for p, Q, g, ea, eas in zip(p_list, Q_list, grad_list, exp_avg, exp_avg_sq):
+            psgd_precond_grad(Q, self.state_(p)["exprs"], g, inplace=True)
+            ea = psgd_precond_grad(Q, self.state_(p)["exprs"], ea)
+            exp_avg_sq_(eas, g, beta_debias(beta2, group['step']), 1e-8, out=g)
+            torch.div(ea, g, out=g)
+            """
+            divide by g here, because g == denom (from exp_avg_sq_(out=g)), avoids denom allocation
+            divide into g so we can deallocate ea, avoids one allocation (-> less memory than equivalent foreach)
+            """
 
-            grad_list = self.clip_fn(grad_list)
+        grad_list = self.clip_fn(grad_list)
 
-            lr = -warmup(lr, group['step'], group['warmup_steps'])
-            update_param_(p_list, grad_list, lr, weight_decay)
-
-        return loss
+        lr = -warmup(lr, group['step'], group['warmup_steps'])
+        update_param_(p_list, grad_list, lr, weight_decay)

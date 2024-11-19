@@ -1,3 +1,4 @@
+from .delayed_psgd import ForeachDelayedPSGD
 from .foreach_adamw import ForeachAdamW
 from .foreach_adopt import ForeachADOPT
 from .foreach_laprop import ForeachLaProp
@@ -12,7 +13,6 @@ from .precond_schedule_sfpsoap import PrecondScheduleSFPaLMSOAP
 from .psgd_kron import ForeachPSGDKron
 from .pure_psgd import ForeachPurePSGD
 from .schedule_free_palm_foreach_soap import SFPaLMForeachSOAP
-from .delayed_psgd import ForeachDelayedPSGD
 
 PalmForEachSoap = PaLMForeachSOAP
 

@@ -11,46 +11,36 @@ class ForeachLaProp(StatefulOptimizer):
                         lr_max=-1.0, weight_decay=weight_decay)
         super().__init__(params, defaults)
 
-    def step(self, closure=None):
-        """Performs a single optimization step.
+    def _step(self, group):
+        eps = group['eps']
+        decay = group['weight_decay']
+        k = group['k']
 
-        Arguments:
-            closure (callable, optional): A closure that reevaluates the model
-                and returns the loss.
-        """
+        if not group['train_mode']:
+            raise Exception("Not in train mode!")
 
-        loss = None
-        if closure is not None:
-            loss = closure()
+        active_p = [p for p in group['params'] if p.grad is not None]
 
-        for group in self.param_groups:
-            eps = group['eps']
-            decay = group['weight_decay']
-            k = group['k']
+        if not active_p:
+            return
 
-            if not group['train_mode']:
-                raise Exception("Not in train mode!")
+        for p in active_p:
+            if 'exp_avg' not in self.state_(p):
+                self.state_(p)['exp_avg'] = torch.zeros_like(p.data, dtype=torch.float32)
+                self.state_(p)['exp_avg_sq'] = torch.zeros_like(p.data, dtype=torch.float32)
 
-            active_p = [p for p in group['params'] if p.grad is not None]
+        y, grad, exp_avg_sq, exp_avg = zip(
+            *[(p.data, p.grad.float(), self.state_(p)['exp_avg_sq'], self.state_(p)['exp_avg']) for p in active_p])
 
-            for p in active_p:
-                if 'exp_avg' not in self.state_(p):
-                    self.state_(p)['exp_avg'] = torch.zeros_like(p.data, dtype=torch.float32)
-                    self.state_(p)['exp_avg_sq'] = torch.zeros_like(p.data, dtype=torch.float32)
+        # Decay the first and second moment running average coefficient
+        denom = exp_avg_sq_(exp_avg_sq, grad, beta_debias(group['betas'][1], k + 1), eps)
+        beta1 = beta_debias(group['betas'][0], k + 1)
+        torch._foreach_mul_(exp_avg, beta1)
+        torch._foreach_addcdiv_(exp_avg, grad, denom, 1 - beta1)
+        del grad
 
-            y, grad, exp_avg_sq, exp_avg = zip(
-                *[(p.data, p.grad.float(), self.state_(p)['exp_avg_sq'], self.state_(p)['exp_avg']) for p in active_p])
+        # Normalize grad in-place for memory efficiency
+        lr = -warmup(group['lr'], k + 1, group['warmup_steps'])
+        update_param_(y, exp_avg, lr, decay)
 
-            # Decay the first and second moment running average coefficient
-            denom = exp_avg_sq_(exp_avg_sq, grad, beta_debias(group['betas'][1], k + 1), eps)
-            beta1 = beta_debias(group['betas'][0], k + 1)
-            torch._foreach_mul_(exp_avg, beta1)
-            torch._foreach_addcdiv_(exp_avg, grad, denom, 1 - beta1)
-            del grad
-
-            # Normalize grad in-place for memory efficiency
-            lr = -warmup(group['lr'], k + 1, group['warmup_steps'])
-            update_param_(y, exp_avg, lr, decay)
-
-            group['k'] = k + 1
-        return loss
+        group['k'] = k + 1

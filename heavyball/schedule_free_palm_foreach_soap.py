@@ -46,84 +46,73 @@ class SFPaLMForeachSOAP(ScheduleFree):
         self._data_format = data_format
         self.rng = random.Random(0x120983109)
 
-    @torch.no_grad()
-    def step(self, closure=None):
-        """
-        Performs a single optimization step.
+    def _step(self, group):
+        vals = []
+        max_precond_dim = group['max_precond_dim']
+        precondition_1d = group['precondition_1d']
 
-        Arguments:
-            closure (`Callable`, *optional*): A closure that reevaluates the model and returns the loss.
-        """
-        if closure is None:
-            loss = None
-        else:
-            loss = closure()
+        step = group['step'] = group.get("step", -1) + 1
 
-        for group in self.param_groups:
-            vals = []
-            max_precond_dim = group['max_precond_dim']
-            precondition_1d = group['precondition_1d']
-
-            step = group['step'] = group.get("step", -1) + 1
-
-            for p in group["params"]:
-                if p.grad is None:
-                    continue
-                grad = p.grad.float()
-                vals.append((p, grad))
-
-            p_list, grad = zip(*vals)
-
-            adaptive_gradient_clipping_(p_list, grad, group["gradient_clip_val"], eps=group["eps"])
-
-            vals = []
-
-            for p, g in split_p_and_g_in_group(group):
-                state = self.state_(p)
-
-                if "z" not in state:
-                    state["z"] = torch.clone(p).float()
-                    state["exp_avg_sq"] = torch.zeros_like(g, dtype=torch.float32)
-                    init_preconditioner(g, state, max_precond_dim, precondition_1d)
-                    update_preconditioner(g, state, max_precond_dim, precondition_1d, 0, True)
-                    continue  # first step is skipped so that we never use the current gradients in the projection.
-
-                # Projecting gradients to the eigenbases of Shampoo's preconditioner
-                # i.e. projecting to the eigenbases of matrices in state['GG']
-                grad_projected = project(g, state['Q'], False)
-                z, exp_avg_sq = state["z"], state["exp_avg_sq"]
-                vals.append((p, g, grad_projected, z, exp_avg_sq))
-
-            if not vals:
+        for p in group["params"]:
+            if p.grad is None:
                 continue
+            grad = p.grad.float()
+            vals.append((p, grad))
 
-            p_list, grad, grad_projected, z, exp_avg_sq = zip(*vals)
+        if not vals:
+            return
 
-            beta2 = 1 - max(step, 1) ** -group['beta2_scale']
-            new_debiased2 = beta_debias(beta2, step)
+        p_list, grad = zip(*vals)
 
-            # Decay the first and second moment running average coefficient
-            # In-place operations to update the averages at the same time
-            denom = exp_avg_sq_(exp_avg_sq, grad, new_debiased2, group["eps"])
-            torch._foreach_div_(grad_projected, denom)
+        adaptive_gradient_clipping_(p_list, grad, group["gradient_clip_val"], eps=group["eps"])
 
-            update_precond = group['step'] > 0 and group['step'] % group['precondition_frequency'] == 0
+        vals = []
 
-            for p, g, gp in zip(p_list, grad, grad_projected):
-                state = self.state_(p)
-                # Projecting back the preconditioned (by Adam) exponential moving average of gradients
-                # to the original space
-                # CANT DO /= HERE AS EXP_AVG MAY POINT TO THE BUFFER
-                set_(gp, project(gp, state['Q'], back=True))
+        for p, g in split_p_and_g_in_group(group):
+            state = self.state_(p)
 
-                update_preconditioner(g, state, max_precond_dim, precondition_1d, 1 - new_debiased2,
-                                      update_precond)
+            if "z" not in state:
+                state["z"] = torch.clone(p).float()
+                state["exp_avg_sq"] = torch.zeros_like(g, dtype=torch.float32)
+                init_preconditioner(g, state, max_precond_dim, precondition_1d)
+                update_preconditioner(g, state, max_precond_dim, precondition_1d, 0, True)
+                continue  # first step is skipped so that we never use the current gradients in the projection.
 
-            # Weight decay calculated at y
-            if group["weight_decay"] > 0:
-                torch._foreach_add_(grad, p_list, alpha=group["weight_decay"])
+            # Projecting gradients to the eigenbases of Shampoo's preconditioner
+            # i.e. projecting to the eigenbases of matrices in state['GG']
+            grad_projected = project(g, state['Q'], False)
+            z, exp_avg_sq = state["z"], state["exp_avg_sq"]
+            vals.append((p, g, grad_projected, z, exp_avg_sq))
 
-            lr = warmup(group['lr'], step, group['warmup_steps'])
-            group['weight_sum'] = schedule_free_(lr, group['weight_lr_power'], group['weight_sum'], group['beta'],
-                                                 p_list, z, grad_projected, group['r'], step)
-        return loss
+        if not vals:
+            return
+
+        p_list, grad, grad_projected, z, exp_avg_sq = zip(*vals)
+
+        beta2 = 1 - max(step, 1) ** -group['beta2_scale']
+        new_debiased2 = beta_debias(beta2, step)
+
+        # Decay the first and second moment running average coefficient
+        # In-place operations to update the averages at the same time
+        denom = exp_avg_sq_(exp_avg_sq, grad, new_debiased2, group["eps"])
+        torch._foreach_div_(grad_projected, denom)
+
+        update_precond = group['step'] > 0 and group['step'] % group['precondition_frequency'] == 0
+
+        for p, g, gp in zip(p_list, grad, grad_projected):
+            state = self.state_(p)
+            # Projecting back the preconditioned (by Adam) exponential moving average of gradients
+            # to the original space
+            # CANT DO /= HERE AS EXP_AVG MAY POINT TO THE BUFFER
+            set_(gp, project(gp, state['Q'], back=True))
+
+            update_preconditioner(g, state, max_precond_dim, precondition_1d, 1 - new_debiased2,
+                                  update_precond)
+
+        # Weight decay calculated at y
+        if group["weight_decay"] > 0:
+            torch._foreach_add_(grad, p_list, alpha=group["weight_decay"])
+
+        lr = warmup(group['lr'], step, group['warmup_steps'])
+        group['weight_sum'] = schedule_free_(lr, group['weight_lr_power'], group['weight_sum'], group['beta'],
+                                             p_list, z, grad_projected, group['r'], step)

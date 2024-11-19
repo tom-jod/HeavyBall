@@ -9,58 +9,48 @@ class PaLMForeachSFAdamW(ScheduleFree):
                  weight_lr_power=2.0, beta2_scale: float = 0.8):
         if betas[0] is not None:
             beta = betas[0]
-        defaults = dict(lr=lr, beta=beta, eps=eps, r=r, k=0, warmup_steps=warmup_steps, train_mode=True,
-                        weight_sum=0.0, lr_max=-1.0, weight_lr_power=weight_lr_power, weight_decay=weight_decay,
+        defaults = dict(lr=lr, beta=beta, eps=eps, r=r, k=0, warmup_steps=warmup_steps, train_mode=True, weight_sum=0.0,
+                        lr_max=-1.0, weight_lr_power=weight_lr_power, weight_decay=weight_decay,
                         beta2_scale=beta2_scale)
         super().__init__(params, defaults)
 
-    def step(self, closure=None):
-        """Performs a single optimization step.
+    def _step(self, group):
+        eps = group['eps']
+        decay = group['weight_decay']
+        k = group['k']
 
-        Arguments:
-            closure (callable, optional): A closure that reevaluates the model
-                and returns the loss.
-        """
+        if not group['train_mode']:
+            raise Exception("Not in train mode!")
 
-        loss = None
-        if closure is not None:
-            loss = closure()
+        active_p = [p for p in group['params'] if p.grad is not None]
 
-        for group in self.param_groups:
-            eps = group['eps']
-            decay = group['weight_decay']
-            k = group['k']
+        if not active_p:
+            return
 
-            if not group['train_mode']:
-                raise Exception("Not in train mode!")
+        for p in active_p:
+            if 'z' not in self.state_(p):
+                self.state_(p)['z'] = torch.clone(p.data)
+                self.state_(p)['exp_avg_sq'] = torch.zeros_like(p.data, dtype=torch.float32)
 
-            active_p = [p for p in group['params'] if p.grad is not None]
+        y, grad, exp_avg_sq, z = zip(
+            *[(p.data, p.grad.float(), self.state_(p)['exp_avg_sq'], self.state_(p)['z']) for p in active_p])
 
-            for p in active_p:
-                if 'z' not in self.state_(p):
-                    self.state_(p)['z'] = torch.clone(p.data)
-                    self.state_(p)['exp_avg_sq'] = torch.zeros_like(p.data, dtype=torch.float32)
+        # Decay the first moment running average coefficient
+        beta2 = 1 - (k + 1) ** -group['beta2_scale']
+        old_debiased = beta_debias(beta2, k + 1)
 
-            y, grad, exp_avg_sq, z = zip(
-                *[(p.data, p.grad.float(), self.state_(p)['exp_avg_sq'], self.state_(p)['z']) for p in active_p])
+        # Decay the first and second moment running average coefficient
+        denom = exp_avg_sq_(exp_avg_sq, grad, old_debiased, eps)
 
-            # Decay the first moment running average coefficient
-            beta2 = 1 - (k + 1) ** -group['beta2_scale']
-            old_debiased = beta_debias(beta2, k + 1)
+        # Normalize grad in-place for memory efficiency
+        torch._foreach_div_(grad, denom)
 
-            # Decay the first and second moment running average coefficient
-            denom = exp_avg_sq_(exp_avg_sq, grad, old_debiased, eps)
+        # Weight decay calculated at y
+        if decay != 0:
+            torch._foreach_add_(grad, y, alpha=decay)
 
-            # Normalize grad in-place for memory efficiency
-            torch._foreach_div_(grad, denom)
+        lr = warmup(group['lr'], k + 1, group['warmup_steps'])
+        group['weight_sum'] = schedule_free_(lr, group['weight_lr_power'], group['weight_sum'], group['beta'], y, z,
+                                             grad, group['r'], k + 1)
 
-            # Weight decay calculated at y
-            if decay != 0:
-                torch._foreach_add_(grad, y, alpha=decay)
-
-            lr = warmup(group['lr'], k + 1, group['warmup_steps'])
-            group['weight_sum'] = schedule_free_(lr, group['weight_lr_power'], group['weight_sum'], group['beta'],
-                                                 y, z, grad, group['r'], k + 1)
-
-            group['k'] = k + 1
-        return loss
+        group['k'] = k + 1

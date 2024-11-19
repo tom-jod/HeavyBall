@@ -3,7 +3,7 @@ import gc
 import math
 import random
 import string
-from typing import List, Optional, Tuple
+from typing import List, Optional, Tuple, Callable
 
 import numpy as np
 import torch
@@ -399,6 +399,20 @@ class StatefulOptimizer(torch.optim.Optimizer):
                 tree_map(_add, self.state_(p))
         return total_bytes
 
+    def _step(self, group):
+        raise NotImplementedError
+
+    def step(self, closure: Optional[Callable] = None):
+        if closure is None:
+            loss = None
+        else:
+            with torch.enable_grad():
+                loss = closure()
+        with torch.no_grad():
+            for group in self.param_groups:
+                self._step(group)
+        return loss
+
 
 class ScheduleFree(StatefulOptimizer):
     def eval(self):
@@ -684,8 +698,10 @@ def a_law_compress(x, A=87.6):
     torch._foreach_mul_(xa, 1 / (1 + math.log(A)))
     return xa
 
+
 def identity(x):
     return x
+
 
 def trust_region_clip_(grad, lerp: float = 0.9, scale: float = 1.5):
     torch._foreach_mul_(grad, 1 / scale)
