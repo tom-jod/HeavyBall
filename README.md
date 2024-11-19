@@ -21,6 +21,8 @@ recommended experimental optimizer is `ForeachPSGDKron`.
 * **ScheduleFree**: No learning rate schedule, but better convergence
 * [**Preconditioner Schedule**](https://github.com/lixilinx/psgd_torch/): Improved loss-per-step in early convergence,
   better step-per-second in late convergence (explained below)
+* **Memory-efficient storage** PSGD supports `store_triu_as_line` (default: `True`) to trade off memory usage for memory
+  bandwidth; turn it off for lower overheads
 
 ## Getting started
 
