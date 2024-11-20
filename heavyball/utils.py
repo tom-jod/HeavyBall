@@ -668,7 +668,10 @@ def psgd_update_precond(Q, exprs, V, G, step, tiny):
 
         term2 += term1  # a + b
         term1 *= 2  # 2a
-        term1 -= term2  # 2a - (a + b) == a - b
+        if term1.dtype == term2.dtype:
+            term1 -= term2  # 2a - (a + b) == a - b
+        else:
+            term1 = term1 - term2
 
         term1 *= step
         norm = term2.norm(float('inf'))
