@@ -39,7 +39,9 @@ class ForeachDelayedPSGD(PSGDBase):
                  max_size_triangular=2048, min_ndim_triangular=2, memory_save_mode=None,
                  momentum_into_precond_update=True, warmup_steps: int = 1, merge_dims: bool = False,
                  split: bool = False, clip_fn: callable = None, store_triu_as_line: bool = True,
-                 foreach: bool = True, q_dtype='float32', stochastic_schedule: bool = True):
+                 foreach: bool = True, q_dtype='float32', stochastic_schedule: bool = True,  #
+                 # expert parameters
+                 precond_init_scale=1.0, precond_lr=0.1):
         if not 0.0 <= lr:
             raise ValueError(f"Invalid learning rate: {lr}")
         if not 0.0 <= beta < 1.0:
@@ -52,9 +54,8 @@ class ForeachDelayedPSGD(PSGDBase):
 
         defaults = dict(lr=lr, beta=beta, weight_decay=weight_decay, max_size_triangular=max_size_triangular,
                         min_ndim_triangular=min_ndim_triangular, memory_save_mode=memory_save_mode,
-                        momentum_into_precond_update=momentum_into_precond_update, precond_lr=0.1,
-                        # precond lr hardcoded to 0.1
-                        precond_init_scale=1.0,  # precond init scale hardcoded to 1.0
+                        momentum_into_precond_update=momentum_into_precond_update, precond_lr=precond_lr,
+                        precond_init_scale=precond_init_scale,
                         step=0, warmup_steps=warmup_steps, merge_dims=merge_dims, split=split,
                         store_triu_as_line=store_triu_as_line, q_dtype=q_dtype)
         super().__init__(params, defaults, foreach, stochastic_schedule, clip_fn, preconditioner_update_probability)

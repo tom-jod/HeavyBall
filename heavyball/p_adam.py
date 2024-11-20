@@ -5,10 +5,10 @@ Source available at https://github.com/evanatyourservice/kron_torch/blob/97a2b5e
 """
 
 import torch
-from heavyball.utils import triu_to_line, line_to_triu, identity
 
-from .utils import update_param_, warmup, psgd_precond_grad, init_Q_exprs, PSGDBase, precond_update_prob_schedule, \
-    exp_avg_sq_, beta_debias, split_p_and_g_in_group, promote
+from heavyball.utils import triu_to_line, line_to_triu, identity
+from .utils import update_param_, warmup, psgd_precond_grad, init_Q_exprs, PSGDBase, exp_avg_sq_, beta_debias, \
+    split_p_and_g_in_group, promote
 
 
 class ForeachPaLMPAdam(PSGDBase):
@@ -39,7 +39,9 @@ class ForeachPaLMPAdam(PSGDBase):
                  momentum_into_precond_update=True, warmup_steps: int = 1, betas=(None, None), beta: float = 0.9,
                  beta2_scale: float = 0.8, merge_dims: bool = False, split: bool = False, clip_fn: callable = None,
                  store_triu_as_line: bool = True, foreach: bool = True, q_dtype='float32',
-                 stochastic_schedule: bool = True):
+                 stochastic_schedule: bool = True,  #
+                 # expert parameters
+                 precond_init_scale=1.0, precond_lr=0.1):
         if not 0.0 <= lr:
             raise ValueError(f"Invalid learning rate: {lr}")
         if not 0.0 <= weight_decay:
@@ -52,11 +54,10 @@ class ForeachPaLMPAdam(PSGDBase):
 
         defaults = dict(lr=lr, weight_decay=weight_decay, max_size_triangular=max_size_triangular,
                         min_ndim_triangular=min_ndim_triangular, memory_save_mode=memory_save_mode,
-                        momentum_into_precond_update=momentum_into_precond_update, precond_lr=0.1,
-                        # precond lr hardcoded to 0.1
-                        precond_init_scale=1.0,  # precond init scale hardcoded to 1.0
-                        step=0, warmup_steps=warmup_steps, beta=beta, beta2_scale=beta2_scale, merge_dims=merge_dims,
-                        split=split, store_triu_as_line=store_triu_as_line, q_dtype=q_dtype)
+                        momentum_into_precond_update=momentum_into_precond_update, precond_lr=precond_lr,
+                        precond_init_scale=precond_init_scale, step=0, warmup_steps=warmup_steps, beta=beta,
+                        beta2_scale=beta2_scale, merge_dims=merge_dims, split=split,
+                        store_triu_as_line=store_triu_as_line, q_dtype=q_dtype)
         super().__init__(params, defaults, foreach, stochastic_schedule, clip_fn, preconditioner_update_probability)
 
     def _step(self, group):

@@ -7,10 +7,9 @@ Source available at https://github.com/evanatyourservice/kron_torch/blob/97a2b5e
 from typing import Optional
 
 import torch
-from heavyball.utils import einsum_base
 
-from .utils import update_param_, warmup, psgd_precond_grad, init_Q_exprs, trust_region_clip_, PSGDBase, \
-    precond_update_prob_schedule, split_p_and_g_in_group, line_to_triu, triu_to_line, set_, einsum_base, promote
+from .utils import update_param_, warmup, init_Q_exprs, trust_region_clip_, PSGDBase, \
+    split_p_and_g_in_group, line_to_triu, triu_to_line, set_, einsum_base, promote
 
 
 class ForeachCachedPSGDKron(PSGDBase):
@@ -40,7 +39,9 @@ class ForeachCachedPSGDKron(PSGDBase):
                  max_size_triangular=2048, min_ndim_triangular=2, memory_save_mode=None,
                  momentum_into_precond_update=True, warmup_steps: int = 1, merge_dims: bool = False,
                  split: bool = False, clip_fn: Optional[callable] = None, store_triu_as_line: bool = True,
-                 foreach: bool = True, q_dtype='float32', stochastic_schedule: bool = True):
+                 foreach: bool = True, q_dtype='float32', stochastic_schedule: bool = True,  #
+                 # expert parameters
+                 precond_init_scale=1.0, precond_lr=0.1):
         if not 0.0 <= lr:
             raise ValueError(f"Invalid learning rate: {lr}")
         if not 0.0 <= beta < 1.0:
@@ -53,14 +54,10 @@ class ForeachCachedPSGDKron(PSGDBase):
 
         defaults = dict(lr=lr, beta=beta, weight_decay=weight_decay, max_size_triangular=max_size_triangular,
                         min_ndim_triangular=min_ndim_triangular, memory_save_mode=memory_save_mode,
-                        momentum_into_precond_update=momentum_into_precond_update, precond_lr=0.1,
-                        # precond lr hardcoded to 0.1
-                        precond_init_scale=1.0,  # precond init scale hardcoded to 1.0
-                        step=0, warmup_steps=warmup_steps, merge_dims=merge_dims, split=split,
-                        store_triu_as_line=store_triu_as_line,
-                        q_dtype=q_dtype)
+                        momentum_into_precond_update=momentum_into_precond_update, precond_lr=precond_lr,
+                        precond_init_scale=precond_init_scale, step=0, warmup_steps=warmup_steps, merge_dims=merge_dims,
+                        split=split, store_triu_as_line=store_triu_as_line, q_dtype=q_dtype)
         super().__init__(params, defaults, foreach, stochastic_schedule, clip_fn, preconditioner_update_probability)
-
 
     def _step(self, group):
         momentum_into_precond_update = group.get("momentum_into_precond_update", True)
@@ -119,7 +116,8 @@ class ForeachCachedPSGDKron(PSGDBase):
             if self.should_update(group):
                 q = line_to_triu(q_orig) if store_triu_as_line else q_orig
                 q32 = [promote(q_) for q_ in q]
-                self.do_update(group,[p], [ea if momentum_into_precond_update else g], [q32], precond_lr, [q_orig], store_triu_as_line)
+                self.do_update(group, [p], [ea if momentum_into_precond_update else g], [q32], precond_lr, [q_orig],
+                               store_triu_as_line)
                 for c_, q_ in zip(cached_q, q):
                     if q_.ndim == 2:
                         torch.matmul(q_.T.conj(), q_, out=c_)
