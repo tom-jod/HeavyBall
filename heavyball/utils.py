@@ -793,21 +793,35 @@ def update_triu_(q_state, materialised):
 class PSGDBase(StatefulOptimizer):
     balance_probability: float = 0.01
 
-    def __init__(self, parameters, groups, foreach: bool = True):
-        super().__init__(parameters, groups, foreach)
+    def __init__(self, parameters, groups, foreach: bool, stochastic_schedule: bool, clip_fn,
+                 preconditioner_update_probability):
+        super().__init__(parameters, {**groups, 'stochastic_schedule': stochastic_schedule}, foreach)
         self.rng = random.Random(0x1923213)
         self._tiny = torch.finfo(torch.bfloat16).tiny
+        if clip_fn is None:
+            clip_fn = identity
+        if preconditioner_update_probability is None:
+            preconditioner_update_probability = precond_update_prob_schedule()
+        self.clip_fn = clip_fn
+        self.preconditioner_update_probability = preconditioner_update_probability
 
-    def balance(self, grad_list, Q_list):
-        if self.rng.random() > self.balance_probability:
-            return
+    def should_update(self, group, prob: Optional[float] = None, name: str = 'cumulative_prob'):
+        group[f'{name}_prob_step'] = group.get(f'{name}_prob_step', 0) + 1
+        if prob is None:
+            prob = self.preconditioner_update_probability(group[f'{name}_prob_step'])
+        if group['stochastic_schedule']:
+            return self.rng.random() < prob
+        cumulative_prob = group.get(name, 0)
+        group[name] = cumulative_prob + prob
+        return int(group[name]) > int(cumulative_prob)
 
-        for g, q in zip(grad_list, Q_list):
-            if g.dim() > 1:
-                psgd_balance_Q(q)
-
-    def do_update(self, p_list, grad_list, q_list, precond_lr, original_q: Optional[List] = None,
+    def do_update(self, group, p_list, grad_list, q_list, precond_lr, original_q: Optional[List] = None,
                   store_triu_as_line=False):
+        if self.should_update(group, self.balance_probability, 'balance_prob'):
+            for g, q in zip(grad_list, q_list):
+                if g.dim() > 1:
+                    psgd_balance_Q(q)
+
         for i, (p, grad, Q) in enumerate(zip(p_list, grad_list, q_list)):
             psgd_update_precond(Q, self.state_(p)["exprs"], torch.randn_like(grad), grad, precond_lr, self._tiny)
             if original_q:

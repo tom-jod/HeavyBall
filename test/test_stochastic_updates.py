@@ -16,8 +16,8 @@ def get_memory():
 
 
 @pytest.mark.parametrize("opt", heavyball.__all__)
-@pytest.mark.parametrize("size,depth", [(256, 2)])
-def test_foreach(opt, size, depth: int, iterations: int = 128, outer_iterations: int = 3):
+@pytest.mark.parametrize("size,depth", [(128, 2)])
+def test_foreach(opt, size, depth: int, iterations: int = 1024, outer_iterations: int = 3):
     set_torch()
 
     opt = getattr(heavyball, opt)
@@ -27,17 +27,17 @@ def test_foreach(opt, size, depth: int, iterations: int = 128, outer_iterations:
     peaks = []
     losses = []
 
-    for q_dtype in ['float32', 'bfloat16']:
+    for stochastic in [False, True]:
         torch.manual_seed(0x2131290)
         peaks.append([])
         losses.append([])
 
         for i in range(outer_iterations):
             model = nn.Sequential(*[nn.Linear(size, size) for _ in range(depth)]).cuda()
-            o = get_optim(opt, model.parameters(), lr=1e-3, q_dtype=q_dtype)
+            o = get_optim(opt, model.parameters(), lr=1e-3, stochastic_schedule=stochastic)
 
             for _ in range(iterations):
-                loss = model(torch.randn((1024, size)).cuda()).square().mean()
+                loss = model(torch.randn((128, size)).cuda()).square().mean()
                 loss.backward()
                 o.step()
                 o.zero_grad()
@@ -46,7 +46,7 @@ def test_foreach(opt, size, depth: int, iterations: int = 128, outer_iterations:
             del model, o
             clean()
 
-
-    for i, (l0, l1) in enumerate(zip(*losses)):
-        print(i, l0.item(), l1.item())
-        assert torch.allclose(l0, l1, rtol=0.1)
+    stochastic = sum([l.item() for l in losses[1]])
+    deterministic = sum([l.item() for l in losses[0]])
+    print(f"{deterministic=}, {stochastic=}")
+    assert deterministic < stochastic

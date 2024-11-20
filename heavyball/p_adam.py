@@ -5,7 +5,7 @@ Source available at https://github.com/evanatyourservice/kron_torch/blob/97a2b5e
 """
 
 import torch
-from heavyball.utils import triu_to_line, line_to_triu
+from heavyball.utils import triu_to_line, line_to_triu, identity
 
 from .utils import update_param_, warmup, psgd_precond_grad, init_Q_exprs, PSGDBase, precond_update_prob_schedule, \
     exp_avg_sq_, beta_debias, split_p_and_g_in_group, promote
@@ -38,8 +38,8 @@ class ForeachPaLMPAdam(PSGDBase):
                  max_size_triangular=2048, min_ndim_triangular=2, memory_save_mode=None,
                  momentum_into_precond_update=True, warmup_steps: int = 1, betas=(None, None), beta: float = 0.9,
                  beta2_scale: float = 0.8, merge_dims: bool = False, split: bool = False, clip_fn: callable = None,
-                 store_triu_as_line: bool = True,
-                 foreach: bool = True, q_dtype='float32'):
+                 store_triu_as_line: bool = True, foreach: bool = True, q_dtype='float32',
+                 stochastic_schedule: bool = True):
         if not 0.0 <= lr:
             raise ValueError(f"Invalid learning rate: {lr}")
         if not 0.0 <= weight_decay:
@@ -47,12 +47,8 @@ class ForeachPaLMPAdam(PSGDBase):
         if betas[0] is not None:
             beta = betas[0]
 
-        if preconditioner_update_probability is None:
-            preconditioner_update_probability = precond_update_prob_schedule()
         if clip_fn is None:
-            clip_fn = lambda x: x
-        self.preconditioner_update_probability = preconditioner_update_probability
-        self.clip_fn = clip_fn
+            clip_fn = identity
 
         defaults = dict(lr=lr, weight_decay=weight_decay, max_size_triangular=max_size_triangular,
                         min_ndim_triangular=min_ndim_triangular, memory_save_mode=memory_save_mode,
@@ -61,18 +57,9 @@ class ForeachPaLMPAdam(PSGDBase):
                         precond_init_scale=1.0,  # precond init scale hardcoded to 1.0
                         step=0, warmup_steps=warmup_steps, beta=beta, beta2_scale=beta2_scale, merge_dims=merge_dims,
                         split=split, store_triu_as_line=store_triu_as_line, q_dtype=q_dtype)
-        super().__init__(params, defaults, foreach)
-
-        self._prob_step = 0
+        super().__init__(params, defaults, foreach, stochastic_schedule, clip_fn, preconditioner_update_probability)
 
     def _step(self, group):
-        # update preconditioners all together
-        update_prob = self.preconditioner_update_probability
-        if callable(update_prob):
-            update_prob = update_prob(self._prob_step)
-        do_update = self.rng.random() < update_prob
-        self._prob_step += 1
-
         precond_init_scale = group['precond_init_scale']
         max_size_triangular = group['max_size_triangular']
         min_ndim_triangular = group['min_ndim_triangular']
@@ -91,8 +78,8 @@ class ForeachPaLMPAdam(PSGDBase):
             if 'Q' not in state:
                 state['exp_avg'] = torch.zeros_like(g)
                 state['exp_avg_sq'] = torch.zeros_like(g)
-                Q, state["exprs"] = init_Q_exprs(p, precond_init_scale, max_size_triangular,
-                                                 min_ndim_triangular, memory_save_mode, dtype=q_dtype)
+                Q, state["exprs"] = init_Q_exprs(p, precond_init_scale, max_size_triangular, min_ndim_triangular,
+                                                 memory_save_mode, dtype=q_dtype)
                 state['Q'] = triu_to_line(Q) if store_triu_as_line else Q
 
             vals.append((p, g, state["Q"], state['exp_avg'], state['exp_avg_sq']))
@@ -106,11 +93,10 @@ class ForeachPaLMPAdam(PSGDBase):
         group["step"] += 1
 
         Q_triu = [line_to_triu(q) if store_triu_as_line else q for q in Q_list]
-        if do_update:
+        if self.should_update(group):
             for g, p, q_, q_orig in zip(grad_list, p_list, Q_triu, Q_list):
                 q32 = [promote(qq_) for qq_ in q_]
-                self.balance([g], [q32])
-                self.do_update([p], [g], [q32], precond_lr, [q_orig], store_triu_as_line=store_triu_as_line)
+                self.do_update(group, [p], [g], [q32], precond_lr, [q_orig], store_triu_as_line)
         torch._foreach_lerp_(exp_avg, grad_list, 1 - beta_debias(group['beta'], group['step']))
 
         beta2 = 1 - group['step'] ** -group['beta2_scale']

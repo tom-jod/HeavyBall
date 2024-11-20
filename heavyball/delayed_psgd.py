@@ -39,7 +39,7 @@ class ForeachDelayedPSGD(PSGDBase):
                  max_size_triangular=2048, min_ndim_triangular=2, memory_save_mode=None,
                  momentum_into_precond_update=True, warmup_steps: int = 1, merge_dims: bool = False,
                  split: bool = False, clip_fn: callable = None, store_triu_as_line: bool = True,
-                 foreach: bool = True, q_dtype='float32'):
+                 foreach: bool = True, q_dtype='float32', stochastic_schedule: bool = True):
         if not 0.0 <= lr:
             raise ValueError(f"Invalid learning rate: {lr}")
         if not 0.0 <= beta < 1.0:
@@ -47,12 +47,8 @@ class ForeachDelayedPSGD(PSGDBase):
         if not 0.0 <= weight_decay:
             raise ValueError(f"Invalid weight_decay value: {weight_decay}")
 
-        if preconditioner_update_probability is None:
-            preconditioner_update_probability = precond_update_prob_schedule()
         if clip_fn is None:
             clip_fn = lambda x: trust_region_clip_(x, 0.9, 1.5)
-        self.preconditioner_update_probability = preconditioner_update_probability
-        self.clip_fn = clip_fn
 
         defaults = dict(lr=lr, beta=beta, weight_decay=weight_decay, max_size_triangular=max_size_triangular,
                         min_ndim_triangular=min_ndim_triangular, memory_save_mode=memory_save_mode,
@@ -61,18 +57,10 @@ class ForeachDelayedPSGD(PSGDBase):
                         precond_init_scale=1.0,  # precond init scale hardcoded to 1.0
                         step=0, warmup_steps=warmup_steps, merge_dims=merge_dims, split=split,
                         store_triu_as_line=store_triu_as_line, q_dtype=q_dtype)
-        super().__init__(params, defaults, foreach)
+        super().__init__(params, defaults, foreach, stochastic_schedule, clip_fn, preconditioner_update_probability)
 
-        self._prob_step = 0
 
     def _step(self, group):
-        # update preconditioners all together
-        update_prob = self.preconditioner_update_probability
-        if callable(update_prob):
-            update_prob = update_prob(self._prob_step)
-        do_update = self.rng.random() < update_prob
-        self._prob_step += 1
-
         momentum_into_precond_update = group.get("momentum_into_precond_update", True)
         precond_init_scale = group['precond_init_scale']
         max_size_triangular = group['max_size_triangular']
@@ -114,10 +102,9 @@ class ForeachDelayedPSGD(PSGDBase):
             ea = exp_avg_list.pop(0)
             q = line_to_triu(q_orig) if store_triu_as_line else q_orig
             new = psgd_precond_grad(q, self.state_(p)["exprs"], ea)
-            if do_update:
+            if self.should_update(group):
                 q32 = [promote(q_) for q_ in q]
-                self.do_update([p], [ea if momentum_into_precond_update else g], [q32], precond_lr, [q_orig], store_triu_as_line=store_triu_as_line)
-                self.balance([g], [q32])
+                self.do_update(group,[p], [ea if momentum_into_precond_update else g], [q32], precond_lr, [q_orig], store_triu_as_line)
             set_(g, new)
 
         grad_list = self.clip_fn(grad_list)

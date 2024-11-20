@@ -26,11 +26,11 @@ def test_foreach(opt, size, depth: int, iterations: int = 5, outer_iterations: i
     losses = []
 
     for foreach in [True, False]:
+        torch.manual_seed(0x2131290)
         peaks.append([])
         losses.append([])
 
         for i in range(outer_iterations):
-            torch.manual_seed(0x2131290)
             clean()
             model = nn.Sequential(*[nn.Linear(size, size) for _ in range(depth)]).cuda()
             clean()
