@@ -332,6 +332,16 @@ def promote(x):
     return x
 
 
+def min_dtype(xs: List[torch.Tensor]):
+    dtypes = [x.dtype for x in xs]
+    for d in (torch.float32, torch.bfloat16, torch.float16):
+        if all(d == x for x in dtypes):
+            return d
+        if all(d in (x, torch.float32, torch.float64) for x in dtypes):
+            return d
+    return torch.float32
+
+
 def update_preconditioner(grad, state, max_precond_dim, precondition_1d, beta, update_precond):
     """
     Updates the preconditioner matrices and the eigenbases (L, R, Q_L, Q_R in the paper).
@@ -471,13 +481,8 @@ def copy_stochastic_list_(target: List[torch.Tensor], source: List[torch.Tensor]
         copy_stochastic_(t, s)
 
 
-def copy_stochastic_(target: torch.Tensor, source: torch.Tensor):
-    if target.data_ptr() == source.data_ptr():
-        return
-    if target.dtype != torch.bfloat16:
-        set_(target, source)
-        return
-
+@torch.compile(mode='max-autotune-no-cudagraphs', fullgraph=True, dynamic=False)
+def _compilable_copy_stochastic_(target: torch.Tensor, source: torch.Tensor):
     """Taken as-is from https://github.com/pytorch/pytorch/issues/120376#issuecomment-1974828905"""
     # create a random 16 bit integer
     result = torch.randint_like(source, dtype=torch.int32, low=0, high=(1 << 16))
@@ -490,6 +495,15 @@ def copy_stochastic_(target: torch.Tensor, source: torch.Tensor):
 
     # copy the higher 16 bit into the target tensor
     target.copy_(result.view(dtype=torch.float32))
+
+
+def copy_stochastic_(target: torch.Tensor, source: torch.Tensor):
+    if target.data_ptr() == source.data_ptr():
+        return
+    if target.dtype != torch.bfloat16 or source.dtype not in (torch.float16, torch.float32, torch.float64):
+        set_(target, source)
+        return
+    _compilable_copy_stochastic_(target, source)
 
 
 def update_param_(param: List[torch.Tensor], update: List[torch.Tensor], lr: float, decay: float,
@@ -602,7 +616,8 @@ def psgd_balance_Q(Q_in):
 
 
 def psgd_calc_A_and_conjB(exprA, G, Q, V):
-    A = torch.einsum(exprA, *Q, G)
+    md = min_dtype(Q)
+    A = torch.einsum(exprA, *[q.to(md) for q in Q], G.to(md))
     order = G.dim()
     p = list(range(order))
     conjB = torch.permute(V.conj(), p[1:] + p[:1])
@@ -669,7 +684,8 @@ def psgd_update_precond(Q, exprs, V, G, step, tiny):
 @decorator
 def psgd_precond_grad(Q, exprs, G, inplace: bool = False):
     """Precondition gradient G with preconditioner Q."""
-    out = torch.einsum(exprs[-1], *[q.conj() for q in Q], *Q, G.to(Q[0].dtype))
+    md = min_dtype(Q)
+    out = torch.einsum(exprs[-1], *[q.conj().to(md) for q in Q], *[q.to(md) for q in Q], G.to(md))
     if inplace:
         set_(G, out)
         return G
@@ -787,14 +803,15 @@ class PSGDBase(StatefulOptimizer):
             if g.dim() > 1:
                 psgd_balance_Q(q)
 
-    def do_update(self, p_list, grad_list, q_list, precond_lr, original_q: Optional[List] = None, store_triu_as_line=False):
+    def do_update(self, p_list, grad_list, q_list, precond_lr, original_q: Optional[List] = None,
+                  store_triu_as_line=False):
         for i, (p, grad, Q) in enumerate(zip(p_list, grad_list, q_list)):
             psgd_update_precond(Q, self.state_(p)["exprs"], torch.randn_like(grad), grad, precond_lr, self._tiny)
             if original_q:
                 if store_triu_as_line:
                     update_triu_(original_q[i], Q)
                 else:
-                    copy_stochastic_(original_q[i], Q)
+                    copy_stochastic_list_(original_q[i], Q)
 
 
 def precond_update_prob_schedule(max_prob=1.0, min_prob=0.03, decay=0.001, flat_start=250):
