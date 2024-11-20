@@ -21,26 +21,25 @@ PalmForEachSoap = PaLMForeachSOAP
 PaLMSOAP = PaLMForeachSOAP
 PaLMSFAdamW = PaLMForeachSFAdamW
 PaLMSFSoap = SFPaLMForeachSOAP
-PaLMForeachSOAP = PaLMForeachSOAP
 PrecondScheduleSFPaLMSOAP = PrecondScheduleSFPaLMSOAP
 SOAP = ForeachSOAP
 SFAdamW = ForeachSFAdamW
 LaProp = ForeachLaProp
 ADOPT = ForeachADOPT
-PrecondScheduleForeachSOAP = PrecondScheduleForeachSOAP
-PrecondSchedulePaLMForeachSOAP = PrecondSchedulePaLMForeachSOAP
+PrecondScheduleSOAP = PrecondScheduleForeachSOAP
+PrecondSchedulePaLMSOAP = PrecondSchedulePaLMForeachSOAP
 PSGDKron = ForeachPSGDKron
 AdamW = ForeachAdamW
 PurePSGD = ForeachPurePSGD
 PaLMPAdam = ForeachPaLMPAdam
 DelayedPSGD = ForeachDelayedPSGD
 CachedPSGDKron = ForeachCachedPSGDKron
-CachedDelayedPSGDKron
+CachedDelayedPSGDKron = ForeachCachedDelayedPSGDKron
 
 __all__ = ['PalmForEachSoap', 'PaLMForeachSFAdamW', 'PaLMForeachSOAP', 'SFPaLMForeachSOAP', 'PrecondScheduleSFPaLMSOAP',
            'ForeachSOAP', 'ForeachSFAdamW', 'ForeachLaProp', 'ForeachADOPT', 'PrecondScheduleForeachSOAP',
            'PrecondSchedulePaLMForeachSOAP', 'ForeachPSGDKron', 'ForeachAdamW', 'ForeachPurePSGD', 'ForeachPaLMPAdam',
-           'ForeachDelayedPSGD', 'ForeachCachedPSGDKron', 'ForeachCachedDelayedPSGDKron'  #
-           'PaLMSOAP', 'PaLMSFAdamW', 'PaLMSFSoap', 'PaLMSFAdamW', 'PaLMForeachSOAP', 'PrecondScheduleSFPaLMSOAP',
+           'ForeachDelayedPSGD', 'ForeachCachedPSGDKron', 'ForeachCachedDelayedPSGDKron',  #
+           'PaLMSOAP', 'PaLMSFAdamW', 'PaLMSFSoap', 'PaLMSFAdamW', 'PrecondScheduleSFPaLMSOAP',
            'SOAP', 'SFAdamW', 'LaProp', 'ADOPT', 'PSGDKron', 'AdamW', 'PurePSGD', 'PaLMPAdam', 'DelayedPSGD',
-           'CachedPSGDKron', 'CachedDelayedPSGDKron']
+           'CachedPSGDKron', 'CachedDelayedPSGDKron', 'PrecondScheduleSOAP', 'PrecondSchedulePaLMSOAP']
