@@ -38,7 +38,8 @@ class ForeachPaLMPAdam(PSGDBase):
                  max_size_triangular=2048, min_ndim_triangular=2, memory_save_mode=None,
                  momentum_into_precond_update=True, warmup_steps: int = 1, betas=(None, None), beta: float = 0.9,
                  beta2_scale: float = 0.8, merge_dims: bool = False, split: bool = False, clip_fn: callable = None,
-                 store_triu_as_line: bool = True):
+                 store_triu_as_line: bool = True,
+                 foreach: bool = True):
         if not 0.0 <= lr:
             raise ValueError(f"Invalid learning rate: {lr}")
         if not 0.0 <= weight_decay:
@@ -60,7 +61,7 @@ class ForeachPaLMPAdam(PSGDBase):
                         precond_init_scale=1.0,  # precond init scale hardcoded to 1.0
                         step=0, warmup_steps=warmup_steps, beta=beta, beta2_scale=beta2_scale, merge_dims=merge_dims,
                         split=split, store_triu_as_line=store_triu_as_line)
-        super().__init__(params, defaults)
+        super().__init__(params, defaults, foreach)
 
         self._prob_step = 0
 
@@ -90,7 +91,7 @@ class ForeachPaLMPAdam(PSGDBase):
                 state['exp_avg'] = torch.zeros_like(g)
                 state['exp_avg_sq'] = torch.zeros_like(g)
                 Q, state["exprs"] = init_Q_exprs(p, precond_init_scale, max_size_triangular,
-                                                          min_ndim_triangular, memory_save_mode, dtype=g.dtype)
+                                                 min_ndim_triangular, memory_save_mode, dtype=g.dtype)
                 state['Q'] = triu_to_line(Q) if store_triu_as_line else Q
 
             vals.append((p, g, state["Q"], state['exp_avg'], state['exp_avg_sq']))

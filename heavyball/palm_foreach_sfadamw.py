@@ -6,13 +6,14 @@ from .utils import schedule_free_, warmup, ScheduleFree, exp_avg_sq_, beta_debia
 
 class PaLMForeachSFAdamW(ScheduleFree):
     def __init__(self, params, lr=0.0025, beta=0.9, betas=(None, None), eps=1e-8, weight_decay=0, warmup_steps=0, r=0.0,
-                 weight_lr_power=2.0, beta2_scale: float = 0.8):
+                 weight_lr_power=2.0, beta2_scale: float = 0.8,
+                 foreach: bool = True):
         if betas[0] is not None:
             beta = betas[0]
         defaults = dict(lr=lr, beta=beta, eps=eps, r=r, k=0, warmup_steps=warmup_steps, train_mode=True, weight_sum=0.0,
                         lr_max=-1.0, weight_lr_power=weight_lr_power, weight_decay=weight_decay,
                         beta2_scale=beta2_scale)
-        super().__init__(params, defaults)
+        super().__init__(params, defaults, foreach)
 
     def _step(self, group):
         eps = group['eps']

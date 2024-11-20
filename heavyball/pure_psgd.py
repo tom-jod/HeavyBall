@@ -36,7 +36,8 @@ class ForeachPurePSGD(PSGDBase):
     def __init__(self, params, lr=0.001, weight_decay=0.0, preconditioner_update_probability=None,
                  max_size_triangular=2048, min_ndim_triangular=2, memory_save_mode=None,
                  momentum_into_precond_update=True, warmup_steps: int = 1, merge_dims: bool = False,
-                 split: bool = False, clip_fn: callable = None, store_triu_as_line: bool = True):
+                 split: bool = False, clip_fn: callable = None, store_triu_as_line: bool = True,
+                 foreach: bool = True):
         if not 0.0 <= lr:
             raise ValueError(f"Invalid learning rate: {lr}")
         if not 0.0 <= weight_decay:
@@ -56,7 +57,7 @@ class ForeachPurePSGD(PSGDBase):
                         precond_init_scale=1.0,  # precond init scale hardcoded to 1.0
                         step=0, warmup_steps=warmup_steps, merge_dims=merge_dims, split=split,
                         store_triu_as_line=store_triu_as_line)
-        super().__init__(params, defaults)
+        super().__init__(params, defaults, foreach)
 
         self._prob_step = 0
 

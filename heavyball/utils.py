@@ -383,8 +383,25 @@ def project(grad, Q, back: bool):
 
 
 class StatefulOptimizer(torch.optim.Optimizer):
+    def __init__(self, params, defaults, foreach: bool = True):
+        super().__init__(params, {**defaults, 'foreach': foreach})
+        self.fake_groups = {}
+
+    def key(self, param: torch.Tensor):
+        return (param.data_ptr(), tuple(param.shape))
+
+    def get_groups(self, group):
+        if group['foreach']:
+            return [group]
+
+        for p in group['params']:
+            if self.key(p) not in self.fake_groups:
+                self.fake_groups[self.key(p)] = {**group, 'params': [p]}
+
+        return [self.fake_groups[self.key(p)] for p in group['params']]
+
     def state_(self, arg: torch.Tensor):
-        return self.state[(arg.data_ptr(), tuple(arg.shape))]
+        return self.state[self.key(arg)]
 
     def state_size(self) -> int:
         total_bytes = 0
@@ -409,8 +426,9 @@ class StatefulOptimizer(torch.optim.Optimizer):
             with torch.enable_grad():
                 loss = closure()
         with torch.no_grad():
-            for group in self.param_groups:
-                self._step(group)
+            for top_group in self.param_groups:
+                for group in self.get_groups(top_group):
+                    self._step(group)
         return loss
 
 
@@ -754,8 +772,8 @@ def update_triu_(q_state, materialised):
 
 
 class PSGDBase(StatefulOptimizer):
-    def __init__(self, parameters, groups):
-        super().__init__(parameters, groups)
+    def __init__(self, parameters, groups, foreach: bool = True):
+        super().__init__(parameters, groups, foreach)
         self.rng = random.Random(0x1923213)
         self._tiny = torch.finfo(torch.bfloat16).tiny
 

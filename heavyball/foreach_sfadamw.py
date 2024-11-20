@@ -6,12 +6,12 @@ from .utils import schedule_free_, warmup, ScheduleFree, exp_avg_sq_, beta_debia
 
 class ForeachSFAdamW(ScheduleFree):
     def __init__(self, params, lr=0.0025, betas=(0.9, 0.99), eps=1e-8, weight_decay=0, warmup_steps=0, r=0.0,
-                 weight_lr_power=2.0, foreach=hasattr(torch, "_foreach_mul_")):
+                 weight_lr_power=2.0, foreach: bool = True):
 
         defaults = dict(lr=lr, betas=betas, eps=eps, r=r, k=0, warmup_steps=warmup_steps, train_mode=True,
                         weight_sum=0.0, lr_max=-1.0, weight_lr_power=weight_lr_power, weight_decay=weight_decay,
                         foreach=foreach)
-        super().__init__(params, defaults)
+        super().__init__(params, defaults, foreach)
 
     def _step(self, group):
         eps = group['eps']
@@ -48,7 +48,7 @@ class ForeachSFAdamW(ScheduleFree):
             torch._foreach_add_(grad, y, alpha=decay)
 
         lr = warmup(group['lr'], k + 1, group['warmup_steps'])
-        group['weight_sum'] = schedule_free_(lr, group['weight_lr_power'], group['weight_sum'], group['betas'][0],
-                                             y, z, grad, group['r'], k + 1)
+        group['weight_sum'] = schedule_free_(lr, group['weight_lr_power'], group['weight_sum'], group['betas'][0], y, z,
+                                             grad, group['r'], k + 1)
 
         group['k'] = k + 1

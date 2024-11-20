@@ -26,12 +26,13 @@ class ForeachSOAP(StatefulOptimizer):
                  weight_decay: float = 0.01, precondition_frequency: int = 2, max_precond_dim: int = 2048,  #
                  merge_dims: bool = True, precondition_1d: bool = False, normalize_grads: bool = False,
                  data_format: str = "channels_first", correct_bias: bool = True, warmup_steps: int = 1,
-                 split: bool = False):
+                 split: bool = False,
+                 foreach: bool = True):
         defaults = {"lr": lr, "betas": betas, "shampoo_beta": shampoo_beta, "eps": eps, "weight_decay": weight_decay,
                     "precondition_frequency": precondition_frequency, "max_precond_dim": max_precond_dim,
                     "merge_dims": merge_dims, "precondition_1d": precondition_1d, "normalize_grads": normalize_grads,
                     "correct_bias": correct_bias, 'warmup_steps': warmup_steps, 'split': split}
-        super().__init__(params, defaults)
+        super().__init__(params, defaults, foreach)
         self._data_format = data_format
 
     def _step(self, group):
@@ -59,7 +60,7 @@ class ForeachSOAP(StatefulOptimizer):
             vals.append((p, g, grad_projected, exp_avg, exp_avg_sq))
 
         if not vals:
-            return 
+            return
 
         p_list, grad, grad_projected, exp_avg, exp_avg_sq = zip(*vals)
         beta1, beta2 = group["betas"]

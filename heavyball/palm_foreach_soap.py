@@ -32,7 +32,8 @@ class PaLMForeachSOAP(StatefulOptimizer):
                  max_precond_dim: int = 2048,  #
                  merge_dims: bool = True, precondition_1d: bool = False, normalize_grads: bool = False,
                  data_format: str = "channels_first", correct_bias: bool = True, warmup_steps: int = 1,
-                 beta2_scale: float = 0.8, split: bool = False):
+                 beta2_scale: float = 0.8, split: bool = False,
+                 foreach: bool = True):
         if betas[0] is not None:
             beta = betas[0]
         defaults = {"lr": lr, "beta": beta, "shampoo_beta": shampoo_beta, "eps": eps, "weight_decay": weight_decay,
@@ -40,7 +41,7 @@ class PaLMForeachSOAP(StatefulOptimizer):
                     "merge_dims": merge_dims, "precondition_1d": precondition_1d, "normalize_grads": normalize_grads,
                     "correct_bias": correct_bias, 'warmup_steps': warmup_steps, 'beta2_scale': beta2_scale,
                     'split': split}
-        super().__init__(params, defaults)
+        super().__init__(params, defaults, foreach)
         self._data_format = data_format
 
     def _step(self, group):

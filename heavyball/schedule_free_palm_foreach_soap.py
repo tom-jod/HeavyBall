@@ -33,7 +33,8 @@ class SFPaLMForeachSOAP(ScheduleFree):
                  weight_decay: float = 0.01, precondition_frequency: int = 2, max_precond_dim: int = 2048,  #
                  merge_dims: bool = True, precondition_1d: bool = False, normalize_grads: bool = False,
                  data_format: str = "channels_first", correct_bias: bool = True, warmup_steps: int = 1, r=0.0,
-                 weight_lr_power=2.0, gradient_clip_val: float = 0.1, betas=(None, None), split: bool = False):
+                 weight_lr_power=2.0, gradient_clip_val: float = 0.1, betas=(None, None), split: bool = False,
+                 foreach: bool = True):
         if betas[0] is not None:
             beta = betas[0]
         defaults = {"lr": lr, "beta": beta, "beta2_scale": beta2_scale, "eps": eps, "weight_decay": weight_decay,
@@ -42,7 +43,7 @@ class SFPaLMForeachSOAP(ScheduleFree):
                     "correct_bias": correct_bias, 'warmup_steps': warmup_steps, 'r': r,
                     'weight_lr_power': weight_lr_power, 'train_mode': True, 'step': -1,
                     'gradient_clip_val': gradient_clip_val, 'weight_sum': 0, 'split': split}
-        super().__init__(params, defaults)
+        super().__init__(params, defaults, foreach)
         self._data_format = data_format
         self.rng = random.Random(0x120983109)
 
@@ -51,7 +52,7 @@ class SFPaLMForeachSOAP(ScheduleFree):
         max_precond_dim = group['max_precond_dim']
         precondition_1d = group['precondition_1d']
 
-        step = group['step'] = group.get("step", -1) + 1
+        step = group['step'] = group.get("step", 0) + 1
 
         for p in group["params"]:
             if p.grad is None:

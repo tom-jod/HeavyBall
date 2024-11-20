@@ -15,7 +15,7 @@ recommended experimental optimizer is `ForeachPSGDKron`.
 
 * **Stochastic Rounding**: [FP32 convergence with BF16 parameters](https://github.com/pytorch/pytorch/issues/120376)
 * **Inplace EMA**: Same math, but less memory, less compute and higher stability
-* **Foreach**: Fast multi-tensor application
+* **Foreach**: Fast multi-tensor application (turn it off to save memory via `foreach=False`)
 * **PaLM Beta2**: Fast initial
   convergence, [stable late convergence](https://x.com/_clashluke/status/1820810798693818761)
 * **ScheduleFree**: No learning rate schedule, but better convergence
