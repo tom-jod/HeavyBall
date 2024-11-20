@@ -26,7 +26,7 @@ class Param(nn.Module):
 def test_merge(opt, method, size: List[int], merge, split, depth: int = 2, iterations: int = 5,
                outer_iterations: int = 3):
     if 'soap' not in opt.lower() and method != 'qr':
-        return
+        raise pytest.skip('Only SOAP supports `method` argument')
     clean()
     set_torch()
 

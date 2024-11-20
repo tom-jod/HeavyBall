@@ -7,13 +7,16 @@ Source available at https://github.com/evanatyourservice/kron_torch/blob/97a2b5e
 from typing import Optional
 
 import torch
+from heavyball.utils import einsum_base
 
 from .utils import update_param_, warmup, psgd_precond_grad, init_Q_exprs, trust_region_clip_, PSGDBase, \
-    precond_update_prob_schedule, split_p_and_g_in_group, line_to_triu, triu_to_line, set_, promote
+    precond_update_prob_schedule, split_p_and_g_in_group, line_to_triu, triu_to_line, set_, einsum_base, promote
 
 
-class ForeachPSGDKron(PSGDBase):
-    """Implements PSGD Kron from https://github.com/lixilinx/psgd_torch.
+class ForeachCachedDelayedPSGDKron(PSGDBase):
+    """
+    Implements PSGD with off-by-one preconditioning (akin to ADOPT and SOAP) with cached preconditioners.
+
 
     Args:
         params (iterable): Iterable of parameters to optimize or dicts defining
@@ -60,7 +63,8 @@ class ForeachPSGDKron(PSGDBase):
                         # precond lr hardcoded to 0.1
                         precond_init_scale=1.0,  # precond init scale hardcoded to 1.0
                         step=0, warmup_steps=warmup_steps, merge_dims=merge_dims, split=split,
-                        store_triu_as_line=store_triu_as_line, q_dtype=q_dtype)
+                        store_triu_as_line=store_triu_as_line,
+                        q_dtype=q_dtype)
         super().__init__(params, defaults, foreach)
 
         self._prob_step = 0
@@ -95,31 +99,47 @@ class ForeachPSGDKron(PSGDBase):
                 Q, state["exprs"] = init_Q_exprs(p, precond_init_scale, max_size_triangular, min_ndim_triangular,
                                                  memory_save_mode, dtype=q_dtype)
                 state['Q'] = triu_to_line(Q) if store_triu_as_line else Q
+                state['Q_cache'] = [torch.empty_like(q) for q in Q]
 
-            vals.append((p, g, state["exp_avg"], state["Q"]))
+                expr = [f'{c.upper()}{c}' if q_.ndim == 2 else c for c, q_ in zip(einsum_base, Q)]
+                expr = ','.join(expr)
+                grad_expr = ''.join(c for c, _ in zip(einsum_base, g.shape))
+                out_expr = ''.join(c.upper() if c.upper() in expr else c for c in grad_expr)
+                expr = f'{expr},{grad_expr}->{out_expr}'
+
+                state['cache_expr'] = expr
+
+            vals.append((p, g, state["exp_avg"], state["Q"], state['Q_cache']))
 
         if not vals:
             return
 
-        p_list, grad_list, exp_avg_list, Q_list = zip(*vals)
+        p_list, grad_list, exp_avg_list, Q_list, Q_cache_list = zip(*vals)
         del vals
 
         group["step"] += 1
 
         torch._foreach_lerp_(exp_avg_list, grad_list, (1 - beta) / (1 - beta ** group["step"]))
 
-        grad_list, Q_list, exp_avg_list = list(grad_list), list(Q_list), list(exp_avg_list)
+        grad_list, Q_list, Q_cache_list, exp_avg_list = list(grad_list), list(Q_list), list(Q_cache_list), list(
+            exp_avg_list)
         for i, (p, g) in enumerate(zip(p_list, grad_list)):
+            cached_q = Q_cache_list.pop(0)
             q_orig = Q_list.pop(0)
             ea = exp_avg_list.pop(0)
-            q = line_to_triu(q_orig) if store_triu_as_line else q_orig
 
             if do_update:
+                q = line_to_triu(q_orig) if store_triu_as_line else q_orig
                 q32 = [promote(q_) for q_ in q]
-                self.balance([ea if momentum_into_precond_update else g], [q32])
-                self.do_update([p], [g], [q32], precond_lr, [q_orig], store_triu_as_line=store_triu_as_line)
-            set_(g, psgd_precond_grad(q, self.state_(p)["exprs"], ea))
+                self.balance([g], [q32])
+                self.do_update([p], [ea if momentum_into_precond_update else g], [q32], precond_lr, [q_orig], store_triu_as_line=store_triu_as_line)
+                for c_, q_ in zip(cached_q, q):
+                    if q_.ndim == 2:
+                        torch.matmul(q_.T.conj(), q_, out=c_)
+                    else:
+                        torch.mul(q_.conj(), q_, out=c_)
 
+            set_(g, torch.einsum(self.state_(p)['cache_expr'], *cached_q, ea))
         grad_list = self.clip_fn(grad_list)
 
         lr = -warmup(lr, group['step'], group['warmup_steps'])

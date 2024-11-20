@@ -325,9 +325,9 @@ def compute_ggt(grad, GG, max_precond_dim, precondition_1d, beta):
 
 
 def promote(x):
-    if x is (torch.bfloat16, torch.float16):
+    if x in (torch.bfloat16, torch.float16):
         return torch.float32
-    if x.dtype in (torch.bfloat16, torch.float16):
+    if hasattr(x, 'dtype') and x.dtype in (torch.bfloat16, torch.float16):
         return x.float()
     return x
 
@@ -468,14 +468,14 @@ class ScheduleFree(StatefulOptimizer):
 
 def copy_stochastic_list_(target: List[torch.Tensor], source: List[torch.Tensor]):
     for t, s in zip(target, source):
-        if t.dtype == torch.bfloat16:
-            copy_stochastic_(t, s)
-        else:
-            set_(t, s)
+        copy_stochastic_(t, s)
 
 
 def copy_stochastic_(target: torch.Tensor, source: torch.Tensor):
     if target.data_ptr() == source.data_ptr():
+        return
+    if target.dtype != torch.bfloat16:
+        set_(target, source)
         return
 
     """Taken as-is from https://github.com/pytorch/pytorch/issues/120376#issuecomment-1974828905"""
@@ -555,7 +555,7 @@ def init_Q_exprs(t, scale, max_size, min_ndim_triangular, memory_save_mode, dtyp
     for i, (size, dim_d) in enumerate(zip(shape, dim_diag)):
         if size == 1 or size > max_size or len(shape) < min_ndim_triangular or dim_d:
             # use diagonal matrix as preconditioner for this dim
-            Q.append(scale * torch.ones(size, dtype=dtype, device=t.device))
+            Q.append(scale * torch.ones(size, dtype=promote(dtype), device=t.device))
 
             piece1A.append(letters[i])
             piece2A = piece2A + letters[i]
@@ -669,11 +669,11 @@ def psgd_update_precond(Q, exprs, V, G, step, tiny):
 @decorator
 def psgd_precond_grad(Q, exprs, G, inplace: bool = False):
     """Precondition gradient G with preconditioner Q."""
-    out = torch.einsum(exprs[-1], *[q.conj() for q in Q], *Q, G)
+    out = torch.einsum(exprs[-1], *[q.conj() for q in Q], *Q, G.to(Q[0].dtype))
     if inplace:
         set_(G, out)
         return G
-    return out
+    return out.to(G.dtype)
 
 
 def norm_clip_(x, scale=None):
@@ -768,28 +768,33 @@ def line_to_triu(Q_list: List[Tuple[Optional[List[int]], torch.Tensor]]):
 def update_triu_(q_state, materialised):
     for (shape0, q), (shape1, m) in zip(q_state, triu_to_line(materialised)):
         assert shape0 == shape1
-        set_(q, m)
+        copy_stochastic_(q, m)
 
 
 class PSGDBase(StatefulOptimizer):
+    balance_probability: float = 0.01
+
     def __init__(self, parameters, groups, foreach: bool = True):
         super().__init__(parameters, groups, foreach)
         self.rng = random.Random(0x1923213)
         self._tiny = torch.finfo(torch.bfloat16).tiny
 
     def balance(self, grad_list, Q_list):
-        if self.rng.random() > 0.01:
+        if self.rng.random() > self.balance_probability:
             return
 
         for g, q in zip(grad_list, Q_list):
             if g.dim() > 1:
                 psgd_balance_Q(q)
 
-    def do_update(self, p_list, grad_list, q_list, precond_lr, original_q: Optional[List] = None):
+    def do_update(self, p_list, grad_list, q_list, precond_lr, original_q: Optional[List] = None, store_triu_as_line=False):
         for i, (p, grad, Q) in enumerate(zip(p_list, grad_list, q_list)):
             psgd_update_precond(Q, self.state_(p)["exprs"], torch.randn_like(grad), grad, precond_lr, self._tiny)
             if original_q:
-                update_triu_(original_q[i], Q)
+                if store_triu_as_line:
+                    update_triu_(original_q[i], Q)
+                else:
+                    copy_stochastic_(original_q[i], Q)
 
 
 def precond_update_prob_schedule(max_prob=1.0, min_prob=0.03, decay=0.001, flat_start=250):

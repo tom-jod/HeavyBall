@@ -5,9 +5,10 @@ Source available at https://github.com/evanatyourservice/kron_torch/blob/97a2b5e
 """
 
 import torch
+from heavyball.utils import copy_stochastic_list_
 
 from .utils import update_param_, warmup, psgd_precond_grad, init_Q_exprs, PSGDBase, precond_update_prob_schedule, \
-    split_p_and_g_in_group, line_to_triu, triu_to_line
+    split_p_and_g_in_group, line_to_triu, triu_to_line, promote
 
 
 class ForeachPurePSGD(PSGDBase):
@@ -37,7 +38,7 @@ class ForeachPurePSGD(PSGDBase):
                  max_size_triangular=2048, min_ndim_triangular=2, memory_save_mode=None,
                  momentum_into_precond_update=True, warmup_steps: int = 1, merge_dims: bool = False,
                  split: bool = False, clip_fn: callable = None, store_triu_as_line: bool = True,
-                 foreach: bool = True):
+                 foreach: bool = True, q_dtype='float32'):
         if not 0.0 <= lr:
             raise ValueError(f"Invalid learning rate: {lr}")
         if not 0.0 <= weight_decay:
@@ -56,7 +57,7 @@ class ForeachPurePSGD(PSGDBase):
                         # precond lr hardcoded to 0.1
                         precond_init_scale=1.0,  # precond init scale hardcoded to 1.0
                         step=0, warmup_steps=warmup_steps, merge_dims=merge_dims, split=split,
-                        store_triu_as_line=store_triu_as_line)
+                        store_triu_as_line=store_triu_as_line, q_dtype=q_dtype)
         super().__init__(params, defaults, foreach)
 
         self._prob_step = 0
@@ -77,6 +78,7 @@ class ForeachPurePSGD(PSGDBase):
         weight_decay = group['weight_decay']
         lr = group['lr']
         store_triu_as_line = group['store_triu_as_line']
+        q_dtype = getattr(torch, group['q_dtype'])
 
         vals = []
 
@@ -85,7 +87,7 @@ class ForeachPurePSGD(PSGDBase):
 
             if 'Q' not in state:
                 Q, state["exprs"] = init_Q_exprs(p, precond_init_scale, max_size_triangular, min_ndim_triangular,
-                                                 memory_save_mode, dtype=g.dtype)
+                                                 memory_save_mode, dtype=q_dtype)
                 state['Q'] = triu_to_line(Q) if store_triu_as_line else Q
 
             vals.append((p, g, state["Q"]))
@@ -104,8 +106,9 @@ class ForeachPurePSGD(PSGDBase):
             q = line_to_triu(q_orig) if store_triu_as_line else q_orig
 
             if do_update:
-                self.balance([g], [q])
-                self.do_update([p], [g], [q], precond_lr, [q_orig] if store_triu_as_line else None)
+                q32 = [promote(q_) for q_ in q]
+                self.balance([g], [q32])
+                self.do_update([p], [g], [q32], precond_lr, [q_orig], store_triu_as_line=store_triu_as_line)
             psgd_precond_grad(q, self.state_(p)["exprs"], g, inplace=True)
 
         grad_list = self.clip_fn(grad_list)

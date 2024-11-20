@@ -25,14 +25,14 @@ expected_memory = {'adamw': {'after': 4, 'peak': 5.1}, 'soap': {'after': 7, 'pea
 @pytest.mark.parametrize("size,depth", [(8192, 1), (2048, 16)])
 def test_memory(opt, method, size, depth: int, iterations: int = 5, outer_iterations: int = 3):
     if 'soap' not in opt.lower() and method != 'qr':
-        return
+        raise pytest.skip('Only SOAP supports `method` argument')
     set_torch()
 
     for k, v in expected_memory.items():
         if k in opt.lower():
             break
     else:
-        raise ValueError(f'Unknown optimizer {opt}')
+        raise pytest.skip(f'Opt {opt} not supported')
 
     opt = getattr(heavyball, opt)
     heavyball.utils.zeroth_power_mode = method

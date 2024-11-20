@@ -10,7 +10,7 @@ import torch
 from heavyball.utils import einsum_base
 
 from .utils import update_param_, warmup, psgd_precond_grad, init_Q_exprs, trust_region_clip_, PSGDBase, \
-    precond_update_prob_schedule, split_p_and_g_in_group, line_to_triu, triu_to_line, set_, einsum_base
+    precond_update_prob_schedule, split_p_and_g_in_group, line_to_triu, triu_to_line, set_, einsum_base, promote
 
 
 class ForeachCachedPSGDKron(PSGDBase):
@@ -40,7 +40,7 @@ class ForeachCachedPSGDKron(PSGDBase):
                  max_size_triangular=2048, min_ndim_triangular=2, memory_save_mode=None,
                  momentum_into_precond_update=True, warmup_steps: int = 1, merge_dims: bool = False,
                  split: bool = False, clip_fn: Optional[callable] = None, store_triu_as_line: bool = True,
-                 foreach: bool = True):
+                 foreach: bool = True, q_dtype='float32'):
         if not 0.0 <= lr:
             raise ValueError(f"Invalid learning rate: {lr}")
         if not 0.0 <= beta < 1.0:
@@ -61,7 +61,8 @@ class ForeachCachedPSGDKron(PSGDBase):
                         # precond lr hardcoded to 0.1
                         precond_init_scale=1.0,  # precond init scale hardcoded to 1.0
                         step=0, warmup_steps=warmup_steps, merge_dims=merge_dims, split=split,
-                        store_triu_as_line=store_triu_as_line)
+                        store_triu_as_line=store_triu_as_line,
+                        q_dtype=q_dtype)
         super().__init__(params, defaults, foreach)
 
         self._prob_step = 0
@@ -84,6 +85,7 @@ class ForeachCachedPSGDKron(PSGDBase):
         lr = group['lr']
         beta = group['beta']
         store_triu_as_line = group['store_triu_as_line']
+        q_dtype = getattr(torch, group['q_dtype'])
 
         vals = []
 
@@ -93,7 +95,7 @@ class ForeachCachedPSGDKron(PSGDBase):
             if 'Q' not in state:
                 state["exp_avg"] = torch.zeros_like(g)
                 Q, state["exprs"] = init_Q_exprs(p, precond_init_scale, max_size_triangular, min_ndim_triangular,
-                                                 memory_save_mode, dtype=g.dtype)
+                                                 memory_save_mode, dtype=q_dtype)
                 state['Q'] = triu_to_line(Q) if store_triu_as_line else Q
                 state['Q_cache'] = [torch.empty_like(q) for q in Q]
 
@@ -124,18 +126,21 @@ class ForeachCachedPSGDKron(PSGDBase):
             q_orig = Q_list.pop(0)
             ea = exp_avg_list.pop(0)
 
+            new = torch.einsum(self.state_(p)['cache_expr'], *cached_q, ea)
+
             if do_update:
                 q = line_to_triu(q_orig) if store_triu_as_line else q_orig
-                self.balance([g], [q])
-                self.do_update([p], [ea if momentum_into_precond_update else g], [q], precond_lr,
-                               [q_orig] if store_triu_as_line else None)
+                q32 = [promote(q_) for q_ in q]
+                self.balance([g], [q32])
+                self.do_update([p], [ea if momentum_into_precond_update else g], [q32], precond_lr, [q_orig], store_triu_as_line=store_triu_as_line)
                 for c_, q_ in zip(cached_q, q):
                     if q_.ndim == 2:
                         torch.matmul(q_.T.conj(), q_, out=c_)
                     else:
                         torch.mul(q_.conj(), q_, out=c_)
 
-            set_(g, torch.einsum(self.state_(p)['cache_expr'], *cached_q, ea))
+            set_(g, new)
+
         grad_list = self.clip_fn(grad_list)
 
         lr = -warmup(lr, group['step'], group['warmup_steps'])

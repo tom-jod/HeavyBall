@@ -8,7 +8,7 @@ import torch
 from heavyball.utils import triu_to_line, line_to_triu
 
 from .utils import update_param_, warmup, psgd_precond_grad, init_Q_exprs, PSGDBase, precond_update_prob_schedule, \
-    exp_avg_sq_, beta_debias, split_p_and_g_in_group
+    exp_avg_sq_, beta_debias, split_p_and_g_in_group, promote
 
 
 class ForeachPaLMPAdam(PSGDBase):
@@ -39,7 +39,7 @@ class ForeachPaLMPAdam(PSGDBase):
                  momentum_into_precond_update=True, warmup_steps: int = 1, betas=(None, None), beta: float = 0.9,
                  beta2_scale: float = 0.8, merge_dims: bool = False, split: bool = False, clip_fn: callable = None,
                  store_triu_as_line: bool = True,
-                 foreach: bool = True):
+                 foreach: bool = True, q_dtype='float32'):
         if not 0.0 <= lr:
             raise ValueError(f"Invalid learning rate: {lr}")
         if not 0.0 <= weight_decay:
@@ -60,7 +60,7 @@ class ForeachPaLMPAdam(PSGDBase):
                         # precond lr hardcoded to 0.1
                         precond_init_scale=1.0,  # precond init scale hardcoded to 1.0
                         step=0, warmup_steps=warmup_steps, beta=beta, beta2_scale=beta2_scale, merge_dims=merge_dims,
-                        split=split, store_triu_as_line=store_triu_as_line)
+                        split=split, store_triu_as_line=store_triu_as_line, q_dtype=q_dtype)
         super().__init__(params, defaults, foreach)
 
         self._prob_step = 0
@@ -81,6 +81,7 @@ class ForeachPaLMPAdam(PSGDBase):
         weight_decay = group['weight_decay']
         lr = group['lr']
         store_triu_as_line = group['store_triu_as_line']
+        q_dtype = getattr(torch, group['q_dtype'])
 
         vals = []
 
@@ -91,7 +92,7 @@ class ForeachPaLMPAdam(PSGDBase):
                 state['exp_avg'] = torch.zeros_like(g)
                 state['exp_avg_sq'] = torch.zeros_like(g)
                 Q, state["exprs"] = init_Q_exprs(p, precond_init_scale, max_size_triangular,
-                                                 min_ndim_triangular, memory_save_mode, dtype=g.dtype)
+                                                 min_ndim_triangular, memory_save_mode, dtype=q_dtype)
                 state['Q'] = triu_to_line(Q) if store_triu_as_line else Q
 
             vals.append((p, g, state["Q"], state['exp_avg'], state['exp_avg_sq']))
@@ -106,9 +107,10 @@ class ForeachPaLMPAdam(PSGDBase):
 
         Q_triu = [line_to_triu(q) if store_triu_as_line else q for q in Q_list]
         if do_update:
-            self.balance(grad_list, Q_triu)
-            self.do_update(p_list, grad_list, Q_triu, precond_lr, Q_list if store_triu_as_line else None)
-
+            for g, p, q_, q_orig in zip(grad_list, p_list, Q_triu, Q_list):
+                q32 = [promote(qq_) for qq_ in q_]
+                self.balance([g], [q32])
+                self.do_update([p], [g], [q32], precond_lr, [q_orig], store_triu_as_line=store_triu_as_line)
         torch._foreach_lerp_(exp_avg, grad_list, 1 - beta_debias(group['beta'], group['step']))
 
         beta2 = 1 - group['step'] ** -group['beta2_scale']
