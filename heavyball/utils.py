@@ -479,7 +479,7 @@ def copy_stochastic_list_(target: List[torch.Tensor], source: List[torch.Tensor]
         copy_stochastic_(t, s)
 
 
-@torch.compile(mode='max-autotune-no-cudagraphs', fullgraph=True, dynamic=False)
+@torch.compile(mode='max-autotune-no-cudagraphs', fullgraph=True, dynamic=True)
 def _compilable_copy_stochastic_(target: torch.Tensor, source: torch.Tensor):
     """Taken as-is from https://github.com/pytorch/pytorch/issues/120376#issuecomment-1974828905"""
     # create a random 16 bit integer
@@ -815,19 +815,20 @@ class PSGDBase(StatefulOptimizer):
 
     def do_update(self, group, p_list, grad_list, q_list, precond_lr, original_q: Optional[List] = None,
                   store_triu_as_line=False):
-        for i, (p, grad, Q) in enumerate(zip(p_list, grad_list, q_list)):
+        if original_q:
+            if store_triu_as_line:
+                update_fn = update_triu_
+            else:
+                update_fn = copy_stochastic_list_
+        else:
+            update_fn = lambda x, y: None
+        for i, (p, grad, Q, oq) in enumerate(zip(p_list, grad_list, q_list, original_q)):
             psgd_update_precond(Q, self.state_(p)["exprs"], torch.randn_like(grad), grad, precond_lr, self._tiny)
+            update_fn(oq, Q)
 
-        for g, q in zip(grad_list, q_list):
+        for g, q in zip(grad_list, original_q if original_q else q_list):
             if g.dim() > 1:
                 psgd_balance_Q(q)
-
-        if original_q:
-            for q in q_list:
-                if store_triu_as_line:
-                    update_triu_(original_q[i], Q)
-                else:
-                    copy_stochastic_list_(original_q[i], Q)
 
 
 def precond_update_prob_schedule(max_prob=1.0, min_prob=0.03, decay=0.001, flat_start=250):
