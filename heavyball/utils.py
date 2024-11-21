@@ -44,10 +44,10 @@ def _compilable_schedule_free_(p, z, ckp1, grad, lr, beta1):
     z32 = z.float()
     p32.lerp_(end=z32, weight=1 - ckp1)
     p32.add_(grad, alpha=lr * (beta1 * (1 - ckp1) - 1))
-    _compilable_copy_stochastic_(p, p32)
+    _guarded_copy_stochastic(p, p32)
 
     z32.add_(grad, alpha=-lr)
-    _compilable_copy_stochastic_(z, z32)
+    _guarded_copy_stochastic(z, z32)
 
 
 def schedule_free_(lr: float, weight_lr_power: float, weight_sum: float, beta1: float, parameters: List[torch.Tensor],
@@ -157,11 +157,11 @@ def adaptive_gradient_clipping_(parameters: List[torch.Tensor], gradients: List[
 
 
 def set_(dst: torch.Tensor, src: torch.Tensor):
-    if src.data_ptr() == dst.data_ptr():
+    if not torch.compiler.is_compiling() and src.data_ptr() == dst.data_ptr():
         return
     if src.shape != dst.shape:
         src = src.reshape_as(dst)
-    if src.is_contiguous() and dst.is_contiguous() and src.dtype == dst.dtype:
+    if not torch.compiler.is_compiling() and src.is_contiguous() and dst.is_contiguous() and src.dtype == dst.dtype:
         dst.set_(src)
     else:
         dst.copy_(src)
@@ -486,6 +486,12 @@ def copy_stochastic_list_(target: List[torch.Tensor], source: List[torch.Tensor]
         copy_stochastic_(t, s)
 
 
+def _guarded_copy_stochastic(target: torch.Tensor, source: torch.Tensor):
+    if target.dtype != torch.bfloat16 or source.dtype not in (torch.float16, torch.float32, torch.float64):
+        set_(target, source)
+    _compilable_copy_stochastic_(target, source)
+
+
 @torch.compile(mode='max-autotune-no-cudagraphs', fullgraph=True, dynamic=True)
 def _compilable_copy_stochastic_(target: torch.Tensor, source: torch.Tensor):
     """Taken as-is from https://github.com/pytorch/pytorch/issues/120376#issuecomment-1974828905"""
@@ -505,10 +511,7 @@ def _compilable_copy_stochastic_(target: torch.Tensor, source: torch.Tensor):
 def copy_stochastic_(target: torch.Tensor, source: torch.Tensor):
     if target.data_ptr() == source.data_ptr():
         return
-    if target.dtype != torch.bfloat16 or source.dtype not in (torch.float16, torch.float32, torch.float64):
-        set_(target, source)
-        return
-    _compilable_copy_stochastic_(target, source)
+    _guarded_copy_stochastic(target, source)
 
 
 @torch.compile(mode='max-autotune-no-cudagraphs', fullgraph=True, dynamic=True)
@@ -521,7 +524,7 @@ def _compilable_update_one_(p, u, decay, add_fn, lr):
         p32.add_(u32, alpha=lr)
     else:
         add_fn(p32, u32, lr)
-    _compilable_copy_stochastic_(p, p32)
+    _guarded_copy_stochastic(p, p32)
 
 
 def update_param_(param: List[torch.Tensor], update: List[torch.Tensor], lr: float, decay: float,
