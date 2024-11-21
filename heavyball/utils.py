@@ -843,12 +843,13 @@ class PSGDBase(StatefulOptimizer):
             psgd_update_precond(Q, self.state_(p)["exprs"], torch.randn_like(grad), grad, precond_lr, self._tiny)
             update_fn(oq, Q)
 
-        for g, q in zip(grad_list, original_q if original_q else q_list):
-            if g.dim() > 1:
-                if store_triu_as_line:
-                    psgd_balance_Q([q_ for _, q_ in q])
-                else:
-                    psgd_balance_Q(q)
+        if self.should_update(group, self.balance_probability, "balance_prob"):
+            for g, q in zip(grad_list, original_q if original_q else q_list):
+                if g.dim() > 1:
+                    if store_triu_as_line:
+                        psgd_balance_Q([q_ for _, q_ in q])
+                    else:
+                        psgd_balance_Q(q)
 
 
 def precond_update_prob_schedule(max_prob=1.0, min_prob=0.03, decay=0.001, flat_start=250):
