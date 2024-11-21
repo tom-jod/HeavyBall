@@ -57,7 +57,7 @@ class ForeachPurePSGD(PSGDBase):
         super().__init__(params, defaults, foreach, stochastic_schedule, clip_fn, preconditioner_update_probability)
 
     def _step(self, group):
-        # update preconditioners all together
+        should_update = self.should_update(group)
         precond_init_scale = group['precond_init_scale']
         max_size_triangular = group['max_size_triangular']
         min_ndim_triangular = group['min_ndim_triangular']
@@ -93,7 +93,7 @@ class ForeachPurePSGD(PSGDBase):
             q_orig = Q_list.pop(0)
             q = line_to_triu(q_orig) if store_triu_as_line else q_orig
 
-            if self.should_update(group):
+            if group:
                 q32 = [promote(q_) for q_ in q]
                 self.do_update(group, [p], [g], [q32], precond_lr, [q_orig], store_triu_as_line)
             psgd_precond_grad(q, self.state_(p)["exprs"], g, inplace=True)

@@ -60,6 +60,7 @@ class ForeachPSGDKron(PSGDBase):
         super().__init__(params, defaults, foreach, stochastic_schedule, clip_fn, preconditioner_update_probability)
 
     def _step(self, group):
+        should_update = self.should_update(group)
         momentum_into_precond_update = group.get("momentum_into_precond_update", True)
         precond_init_scale = group['precond_init_scale']
         max_size_triangular = group['max_size_triangular']
@@ -101,7 +102,7 @@ class ForeachPSGDKron(PSGDBase):
             ea = exp_avg_list.pop(0)
             q = line_to_triu(q_orig) if store_triu_as_line else q_orig
 
-            if self.should_update(group):
+            if should_update:
                 q32 = [promote(q_) for q_ in q]
                 self.do_update(group, [p], [g], [q32], precond_lr, [q_orig], store_triu_as_line)
             set_(g, psgd_precond_grad(q, self.state_(p)["exprs"], ea))

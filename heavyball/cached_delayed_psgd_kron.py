@@ -62,6 +62,7 @@ class ForeachCachedDelayedPSGDKron(PSGDBase):
         super().__init__(params, defaults, foreach, stochastic_schedule, clip_fn, preconditioner_update_probability)
 
     def _step(self, group):
+        should_update = self.should_update(group)
         momentum_into_precond_update = group.get("momentum_into_precond_update", True)
         precond_init_scale = group['precond_init_scale']
         max_size_triangular = group['max_size_triangular']
@@ -115,7 +116,7 @@ class ForeachCachedDelayedPSGDKron(PSGDBase):
 
             new = torch.einsum(self.state_(p)['cache_expr'], *cached_q, ea)
 
-            if self.should_update(group):
+            if should_update:
                 q = line_to_triu(q_orig) if store_triu_as_line else q_orig
                 q32 = [promote(q_) for q_ in q]
                 self.do_update(group, [p], [ea if momentum_into_precond_update else g], [q32], precond_lr, [q_orig],

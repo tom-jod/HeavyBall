@@ -335,9 +335,7 @@ def promote(x):
 def min_dtype(xs: List[torch.Tensor]):
     dtypes = [x.dtype for x in xs]
     for d in (torch.float32, torch.bfloat16, torch.float16):
-        if all(d == x for x in dtypes):
-            return d
-        if all(d in (x, torch.float32, torch.float64) for x in dtypes):
+        if all(x in (d, torch.float32, torch.float64) for x in dtypes):
             return d
     return torch.float32
 

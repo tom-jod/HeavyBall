@@ -61,6 +61,7 @@ class ForeachPaLMPAdam(PSGDBase):
         super().__init__(params, defaults, foreach, stochastic_schedule, clip_fn, preconditioner_update_probability)
 
     def _step(self, group):
+        should_update = self.should_update(group)
         precond_init_scale = group['precond_init_scale']
         max_size_triangular = group['max_size_triangular']
         min_ndim_triangular = group['min_ndim_triangular']
@@ -94,7 +95,7 @@ class ForeachPaLMPAdam(PSGDBase):
         group["step"] += 1
 
         Q_triu = [line_to_triu(q) if store_triu_as_line else q for q in Q_list]
-        if self.should_update(group):
+        if should_update:
             for g, p, q_, q_orig in zip(grad_list, p_list, Q_triu, Q_list):
                 q32 = [promote(qq_) for qq_ in q_]
                 self.do_update(group, [p], [g], [q32], precond_lr, [q_orig], store_triu_as_line)

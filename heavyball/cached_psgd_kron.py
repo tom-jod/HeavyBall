@@ -8,8 +8,8 @@ from typing import Optional
 
 import torch
 
-from .utils import update_param_, warmup, init_Q_exprs, trust_region_clip_, PSGDBase, \
-    split_p_and_g_in_group, line_to_triu, triu_to_line, set_, einsum_base, promote
+from .utils import update_param_, warmup, init_Q_exprs, trust_region_clip_, PSGDBase, split_p_and_g_in_group, \
+    line_to_triu, triu_to_line, set_, einsum_base, promote
 
 
 class ForeachCachedPSGDKron(PSGDBase):
@@ -71,6 +71,7 @@ class ForeachCachedPSGDKron(PSGDBase):
         beta = group['beta']
         store_triu_as_line = group['store_triu_as_line']
         q_dtype = getattr(torch, group['q_dtype'])
+        should_update = self.should_update(group)
 
         vals = []
 
@@ -111,7 +112,7 @@ class ForeachCachedPSGDKron(PSGDBase):
             q_orig = Q_list.pop(0)
             ea = exp_avg_list.pop(0)
 
-            if self.should_update(group):
+            if should_update:
                 q = line_to_triu(q_orig) if store_triu_as_line else q_orig
                 q32 = [promote(q_) for q_ in q]
                 self.do_update(group, [p], [ea if momentum_into_precond_update else g], [q32], precond_lr, [q_orig],
