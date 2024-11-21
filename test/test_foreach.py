@@ -45,7 +45,7 @@ def test_foreach(opt, size, depth: int, iterations: int = 5, outer_iterations: i
             clean()
 
             for _ in range(iterations):
-                loss = model(torch.randn((1, size)).cuda()).sum()
+                loss = model(torch.randn((1, size), device='cuda')).sum()
                 loss.backward()
                 o.step()
                 o.zero_grad()

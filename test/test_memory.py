@@ -48,7 +48,7 @@ def test_memory(opt, method, size, depth: int, iterations: int = 5, outer_iterat
         model_allocated = get_memory()
         o = get_optim(opt, model.parameters(), lr=1e-3)
         for _ in range(iterations):
-            model(torch.randn((1, size)).cuda()).sum().backward()
+            model(torch.randn((1, size), device='cuda')).sum().backward()
             o.step()
 
             opt_allocated = get_memory()

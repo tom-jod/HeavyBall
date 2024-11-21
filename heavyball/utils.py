@@ -38,6 +38,18 @@ def warmup(lr: float, step: int, warmup_steps: int):
     return lr * step / warmup_steps
 
 
+@torch.compile(mode='max-autotune-no-cudagraphs', fullgraph=True, dynamic=True)
+def _compilable_schedule_free_(p, z, ckp1, grad, lr, beta1):
+    p32 = p.float()
+    z32 = z.float()
+    p32.lerp_(end=z32, weight=1 - ckp1)
+    p32.add_(grad, alpha=lr * (beta1 * (1 - ckp1) - 1))
+    _compilable_copy_stochastic_(p, p32)
+
+    z32.add_(grad, alpha=-lr)
+    _compilable_copy_stochastic_(z, z32)
+
+
 def schedule_free_(lr: float, weight_lr_power: float, weight_sum: float, beta1: float, parameters: List[torch.Tensor],
                    z: List[torch.Tensor], grad: list[torch.Tensor], r: float = 0.0, step: int = 0):
     weight = lr ** weight_lr_power * max(step, 1) ** r
@@ -50,15 +62,10 @@ def schedule_free_(lr: float, weight_lr_power: float, weight_sum: float, beta1: 
 
     # These operations update y in-place,
     # without computing x explicitly.
-    p32 = [promote(p) for p in parameters]
-    z32 = [promote(z_) for z_ in z]
-    torch._foreach_lerp_(p32, z32, weight=ckp1)
-    torch._foreach_add_(p32, grad, alpha=lr * (beta1 * (1 - ckp1) - 1))
-    copy_stochastic_list_(parameters, p32)
-
-    # z step
-    torch._foreach_sub_(z, grad, alpha=lr)
-    copy_stochastic_list_(z, z32)
+    lr_tensor = torch.empty((), dtype=torch.float32, device=parameters[0].device).fill_(lr)
+    ckp1_tensor = torch.empty((), dtype=torch.float32, device=parameters[0].device).fill_(ckp1)
+    for p, z_, g in zip(parameters, z, grad):
+        _compilable_schedule_free_(p, z_, ckp1_tensor, g, lr_tensor, beta1)
     return weight_sum
 
 
@@ -504,17 +511,24 @@ def copy_stochastic_(target: torch.Tensor, source: torch.Tensor):
     _compilable_copy_stochastic_(target, source)
 
 
+@torch.compile(mode='max-autotune-no-cudagraphs', fullgraph=True, dynamic=True)
+def _compilable_update_one_(p, u, decay, add_fn, lr):
+    p32 = p.float()
+    u32 = u.view(p.shape).float()
+    if decay > 0:
+        p32.mul_(1 - decay * lr)
+    if add_fn is None:
+        p32.add_(u32, alpha=lr)
+    else:
+        add_fn(p32, u32, lr)
+    _compilable_copy_stochastic_(p, p32)
+
+
 def update_param_(param: List[torch.Tensor], update: List[torch.Tensor], lr: float, decay: float,
                   add_fn: callable = None):
-    param32 = [promote(p) for p in param]
-    update32 = [promote(u.view(p.shape)) for u, p in zip(update, param)]
-    if decay > 0:
-        torch._foreach_mul_(param32, 1 - decay * lr)
-    if add_fn is None:
-        torch._foreach_add_(param32, update32, alpha=lr)
-    else:
-        add_fn(param32, update32, lr)
-    copy_stochastic_list_(param, param32)
+    lr_tensor = torch.empty((), dtype=torch.float32, device=param[0].device).fill_(lr)
+    for p, u in zip(param, update):
+        _compilable_update_one_(p, u, decay, add_fn, lr_tensor)
 
 
 def precond_schedule(step, precond_scheduler, rng):
@@ -828,7 +842,10 @@ class PSGDBase(StatefulOptimizer):
 
         for g, q in zip(grad_list, original_q if original_q else q_list):
             if g.dim() > 1:
-                psgd_balance_Q(q)
+                if store_triu_as_line:
+                    psgd_balance_Q([q_ for _, q_ in q])
+                else:
+                    psgd_balance_Q(q)
 
 
 def precond_update_prob_schedule(max_prob=1.0, min_prob=0.03, decay=0.001, flat_start=250):
