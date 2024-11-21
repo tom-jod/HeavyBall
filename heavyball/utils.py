@@ -817,14 +817,15 @@ class PSGDBase(StatefulOptimizer):
 
     def do_update(self, group, p_list, grad_list, q_list, precond_lr, original_q: Optional[List] = None,
                   store_triu_as_line=False):
-        if self.should_update(group, self.balance_probability, 'balance_prob'):
-            for g, q in zip(grad_list, q_list):
-                if g.dim() > 1:
-                    psgd_balance_Q(q)
-
         for i, (p, grad, Q) in enumerate(zip(p_list, grad_list, q_list)):
             psgd_update_precond(Q, self.state_(p)["exprs"], torch.randn_like(grad), grad, precond_lr, self._tiny)
-            if original_q:
+
+        for g, q in zip(grad_list, q_list):
+            if g.dim() > 1:
+                psgd_balance_Q(q)
+
+        if original_q:
+            for q in q_list:
                 if store_triu_as_line:
                     update_triu_(original_q[i], Q)
                 else:

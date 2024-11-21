@@ -111,8 +111,6 @@ class ForeachCachedPSGDKron(PSGDBase):
             q_orig = Q_list.pop(0)
             ea = exp_avg_list.pop(0)
 
-            new = torch.einsum(self.state_(p)['cache_expr'], *cached_q, ea)
-
             if self.should_update(group):
                 q = line_to_triu(q_orig) if store_triu_as_line else q_orig
                 q32 = [promote(q_) for q_ in q]
@@ -124,7 +122,7 @@ class ForeachCachedPSGDKron(PSGDBase):
                     else:
                         torch.mul(q_.conj(), q_, out=c_)
 
-            set_(g, new)
+            set_(g, torch.einsum(self.state_(p)['cache_expr'], *cached_q, ea))
 
         grad_list = self.clip_fn(grad_list)
 
