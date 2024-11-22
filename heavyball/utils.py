@@ -436,15 +436,21 @@ class StatefulOptimizer(torch.optim.Optimizer):
         raise NotImplementedError
 
     def ema_update(self, group):
-        active_p = [p for p in group['params'] if p.grad is not None]
-        if not active_p:
-            return
-        for p in active_p:
-            if 'param_ema' not in self.state_(p):
-                self.state_(p)['param_ema'] = torch.zeros_like(p.data, memory_format=torch.preserve_format, dtype=self.ema_dtype)
+        with torch.no_grad():
+            active_p = [p for p in group['params']]
+            
+            if not active_p:
+                return
 
-        y, param_ema = zip(*[(p.data, self.state_(p)['param_ema']) for p in active_p])
-        lerp_(param_ema, y, weight=1 - self.ema_decay)
+            k = group['ema_step'] = group.get('ema_step', -1) + 1
+            
+            for p in active_p:
+                if 'param_ema' not in self.state_(p):
+                    self.state_(p)['param_ema'] = torch.zeros_like(p.data, memory_format=torch.preserve_format, dtype=self.ema_dtype)
+        
+
+            y, param_ema = zip(*[(p.data, self.state_(p)['param_ema']) for p in active_p])
+            torch._foreach_lerp_(param_ema, y, weight=beta_debias(1 - self.ema_decay, k))
 
     def copy_emas_to_params(self):
         with torch.no_grad():
@@ -455,7 +461,9 @@ class StatefulOptimizer(torch.optim.Optimizer):
                         return
                     for p in active_p:
                         if 'param_ema' in self.state_(p):
+                            p_clone = p.data.clone()
                             set_(p.data, self.state_(p)['param_ema'])
+                            set_(self.state_(p)['param_ema'], p_clone)
 
     def copy_params_to_emas(self):
         with torch.no_grad():
@@ -466,7 +474,10 @@ class StatefulOptimizer(torch.optim.Optimizer):
                         return
                     for p in active_p:
                         if 'param_ema' in self.state_(p):
+                            ema_clone = self.state_(p)['param_ema'].data.clone()
                             set_(self.state_(p)['param_ema'], p.data)
+                            set_(p.data, ema_clone)
+                            
 
     def step(self, closure: Optional[Callable] = None):
         if closure is None:
