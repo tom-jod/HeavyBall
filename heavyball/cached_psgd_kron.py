@@ -128,4 +128,4 @@ class ForeachCachedPSGDKron(PSGDBase):
                     else:
                         torch.mul(q_.conj(), q_, out=c_)
 
-            precond_grad_cached_(cached_q, ea, self.state_(p)['cache_expr'], p, lr, weight_decay)
+            precond_grad_cached_(cached_q, ea, self.state_(p)['cache_expr'], p, lr, weight_decay, self.clip_fn)

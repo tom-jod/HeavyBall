@@ -120,7 +120,7 @@ class ForeachCachedDelayedPSGDKron(PSGDBase):
             q_orig = Q_list.pop(0)
             ea = exp_avg_list.pop(0)
 
-            precond_grad_cached_(cached_q, ea, self.state_(p)['cache_expr'], p, lr, weight_decay)
+            precond_grad_cached_(cached_q, ea, self.state_(p)['cache_expr'], p, lr, weight_decay, self.clip_fn)
 
             if should_update:
                 q = line_to_triu(q_orig) if store_triu_as_line else q_orig

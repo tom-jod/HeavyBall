@@ -62,7 +62,7 @@ class ForeachDelayedPSGD(PSGDBase):
                         min_ndim_triangular=min_ndim_triangular, memory_save_mode=memory_save_mode,
                         momentum_into_precond_update=momentum_into_precond_update, precond_lr=precond_lr,
                         precond_init_scale=precond_init_scale, step=0, warmup_steps=warmup_steps, merge_dims=merge_dims,
-                        split=split, store_triu_as_line=store_triu_as_line, q_dtype=q_dtype)
+                        split=split, store_triu_as_line=store_triu_as_line, q_dtype=q_dtype, storage_dtype=storage_dtype)
         super().__init__(params, defaults, foreach, stochastic_schedule, clip_fn, preconditioner_update_probability)
 
     def _step(self, group):

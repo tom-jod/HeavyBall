@@ -6,7 +6,7 @@ Source available at https://github.com/evanatyourservice/kron_torch/blob/97a2b5e
 
 import torch
 
-from heavyball.utils import triu_to_line, line_to_triu, identity
+from heavyball.utils import triu_to_line, line_to_triu, identity, stochastic_lerp_
 from .utils import update_param_, warmup, psgd_precond_grad, init_Q_exprs, PSGDBase, exp_avg_sq_, beta_debias, \
     split_p_and_g_in_group, promote
 
@@ -100,7 +100,7 @@ class ForeachPaLMPAdam(PSGDBase):
             for g, p, q_, q_orig in zip(grad_list, p_list, Q_triu, Q_list):
                 q32 = [promote(qq_) for qq_ in q_]
                 self.do_update(group, [p], [g], [q32], precond_lr, [q_orig], store_triu_as_line)
-        torch._foreach_lerp_(exp_avg, grad_list, 1 - beta_debias(group['beta'], group['step']))
+        stochastic_lerp_(exp_avg, grad_list, 1 - beta_debias(group['beta'], group['step']))
 
         beta2 = 1 - group['step'] ** -group['beta2_scale']
 
