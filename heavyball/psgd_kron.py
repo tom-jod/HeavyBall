@@ -104,7 +104,8 @@ class ForeachPSGDKron(PSGDBase):
 
             if should_update:
                 q32 = [promote(q_) for q_ in q]
-                self.do_update(group, [p], [g], [q32], precond_lr, [q_orig], store_triu_as_line)
+                self.do_update(group, [p], [ea if momentum_into_precond_update else g], [q32], precond_lr, [q_orig],
+                               store_triu_as_line)
             set_(g, psgd_precond_grad(q, self.state_(p)["exprs"], ea))
 
         grad_list = self.clip_fn(grad_list)

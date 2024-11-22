@@ -22,7 +22,6 @@ def get_memory():
 @pytest.mark.parametrize("size,depth", [(256, 2)])
 def test_foreach(opt, size, depth: int, iterations: int = 128, outer_iterations: int = 3):
     set_torch()
-
     opt = getattr(heavyball, opt)
 
     peaks = []

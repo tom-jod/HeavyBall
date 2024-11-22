@@ -1,7 +1,20 @@
 import torch
 import torch.optim
 
-from .utils import warmup, exp_avg_sq_, beta_debias, update_param_, StatefulOptimizer
+from .utils import warmup, exp_avg_sq_, beta_debias, update_param_, StatefulOptimizer, promote
+
+
+@torch.compile(mode='max-autotune-no-cudagraphs', fullgraph=True, dynamic=True)
+def _compilable_step_(y, grad, exp_avg_sq, exp_avg, beta1, beta2, step, lr, eps, decay):
+    g32, exp_avg32, exp_avg_sq32 = [list(map(promote, x)) for x in [grad, exp_avg, exp_avg_sq]]
+
+    denom = exp_avg_sq_(exp_avg_sq32, g32, beta_debias(beta2, step), eps)
+
+    beta1 = beta_debias(beta1, step)
+    torch._foreach_mul_(exp_avg32, beta1)
+    [ea32.addcdiv_(g, d, value=1 - beta1) for ea32, g, d in zip(exp_avg32, g32, denom)]
+
+    update_param_(y, exp_avg32, lr, decay)
 
 
 class ForeachLaProp(StatefulOptimizer):
@@ -31,17 +44,13 @@ class ForeachLaProp(StatefulOptimizer):
                 self.state_(p)['exp_avg_sq'] = torch.zeros_like(p.data, dtype=torch.float32)
 
         y, grad, exp_avg_sq, exp_avg = zip(
-            *[(p.data, p.grad.float(), self.state_(p)['exp_avg_sq'], self.state_(p)['exp_avg']) for p in active_p])
+            *[(p.data, p.grad, self.state_(p)['exp_avg_sq'], self.state_(p)['exp_avg'])  #
+              for p in active_p])
 
-        # Decay the first and second moment running average coefficient
-        denom = exp_avg_sq_(exp_avg_sq, grad, beta_debias(group['betas'][1], k + 1), eps)
-        beta1 = beta_debias(group['betas'][0], k + 1)
-        torch._foreach_mul_(exp_avg, beta1)
-        torch._foreach_addcdiv_(exp_avg, grad, denom, 1 - beta1)
-        del grad
-
-        # Normalize grad in-place for memory efficiency
         lr = -warmup(group['lr'], k + 1, group['warmup_steps'])
-        update_param_(y, exp_avg, lr, decay)
+        lr = torch.empty((), dtype=torch.float32, device=y[0].device).fill_(lr)
+        step = torch.empty((), dtype=torch.int32, device=y[0].device).fill_(k + 1)
+
+        _compilable_step_(y, grad, exp_avg_sq, exp_avg, group['betas'][0], group['betas'][1], step, lr, eps, decay)
 
         group['k'] = k + 1

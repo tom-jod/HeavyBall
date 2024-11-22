@@ -1,7 +1,23 @@
 import torch
 import torch.optim
+from heavyball.utils import get_ckp1
 
-from .utils import schedule_free_, warmup, ScheduleFree, exp_avg_sq_, beta_debias
+from .utils import warmup, ScheduleFree, exp_avg_sq_, beta_debias, promote, _compilable_schedule_free_
+
+
+@torch.compile(mode='max-autotune-no-cudagraphs', fullgraph=True, dynamic=True)
+def _compilable_step_(y, grad, exp_avg_sq, z, beta1, beta2, step, ckp1, eps, decay, lr):
+    old_debiased2 = beta_debias(beta2, step)
+
+    g32 = [promote(g_) for g_ in grad]
+    exp_avg_sq32 = [promote(e_) for e_ in exp_avg_sq]
+
+    denom = exp_avg_sq_(exp_avg_sq32, g32, old_debiased2, eps)
+    torch._foreach_div_(g32, denom)
+    if decay != 0:
+        torch._foreach_add_(g32, y, alpha=decay)
+    for p, z_, g in zip(y, z, g32):
+        _compilable_schedule_free_(p, z_, ckp1, g, lr, beta1)
 
 
 class ForeachSFAdamW(ScheduleFree):
@@ -31,24 +47,14 @@ class ForeachSFAdamW(ScheduleFree):
                 self.state_(p)['z'] = torch.clone(p.data)
                 self.state_(p)['exp_avg_sq'] = torch.zeros_like(p.data, dtype=torch.float32)
 
-        y, grad, exp_avg_sq, z = zip(
-            *[(p.data, p.grad.float(), self.state_(p)['exp_avg_sq'], self.state_(p)['z']) for p in active_p])
-
-        # Decay the first moment running average coefficient
-        old_debiased = beta_debias(group['betas'][1], k + 1)
-
-        # Decay the first and second moment running average coefficient
-        denom = exp_avg_sq_(exp_avg_sq, grad, old_debiased, eps)
-
-        # Normalize grad in-place for memory efficiency
-        torch._foreach_div_(grad, denom)
-
-        # Weight decay calculated at y
-        if decay != 0:
-            torch._foreach_add_(grad, y, alpha=decay)
+        y, grad, exp_avg_sq, z = zip(*[(p.data, p.grad, self.state_(p)['exp_avg_sq'], self.state_(p)['z'])  #
+                                       for p in active_p])
 
         lr = warmup(group['lr'], k + 1, group['warmup_steps'])
-        group['weight_sum'] = schedule_free_(lr, group['weight_lr_power'], group['weight_sum'], group['betas'][0], y, z,
-                                             grad, group['r'], k + 1)
+        ckp1, group['weight_sum'] = get_ckp1(lr, group['weight_lr_power'], group['weight_sum'], group['r'], k + 1)
 
+        step = torch.empty((), dtype=torch.int32, device=y[0].device).fill_(k + 1)
+        ckp1 = torch.empty((), dtype=torch.float32, device=y[0].device).fill_(ckp1)
+        lr = torch.empty((), dtype=torch.float32, device=y[0].device).fill_(lr)
+        _compilable_step_(y, grad, exp_avg_sq, z, group['betas'][0], group['betas'][1], step, ckp1, eps, decay, lr)
         group['k'] = k + 1

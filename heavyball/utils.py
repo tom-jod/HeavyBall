@@ -40,14 +40,25 @@ def warmup(lr: float, step: int, warmup_steps: int):
 
 @torch.compile(mode='max-autotune-no-cudagraphs', fullgraph=True, dynamic=True)
 def _compilable_schedule_free_(p, z, ckp1, grad, lr, beta1):
-    p32 = p.float()
-    z32 = z.float()
-    p32.lerp_(end=z32, weight=1 - ckp1)
+    p32 = promote(p)
+    z32 = promote(z)
+    p32.lerp_(end=z32, weight=ckp1)
     p32.add_(grad, alpha=lr * (beta1 * (1 - ckp1) - 1))
-    _guarded_copy_stochastic(p, p32)
+    copy_stochastic_(p, p32)
 
     z32.add_(grad, alpha=-lr)
-    _guarded_copy_stochastic(z, z32)
+    copy_stochastic_(z, z32)
+
+
+def get_ckp1(lr, weight_lr_power, weight_sum, r, step):
+    weight = lr ** weight_lr_power * max(step, 1) ** r
+    weight_sum = weight_sum + weight
+
+    try:
+        ckp1 = weight / weight_sum
+    except ZeroDivisionError:
+        ckp1 = 0
+    return ckp1, weight_sum
 
 
 def schedule_free_(lr: float, weight_lr_power: float, weight_sum: float, beta1: float, parameters: List[torch.Tensor],
@@ -136,7 +147,7 @@ def exp_avg_sq_(state, grad, beta2, eps, out=None):
         return torch.sqrt(state, out=out).clamp_(min=eps)
 
     torch._foreach_mul_(state, beta2)
-    torch._foreach_addcmul_(state, grad, grad, value=1 - beta2)
+    [s.addcmul_(g, g, value=1 - beta2) for s, g in zip(state, grad)]
     denom = torch._foreach_sqrt(state)
     torch._foreach_maximum_(denom, eps)
     return denom
@@ -332,9 +343,9 @@ def compute_ggt(grad, GG, max_precond_dim, precondition_1d, beta):
 
 
 def promote(x):
-    if x in (torch.bfloat16, torch.float16):
+    if isinstance(x, torch.dtype) and x in (torch.bfloat16, torch.float16):
         return torch.float32
-    if hasattr(x, 'dtype') and x.dtype in (torch.bfloat16, torch.float16):
+    if isinstance(x, torch.Tensor) and x.dtype in (torch.bfloat16, torch.float16):
         return x.float()
     return x
 
@@ -486,13 +497,8 @@ def copy_stochastic_list_(target: List[torch.Tensor], source: List[torch.Tensor]
         copy_stochastic_(t, s)
 
 
-def _guarded_copy_stochastic(target: torch.Tensor, source: torch.Tensor):
-    if target.dtype != torch.bfloat16 or source.dtype not in (torch.float16, torch.float32, torch.float64):
-        set_(target, source)
-    _compilable_copy_stochastic_(target, source)
-
-
-@torch.compile(mode='max-autotune-no-cudagraphs', fullgraph=True, dynamic=True)
+# this can be dynamic for most optimizers - just not for PSGD. So, it's disabled for all
+@torch.compile(mode='max-autotune-no-cudagraphs', fullgraph=True)
 def _compilable_copy_stochastic_(target: torch.Tensor, source: torch.Tensor):
     """Taken as-is from https://github.com/pytorch/pytorch/issues/120376#issuecomment-1974828905"""
     # create a random 16 bit integer
@@ -509,22 +515,24 @@ def _compilable_copy_stochastic_(target: torch.Tensor, source: torch.Tensor):
 
 
 def copy_stochastic_(target: torch.Tensor, source: torch.Tensor):
-    if target.data_ptr() == source.data_ptr():
+    if not torch.compiler.is_compiling() and target.data_ptr() == source.data_ptr():
         return
-    _guarded_copy_stochastic(target, source)
+    if target.dtype != torch.bfloat16 or source.dtype not in (torch.float16, torch.float32, torch.float64):
+        set_(target, source)
+    _compilable_copy_stochastic_(target, source)
 
 
 @torch.compile(mode='max-autotune-no-cudagraphs', fullgraph=True, dynamic=True)
 def _compilable_update_one_(p, u, decay, add_fn, lr):
-    p32 = p.float()
-    u32 = u.view(p.shape).float()
+    p32 = promote(p)
+    u32 = promote(u.view(p.shape))
     if decay > 0:
         p32.mul_(1 - decay * lr)
     if add_fn is None:
         p32.add_(u32, alpha=lr)
     else:
         add_fn(p32, u32, lr)
-    _guarded_copy_stochastic(p, p32)
+    copy_stochastic_(p, p32)
 
 
 def update_param_(param: List[torch.Tensor], update: List[torch.Tensor], lr: float, decay: float,
