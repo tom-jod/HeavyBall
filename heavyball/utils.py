@@ -788,7 +788,7 @@ def psgd_lb(A, max_abs):
     return x
 
 
-@decorator
+@torch.compile(mode='max-autotune-no-cudagraphs', fullgraph=True, dynamic=True)
 def psgd_update_precond(Q, exprs, G, precond_lr, tiny, oq, store_triu_as_line):
     """Update Kronecker product preconditioner Q with pair (V, G)."""
     exprA, exprGs, _ = exprs
@@ -821,7 +821,7 @@ def psgd_update_precond(Q, exprs, G, precond_lr, tiny, oq, store_triu_as_line):
         stochastic_add_([o], [term1], -1)
 
 
-@decorator
+@torch.compile(mode='max-autotune-no-cudagraphs', fullgraph=True, dynamic=True)
 def psgd_precond_grad(Q, exprs, G, inplace: bool = False):
     """Precondition gradient G with preconditioner Q."""
     md = min_dtype(Q)
