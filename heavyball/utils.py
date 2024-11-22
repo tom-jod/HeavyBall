@@ -3,7 +3,7 @@ import gc
 import math
 import random
 import string
-from typing import List, Optional, Tuple, Callable
+from typing import List, Optional, Tuple, Callable, Union
 
 import numpy as np
 import torch
@@ -327,6 +327,26 @@ def get_orthogonal_matrix(mat):
     return final
 
 
+@torch.compile(mode='max-autotune-no-cudagraphs', fullgraph=True, dynamic=True)
+def stochastic_lerp_(x: List[torch.Tensor], y: List[torch.Tensor], a: Union[float, int, torch.Tensor]):
+    x32 = [promote(x_) for x_ in x]
+    y32 = [promote(y_) for y_ in y]
+
+    torch._foreach_lerp_(x32, y32, a)
+
+    copy_stochastic_list_(x, x32)
+
+
+@torch.compile(mode='max-autotune-no-cudagraphs', fullgraph=True, dynamic=True)
+def stochastic_add_(x: List[torch.Tensor], y: List[torch.Tensor], alpha: Union[float, int, torch.Tensor]):
+    x32 = [promote(x_) for x_ in x]
+    y32 = [promote(y_) for y_ in y]
+
+    [x_.add_(y_, alpha=alpha) for x_, y_ in zip(x32, y32)]
+
+    copy_stochastic_list_(x, x32)
+
+
 @decorator
 def compute_ggt(grad, GG, max_precond_dim, precondition_1d, beta):
     if grad.dim() == 1 and (not precondition_1d or grad.shape[0] > max_precond_dim):
@@ -576,23 +596,26 @@ def copy_stochastic_(target: torch.Tensor, source: torch.Tensor):
 
 
 @torch.compile(mode='max-autotune-no-cudagraphs', fullgraph=True, dynamic=True)
-def _compilable_update_one_(p, u, decay, add_fn, lr):
-    p32 = promote(p)
-    u32 = promote(u.view(p.shape))
+def _compilable_update_(p, u, decay, add_fn, lr):
+    u = [u_.view_as(p_) for u_, p_ in zip(u, p)]
+    p32, u32 = [list(map(promote, x)) for x in [p, u]]
+
     if decay > 0:
-        p32.mul_(1 - decay * lr)
-    if add_fn is None:
-        p32.add_(u32, alpha=lr)
-    else:
-        add_fn(p32, u32, lr)
-    copy_stochastic_(p, p32)
+        torch._foreach_mul_(p32, 1 - decay * lr)
+
+    for p32_, u32_ in zip(p32, u32):  # lr is data-dependent -> can't compile a foreach
+        if add_fn is None:
+            p32_.add_(u32_, alpha=lr)
+        else:
+            add_fn(p32_, u32_, lr)
+
+    copy_stochastic_list_(p, p32)
 
 
 def update_param_(param: List[torch.Tensor], update: List[torch.Tensor], lr: float, decay: float,
                   add_fn: callable = None):
     lr_tensor = torch.empty((), dtype=torch.float32, device=param[0].device).fill_(lr)
-    for p, u in zip(param, update):
-        _compilable_update_one_(p, u, decay, add_fn, lr_tensor)
+    _compilable_update_(param, update, decay, add_fn, lr_tensor)
 
 
 def precond_schedule(step, precond_scheduler, rng):
@@ -692,11 +715,12 @@ def psgd_balance_Q(Q_in):
 
 
 def psgd_calc_A_and_conjB(exprA, G, Q, V):
-    md = min_dtype(Q)
-    A = torch.einsum(exprA, *[q.to(md) for q in Q], G.to(md))
+    md = min_dtype(Q + [G])
+    A = torch.einsum(exprA, *[q.to(md) for q in Q], G.to(md)).to(G.dtype)
     order = G.dim()
     p = list(range(order))
-    conjB = torch.permute(V.conj(), p[1:] + p[:1])
+    conjB = torch.permute(promote(V).conj(), p[1:] + p[:1])
+    Q = [promote(q) for q in Q]
     for i, q in enumerate(Q):
         if q.dim() <= 1:
             conjB /= q
@@ -712,35 +736,40 @@ def psgd_calc_A_and_conjB(exprA, G, Q, V):
     return A, conjB
 
 
+@torch.compiler.disable(recursive=True)
 def psgd_lb(A, max_abs):
     A /= max_abs
     aa = torch.real(A * A.conj())
     value0, i = torch.max(torch.sum(aa, dim=0), 0)
     value1, j = torch.max(torch.sum(aa, dim=1), 0)
 
-    ah = A.H
     comp = value0 > value1
-    x = torch.where(comp, A[:, i], A[j])
+    A_orig = A
+    A = torch.where(comp, A, A.T)
+    ah = A.H
+    x = torch.where(comp, A_orig[:, i], A_orig[j, :])
     x = x.conj()
     if x.dim() > 1:
         x = torch.where(comp, x, x.T)
-    torch.matmul(x, torch.where(comp, A, A.T), out=x.view(1, -1))
+    torch.matmul(x, A, out=x.view(1, -1))
     x /= torch.linalg.vector_norm(x)
-    torch.matmul(x, torch.where(comp, ah, ah.T), out=x.view(1, -1))
+    torch.matmul(x, ah, out=x.view(1, -1))
     x = torch.linalg.vector_norm(x)
     x *= max_abs
     return x
 
 
-def psgd_update_precond(Q, exprs, V, G, step, tiny):
+def psgd_update_precond(Q, exprs, V, G, step, tiny, oq, store_triu_as_line):
     """Update Kronecker product preconditioner Q with pair (V, G)."""
     exprA, exprGs, _ = exprs
 
     A, conjB = psgd_calc_A_and_conjB(exprA, G, Q, V)
+    Ac = A.conj()
+    conjBc = conjB.conj()
 
-    for q, exprG in zip(Q, exprGs):
-        term1 = torch.einsum(exprG, A, A.conj())
-        term2 = torch.einsum(exprG, conjB.conj(), conjB)
+    for q, exprG, o in zip(Q, exprGs, oq):
+        term1 = promote(torch.einsum(exprG, A, Ac))
+        term2 = promote(torch.einsum(exprG, conjBc, conjB))
 
         term2 += term1  # a + b
         term1 *= 2  # 2a
@@ -752,12 +781,16 @@ def psgd_update_precond(Q, exprs, V, G, step, tiny):
         term1 *= step
         norm = term2.norm(float('inf'))
         if q.dim() < 2:
-            term1 *= q
-            q.addcdiv_(term1, norm.clamp_(min=tiny), value=-1)
+            term1 *= q.to(term1.dtype)
+            term1 /= norm.clamp_(min=tiny)
         else:
             torch.triu(term1, out=term1)
-            term1 /= torch.where(norm > 0, psgd_lb(term2, norm), norm).clamp_(tiny)
-            q.addmm_(term1, q, alpha=-1)
+            term1 /= psgd_lb(term2, norm).clamp_(tiny)
+            torch.matmul(term1, q, out=term1)
+        if store_triu_as_line:
+            term1 = triu_to_line([term1])[0][1]
+            o = o[1]
+        stochastic_add_([o], [term1], -1)
 
 
 @decorator
@@ -891,18 +924,10 @@ class PSGDBase(StatefulOptimizer):
         group[name] = cumulative_prob + prob
         return int(group[name]) > int(cumulative_prob)
 
-    def do_update(self, group, p_list, grad_list, q_list, precond_lr, original_q: Optional[List] = None,
+    def do_update(self, group, p_list, grad_list, q_list, precond_lr, original_q: List,
                   store_triu_as_line=False):
-        if original_q:
-            if store_triu_as_line:
-                update_fn = update_triu_
-            else:
-                update_fn = copy_stochastic_list_
-        else:
-            update_fn = lambda x, y: None
         for i, (p, grad, Q, oq) in enumerate(zip(p_list, grad_list, q_list, original_q)):
-            psgd_update_precond(Q, self.state_(p)["exprs"], torch.randn_like(grad), grad, precond_lr, self._tiny)
-            update_fn(oq, Q)
+            psgd_update_precond(Q, self.state_(p)["exprs"], torch.randn_like(grad), grad, precond_lr, self._tiny, oq, store_triu_as_line)
 
         if self.should_update(group, self.balance_probability, "balance_prob"):
             for g, q in zip(grad_list, original_q if original_q else q_list):
@@ -949,13 +974,19 @@ def merge_group(group, *tensors):
     return out
 
 
-def split_p_and_g_in_group(group: dict, skip_none: bool = True):
+def split_p_and_g_in_group(group: dict, skip_none: bool = True, should_promote: bool = True):
     for p in group["params"]:
         if skip_none and p.grad is None:
             continue
 
-        grad = None if p.grad is None else promote(p.grad)
-        p.grad = None
+        if p.grad is None:
+            grad = None
+        else:
+            if should_promote:
+                grad = promote(p.grad)
+            else:
+                grad = p.grad
+            p.grad = None
 
         p_views = merge_group(group, p)
         if grad is not None:

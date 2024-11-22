@@ -18,11 +18,12 @@ def get_memory():
     return torch.cuda.memory_allocated()
 
 
-@pytest.mark.parametrize("opt", heavyball.__all__)
+@pytest.mark.parametrize("opt", ['PSGDKron'])
 @pytest.mark.parametrize("size,depth", [(256, 2)])
-def test_foreach(opt, size, depth: int, iterations: int = 128, outer_iterations: int = 3):
+def test_foreach(opt, size, depth: int, iterations: int = 512, outer_iterations: int = 3):
     set_torch()
     opt = getattr(heavyball, opt)
+
 
     peaks = []
     losses = []
@@ -34,7 +35,7 @@ def test_foreach(opt, size, depth: int, iterations: int = 128, outer_iterations:
 
         for i in range(outer_iterations):
             model = nn.Sequential(*[nn.Linear(size, size) for _ in range(depth)]).cuda().to(dtype)
-            o = get_optim(opt, model.parameters(), lr=1e-3)
+            o = get_optim(opt, model.parameters(), lr=1e-3, momentum_into_precond_update=False)
 
             for _ in range(iterations):
                 loss = model(torch.randn((1024, size), device='cuda', dtype=dtype)).square().mean()

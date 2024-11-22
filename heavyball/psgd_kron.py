@@ -9,7 +9,7 @@ from typing import Optional
 import torch
 
 from .utils import update_param_, warmup, psgd_precond_grad, init_Q_exprs, trust_region_clip_, PSGDBase, \
-    split_p_and_g_in_group, line_to_triu, triu_to_line, set_, promote
+    split_p_and_g_in_group, line_to_triu, triu_to_line, promote, stochastic_lerp_, beta_debias
 
 
 class ForeachPSGDKron(PSGDBase):
@@ -75,11 +75,11 @@ class ForeachPSGDKron(PSGDBase):
 
         vals = []
 
-        for p, g in split_p_and_g_in_group(group):
+        for p, g in split_p_and_g_in_group(group, should_promote=False):
             state = self.state_(p)
 
             if 'Q' not in state:
-                state["exp_avg"] = torch.zeros_like(g)
+                state["exp_avg"] = torch.zeros_like(g, dtype=torch.float32)
                 Q, state["exprs"] = init_Q_exprs(p, precond_init_scale, max_size_triangular, min_ndim_triangular,
                                                  memory_save_mode, dtype=q_dtype)
                 state['Q'] = triu_to_line(Q) if store_triu_as_line else Q
@@ -94,9 +94,14 @@ class ForeachPSGDKron(PSGDBase):
 
         group["step"] += 1
 
-        torch._foreach_lerp_(exp_avg_list, grad_list, (1 - beta) / (1 - beta ** group["step"]))
+        beta = beta_debias(beta, group["step"])
+        beta = torch.empty((), dtype=torch.float32, device=grad_list[0].device).fill_(1 - beta)
+        stochastic_lerp_(exp_avg_list, grad_list, beta)
 
         grad_list, Q_list, exp_avg_list = list(grad_list), list(Q_list), list(exp_avg_list)
+
+        lr = -warmup(lr, group['step'], group['warmup_steps'])
+
         for i, (p, g) in enumerate(zip(p_list, grad_list)):
             q_orig = Q_list.pop(0)
             ea = exp_avg_list.pop(0)
@@ -106,9 +111,6 @@ class ForeachPSGDKron(PSGDBase):
                 q32 = [promote(q_) for q_ in q]
                 self.do_update(group, [p], [ea if momentum_into_precond_update else g], [q32], precond_lr, [q_orig],
                                store_triu_as_line)
-            set_(g, psgd_precond_grad(q, self.state_(p)["exprs"], ea))
-
-        grad_list = self.clip_fn(grad_list)
-
-        lr = -warmup(lr, group['step'], group['warmup_steps'])
-        update_param_(p_list, grad_list, lr, weight_decay)
+            update = psgd_precond_grad(q, self.state_(p)["exprs"], ea)
+            update = self.clip_fn([update])[0]
+            update_param_([p], [update], lr, weight_decay)
