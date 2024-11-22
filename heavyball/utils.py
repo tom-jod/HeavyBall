@@ -398,9 +398,10 @@ def project(grad, Q, back: bool):
 
 
 class StatefulOptimizer(torch.optim.Optimizer):
-    def __init__(self, params, defaults, foreach: bool = True):
+    def __init__(self, params, defaults, foreach: bool = True, use_ema: bool = False):
         super().__init__(params, {**defaults, 'foreach': foreach})
         self.fake_groups = {}
+        self.use_ema = use_ema
 
     def key(self, param: torch.Tensor):
         return (param.data_ptr(), tuple(param.shape))
@@ -434,6 +435,34 @@ class StatefulOptimizer(torch.optim.Optimizer):
     def _step(self, group):
         raise NotImplementedError
 
+    def ema_update(self, group):
+        active_p = [p for p in group['params'] if p.grad is not None]
+
+        for p in active_p:
+            if 'param_ema' not in self.state_(p):
+                self.state_(p)['param_ema'] = torch.zeros_like(p.data, memory_format=torch.preserve_format, dtype=self.ema_dtype)
+
+        y, param_ema = zip(*[(p.data, self.state_(p)['param_ema']) for p in active_p])
+        lerp_(param_ema, y, weight=1 - self.ema_decay)
+
+    def copy_emas_to_params(self):
+        with torch.no_grad():
+            for top_group in self.param_groups:
+                for group in self.get_groups(top_group):
+                    active_p = [p for p in group['params'] if p.grad is not None]
+                    for p in active_p:
+                        if 'param_ema' in self.state_(p):
+                            set_(p.data, self.state_(p)['param_ema'])
+
+    def copy_params_to_emas(self):
+        with torch.no_grad():
+            for top_group in self.param_groups:
+                for group in self.get_groups(top_group):
+                    active_p = [p for p in group['params'] if p.grad is not None]
+                    for p in active_p:
+                        if 'param_ema' in self.state_(p):
+                            set_(self.state_(p)['param_ema'], p.data)
+
     def step(self, closure: Optional[Callable] = None):
         if closure is None:
             loss = None
@@ -444,6 +473,8 @@ class StatefulOptimizer(torch.optim.Optimizer):
             for top_group in self.param_groups:
                 for group in self.get_groups(top_group):
                     self._step(group)
+                    if self.use_ema:
+                        self.ema_update(group)
         return loss
 
 
