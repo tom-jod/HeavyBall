@@ -11,6 +11,12 @@ from .utils import update_param_, warmup, psgd_precond_grad, init_Q_exprs, trust
     split_p_and_g_in_group, triu_to_line, line_to_triu, promote
 
 
+@torch.compile(mode='max-autotune-no-cudagraphs', fullgraph=True, dynamic=True)
+def _compilable_psgd_precond_grad_(q, exprs, ea, p, lr, weight_decay):
+    new = psgd_precond_grad(q, exprs, ea)
+    update_param_([p], self.clip_fn([new]), lr, weight_decay)
+
+
 class ForeachDelayedPSGD(PSGDBase):
     """
     Implements PSGD with off-by-one preconditioning (akin to ADOPT and SOAP)
@@ -98,14 +104,14 @@ class ForeachDelayedPSGD(PSGDBase):
         stochastic_lerp_(exp_avg_list, grad_list, beta_debias(beta, group["step"]))
 
         lr = -warmup(lr, group['step'], group['warmup_steps'])
+        lr = torch.empty((), dtype=torch.float32, device=grad_list[0].device).fill_(lr)
 
         Q_list, exp_avg_list = list(Q_list), list(exp_avg_list)
         for i, (p, g) in enumerate(zip(p_list, grad_list)):
             q_orig = Q_list.pop(0)
             ea = exp_avg_list.pop(0)
             q = line_to_triu(q_orig) if store_triu_as_line else q_orig
-            new = psgd_precond_grad(q, self.state_(p)["exprs"], ea)
-            update_param_([p], self.clip_fn([new]), lr, weight_decay)
+            _compilable_psgd_precond_grad_(q, state["exprs"], ea, p, lr, weight_decay)
             if should_update:
                 q32 = [promote(q_) for q_ in q]
                 self.do_update(group, [p], [ea if momentum_into_precond_update else g], [q32], precond_lr, [q_orig],
