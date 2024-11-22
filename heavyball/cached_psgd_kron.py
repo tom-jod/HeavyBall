@@ -9,7 +9,7 @@ from typing import Optional
 import torch
 
 from .utils import update_param_, warmup, init_Q_exprs, trust_region_clip_, PSGDBase, split_p_and_g_in_group, \
-    line_to_triu, triu_to_line, einsum_base, promote, stochastic_lerp_, beta_debias
+    line_to_triu, triu_to_line, einsum_base, promote, stochastic_lerp_, beta_debias, precond_grad_cached_
 
 
 class ForeachCachedPSGDKron(PSGDBase):
@@ -128,5 +128,4 @@ class ForeachCachedPSGDKron(PSGDBase):
                     else:
                         torch.mul(q_.conj(), q_, out=c_)
 
-            g = torch.einsum(self.state_(p)['cache_expr'], *cached_q, ea)
-            update_param_([p], self.clip_fn([g]), lr, weight_decay)
+            precond_grad_cached_(cached_q, ea, self.state_(p)['cache_expr'], ea, p, lr, weight_decay)

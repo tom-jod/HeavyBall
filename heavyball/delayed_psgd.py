@@ -5,8 +5,8 @@ Source available at https://github.com/evanatyourservice/kron_torch/blob/97a2b5e
 """
 
 import torch
-
 from heavyball.utils import stochastic_lerp_, beta_debias
+
 from .utils import update_param_, warmup, psgd_precond_grad, init_Q_exprs, trust_region_clip_, PSGDBase, \
     split_p_and_g_in_group, triu_to_line, line_to_triu, promote
 
@@ -39,7 +39,7 @@ class ForeachDelayedPSGD(PSGDBase):
                  max_size_triangular=2048, min_ndim_triangular=2, memory_save_mode=None,
                  momentum_into_precond_update=True, warmup_steps: int = 1, merge_dims: bool = False,
                  split: bool = False, clip_fn: callable = None, store_triu_as_line: bool = True, foreach: bool = True,
-                 q_dtype='float32', stochastic_schedule: bool = True, storage_dtype:str='float32', #
+                 q_dtype='float32', stochastic_schedule: bool = True, storage_dtype: str = 'float32',  #
                  # expert parameters
                  precond_init_scale=1.0, precond_lr=0.1):
         if not 0.0 <= lr:
@@ -105,8 +105,8 @@ class ForeachDelayedPSGD(PSGDBase):
             ea = exp_avg_list.pop(0)
             q = line_to_triu(q_orig) if store_triu_as_line else q_orig
             new = psgd_precond_grad(q, self.state_(p)["exprs"], ea)
+            update_param_([p], self.clip_fn([new]), lr, weight_decay)
             if should_update:
                 q32 = [promote(q_) for q_ in q]
                 self.do_update(group, [p], [ea if momentum_into_precond_update else g], [q32], precond_lr, [q_orig],
                                store_triu_as_line)
-            update_param_([p], self.clip_fn([new]), lr, weight_decay)

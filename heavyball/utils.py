@@ -965,6 +965,20 @@ class PSGDBase(StatefulOptimizer):
                         psgd_balance_Q(q)
 
 
+@torch.compile(mode='max-autotune-no-cudagraphs', fullgraph=True, dynamic=True)
+def _compilable_precond_grad_cached_(cached_q, ea, expr, param, lr, weight_decay):
+    md = min_dtype(cached_q + [ea])
+    new = torch.einsum(self.state_(p)['cache_expr'], *[c_.to(md) for c_ in cached_q], ea.to(md)).to(torch.float32)
+    update_param_([param], self.clip_fn([new]), lr, weight_decay)
+
+
+def precond_grad_cached_(cached_q: List[torch.Tensor], ea: torch.Tensor, expr: str, param: torch.Tensor, lr: float,
+                         weight_decay: float):
+    if isinstance(lr, float):
+        lr = torch.empty((), dtype=torch.float32, device=param.device).fill_(lr)
+    _compilable_precond_grad_cached_(cached_q, ea, expr, param, lr, weight_decay)
+
+
 def precond_update_prob_schedule(max_prob=1.0, min_prob=0.03, decay=0.001, flat_start=250):
     """Anneal preconditioner update probability during beginning of training.
 
