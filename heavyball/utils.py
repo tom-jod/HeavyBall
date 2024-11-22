@@ -721,7 +721,7 @@ def init_Q_exprs(t, scale, max_size, min_ndim_triangular, memory_save_mode, dtyp
     return [Q, (exprA, tuple(exprGs), exprP)]
 
 
-@torch.compile(mode='max-autotune-no-cudagraphs', fullgraph=True, dynamic=False)
+@decorator
 def psgd_balance_Q(Q_in):
     norms = torch.stack([q.norm(float("inf")) for q in Q_in])
     geometric_mean = norms.log().mean().exp()
@@ -734,8 +734,7 @@ def psgd_calc_A_and_conjB(exprA, G, Q):
     A = torch.einsum(exprA, *[q.to(md) for q in Q], G.to(md)).to(G.dtype)
     order = G.dim()
     p = list(range(order))
-    V = torch.randn_like(G, dtype=promote(G.dtype))
-    conjB = torch.permute(V, p[1:] + p[:1])
+    conjB = torch.randn_like(G.shape[1:] + G.shape[:1], dtype=promote(G.dtype), device=G.device)
     Q = [promote(q) for q in Q]
     for i, q in enumerate(Q):
         if q.dim() <= 1:
@@ -755,21 +754,13 @@ def psgd_calc_A_and_conjB(exprA, G, Q):
 def psgd_lb(A, max_abs):
     A /= max_abs
     a0 = torch.einsum('ij,ij->j', A, A)
-    a1 = torch.einsum('ij,ij->i', A, A)
-    value0 = torch.max(a0)
-    value1 = torch.max(a1)
     i = torch.argmax(a0)
-    j = torch.argmax(a1)
 
-    comp = value0 > value1
-    x = torch.cond(comp, lambda a: torch.index_select(a, 1, i).flatten().contiguous(),  #
-                   lambda a: torch.index_select(a, 0, j).flatten().contiguous(), (A,))
+    x = torch.index_select(a, 1, i).flatten().contiguous()
 
-    x = torch.cond(comp, lambda x_, a: torch.einsum('i,ij->j', x_, a), lambda x_, a: torch.einsum('i,ji->j', x_, a),
-                   (x, A,))
+    x = torch.einsum('i,ij->j', x_, a)
     x /= x.norm()
-    x = torch.cond(comp, lambda x_, a: torch.einsum('j,kj->k', x_, a), lambda x_, a: torch.einsum('j,jk->k', x_, a),
-                   (x, A,))
+    x = torch.einsum('j,kj->k', x_, a)
     x = x.norm()
     x *= max_abs
     return x
