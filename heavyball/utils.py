@@ -758,9 +758,9 @@ def psgd_lb(A, max_abs):
 
     x = torch.index_select(A, 1, i).flatten().contiguous()
 
-    x = torch.einsum('i,ij->j', x_, a)
+    x = torch.einsum('i,ij->j', x, A)
     x /= x.norm()
-    x = torch.einsum('j,kj->k', x_, a)
+    x = torch.einsum('j,kj->k', x, A)
     x = x.norm()
     x *= max_abs
     return x
