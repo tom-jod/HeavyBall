@@ -1,7 +1,8 @@
 import torch
 import torch.optim
 
-from .utils import schedule_free_, warmup, ScheduleFree, exp_avg_sq_, beta_debias, get_ckp1, promote, _compilable_schedule_free_
+from .utils import warmup, ScheduleFree, exp_avg_sq_, beta_debias, get_ckp1, promote, \
+    _compilable_schedule_free_, copy_stochastic_list_
 
 
 @torch.compile(mode='max-autotune-no-cudagraphs', fullgraph=True, dynamic=True)
@@ -18,15 +19,17 @@ def _compilable_step_(y, grad, exp_avg_sq, z, beta1, beta2, step, ckp1, eps, dec
     for p, z_, g in zip(y, z, g32):
         _compilable_schedule_free_(p, z_, ckp1, g, lr, beta1)
 
+    copy_stochastic_list_(exp_avg_sq, exp_avg_sq32)
+
 
 class PaLMForeachSFAdamW(ScheduleFree):
     def __init__(self, params, lr=0.0025, beta=0.9, betas=(None, None), eps=1e-8, weight_decay=0, warmup_steps=0, r=0.0,
-                 weight_lr_power=2.0, beta2_scale: float = 0.8, foreach: bool = True):
+                 weight_lr_power=2.0, beta2_scale: float = 0.8, foreach: bool = True, storage_dtype: str = 'float32'):
         if betas[0] is not None:
             beta = betas[0]
         defaults = dict(lr=lr, beta=beta, eps=eps, r=r, k=0, warmup_steps=warmup_steps, train_mode=True, weight_sum=0.0,
                         lr_max=-1.0, weight_lr_power=weight_lr_power, weight_decay=weight_decay,
-                        beta2_scale=beta2_scale)
+                        beta2_scale=beta2_scale, storage_dtype=storage_dtype)
         super().__init__(params, defaults, foreach)
 
     def _step(self, group):
@@ -42,10 +45,12 @@ class PaLMForeachSFAdamW(ScheduleFree):
         if not active_p:
             return
 
+        storage_dtype = getattr(torch, group['storage_dtype'])
+
         for p in active_p:
             if 'z' not in self.state_(p):
                 self.state_(p)['z'] = torch.clone(p.data)
-                self.state_(p)['exp_avg_sq'] = torch.zeros_like(p.data, dtype=torch.float32)
+                self.state_(p)['exp_avg_sq'] = torch.zeros_like(p.data, dtype=storage_dtype)
 
         # Decay the first moment running average coefficient
         beta2 = 1 - (k + 1) ** -group['beta2_scale']
