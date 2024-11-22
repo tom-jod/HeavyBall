@@ -719,7 +719,7 @@ def psgd_calc_A_and_conjB(exprA, G, Q, V):
     A = torch.einsum(exprA, *[q.to(md) for q in Q], G.to(md)).to(G.dtype)
     order = G.dim()
     p = list(range(order))
-    conjB = torch.permute(promote(V).conj(), p[1:] + p[:1])
+    conjB = torch.permute(promote(V), p[1:] + p[:1])
     Q = [promote(q) for q in Q]
     for i, q in enumerate(Q):
         if q.dim() <= 1:
@@ -728,7 +728,7 @@ def psgd_calc_A_and_conjB(exprA, G, Q, V):
             unsqueeze = conjB.dim() <= 1
             if unsqueeze:
                 conjB = conjB.unsqueeze(0)
-            conjB = torch.linalg.solve_triangular(q, conjB, upper=True, left=False, out=conjB)
+            conjB = torch.linalg.solve_triangular(q, conjB, upper=True, left=False)
             if unsqueeze:
                 conjB = conjB.squeeze(0)
         if i < order - 1:
@@ -736,40 +736,37 @@ def psgd_calc_A_and_conjB(exprA, G, Q, V):
     return A, conjB
 
 
-@torch.compiler.disable(recursive=True)
 def psgd_lb(A, max_abs):
     A /= max_abs
-    aa = torch.real(A * A.conj())
-    value0, i = torch.max(torch.sum(aa, dim=0), 0)
-    value1, j = torch.max(torch.sum(aa, dim=1), 0)
+    a0 = torch.einsum('ij,ij->j', A, A)
+    a1 = torch.einsum('ij,ij->i', A, A)
+    value0 = torch.max(a0)
+    value1 = torch.max(a1)
+    i = torch.argmax(a0)
+    j = torch.argmax(a1)
 
     comp = value0 > value1
-    A_orig = A
-    A = torch.where(comp, A, A.T)
-    ah = A.H
-    x = torch.where(comp, A_orig[:, i], A_orig[j, :])
-    x = x.conj()
-    if x.dim() > 1:
-        x = torch.where(comp, x, x.T)
-    torch.matmul(x, A, out=x.view(1, -1))
-    x /= torch.linalg.vector_norm(x)
-    torch.matmul(x, ah, out=x.view(1, -1))
-    x = torch.linalg.vector_norm(x)
+    x = torch.cond(comp, lambda a: torch.index_select(a, 1, i).flatten().contiguous(), #
+                   lambda a: torch.index_select(a, 0, j).flatten().contiguous(), (A,))
+
+    x = torch.cond(comp, lambda x_, a: torch.einsum('i,ij->j', x_, a), lambda x_, a: torch.einsum('i,ji->j', x_, a), (x, A,))
+    x /= x.norm()
+    x = torch.cond(comp, lambda x_, a: torch.einsum('j,kj->k', x_, a), lambda x_, a: torch.einsum('j,jk->k', x_, a), (x, A,))
+    x = x.norm()
     x *= max_abs
     return x
 
 
+@torch.compile(mode='max-autotune-no-cudagraphs', fullgraph=True, dynamic=True)
 def psgd_update_precond(Q, exprs, V, G, step, tiny, oq, store_triu_as_line):
     """Update Kronecker product preconditioner Q with pair (V, G)."""
     exprA, exprGs, _ = exprs
 
     A, conjB = psgd_calc_A_and_conjB(exprA, G, Q, V)
-    Ac = A.conj()
-    conjBc = conjB.conj()
 
     for q, exprG, o in zip(Q, exprGs, oq):
-        term1 = promote(torch.einsum(exprG, A, Ac))
-        term2 = promote(torch.einsum(exprG, conjBc, conjB))
+        term1 = promote(torch.einsum(exprG, A, A))
+        term2 = promote(torch.einsum(exprG, conjB, conjB))
 
         term2 += term1  # a + b
         term1 *= 2  # 2a
@@ -924,10 +921,10 @@ class PSGDBase(StatefulOptimizer):
         group[name] = cumulative_prob + prob
         return int(group[name]) > int(cumulative_prob)
 
-    def do_update(self, group, p_list, grad_list, q_list, precond_lr, original_q: List,
-                  store_triu_as_line=False):
+    def do_update(self, group, p_list, grad_list, q_list, precond_lr, original_q: List, store_triu_as_line=False):
         for i, (p, grad, Q, oq) in enumerate(zip(p_list, grad_list, q_list, original_q)):
-            psgd_update_precond(Q, self.state_(p)["exprs"], torch.randn_like(grad), grad, precond_lr, self._tiny, oq, store_triu_as_line)
+            psgd_update_precond(Q, self.state_(p)["exprs"], torch.randn_like(grad), grad, precond_lr, self._tiny, oq,
+                                store_triu_as_line)
 
         if self.should_update(group, self.balance_probability, "balance_prob"):
             for g, q in zip(grad_list, original_q if original_q else q_list):
