@@ -12,9 +12,9 @@ from .utils import update_param_, warmup, psgd_precond_grad, init_Q_exprs, trust
 
 
 @torch.compile(mode='max-autotune-no-cudagraphs', fullgraph=True, dynamic=True)
-def _compilable_psgd_precond_grad_(q, exprs, ea, p, lr, weight_decay):
+def _compilable_psgd_precond_grad_(q, exprs, ea, p, lr, weight_deca, clip_fn):
     new = psgd_precond_grad(q, exprs, ea)
-    update_param_([p], self.clip_fn([new]), lr, weight_decay)
+    update_param_([p], clip_fn([new]), lr, weight_decay)
 
 
 class ForeachDelayedPSGD(PSGDBase):
@@ -111,7 +111,7 @@ class ForeachDelayedPSGD(PSGDBase):
             q_orig = Q_list.pop(0)
             ea = exp_avg_list.pop(0)
             q = line_to_triu(q_orig) if store_triu_as_line else q_orig
-            _compilable_psgd_precond_grad_(q, state["exprs"], ea, p, lr, weight_decay)
+            _compilable_psgd_precond_grad_(q, self.state_(p)["exprs"], ea, p, lr, weight_decay, self.clip_fn)
             if should_update:
                 q32 = [promote(q_) for q_ in q]
                 self.do_update(group, [p], [ea if momentum_into_precond_update else g], [q32], precond_lr, [q_orig],
