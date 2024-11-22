@@ -437,7 +437,8 @@ class StatefulOptimizer(torch.optim.Optimizer):
 
     def ema_update(self, group):
         active_p = [p for p in group['params'] if p.grad is not None]
-
+        if not active_p:
+            return
         for p in active_p:
             if 'param_ema' not in self.state_(p):
                 self.state_(p)['param_ema'] = torch.zeros_like(p.data, memory_format=torch.preserve_format, dtype=self.ema_dtype)
@@ -450,6 +451,8 @@ class StatefulOptimizer(torch.optim.Optimizer):
             for top_group in self.param_groups:
                 for group in self.get_groups(top_group):
                     active_p = [p for p in group['params'] if p.grad is not None]
+                    if not active_p:
+                        return
                     for p in active_p:
                         if 'param_ema' in self.state_(p):
                             set_(p.data, self.state_(p)['param_ema'])
@@ -459,6 +462,8 @@ class StatefulOptimizer(torch.optim.Optimizer):
             for top_group in self.param_groups:
                 for group in self.get_groups(top_group):
                     active_p = [p for p in group['params'] if p.grad is not None]
+                    if not active_p:
+                        return
                     for p in active_p:
                         if 'param_ema' in self.state_(p):
                             set_(self.state_(p)['param_ema'], p.data)
