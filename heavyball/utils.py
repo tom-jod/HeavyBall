@@ -734,7 +734,7 @@ def psgd_calc_A_and_conjB(exprA, G, Q):
     A = torch.einsum(exprA, *[q.to(md) for q in Q], G.to(md)).to(G.dtype)
     order = G.dim()
     p = list(range(order))
-    conjB = torch.randn_like(G.shape[1:] + G.shape[:1], dtype=promote(G.dtype), device=G.device)
+    conjB = torch.randn(G.shape[1:] + G.shape[:1], dtype=promote(G.dtype), device=G.device)
     Q = [promote(q) for q in Q]
     for i, q in enumerate(Q):
         if q.dim() <= 1:
