@@ -70,7 +70,7 @@ class ForeachPurePSGD(PSGDBase):
 
         vals = []
 
-        for p, g in split_p_and_g_in_group(group):
+        for p, g in split_p_and_g_in_group(group, should_promote=False):
             state = self.state_(p)
 
             if 'Q' not in state:
@@ -89,6 +89,7 @@ class ForeachPurePSGD(PSGDBase):
         group["step"] += 1
 
         Q_list = list(Q_list)
+        lr = -warmup(lr, group['step'], group['warmup_steps'])
         for i, (p, g) in enumerate(zip(p_list, grad_list)):
             q_orig = Q_list.pop(0)
             q = line_to_triu(q_orig) if store_triu_as_line else q_orig
@@ -97,8 +98,4 @@ class ForeachPurePSGD(PSGDBase):
                 q32 = [promote(q_) for q_ in q]
                 self.do_update(group, [p], [g], [q32], precond_lr, [q_orig], store_triu_as_line)
             psgd_precond_grad(q, self.state_(p)["exprs"], g, inplace=True)
-
-        grad_list = self.clip_fn(grad_list)
-
-        lr = -warmup(lr, group['step'], group['warmup_steps'])
-        update_param_(p_list, grad_list, lr, weight_decay)
+            update_param_([p], self.clip_fn([g]), lr, weight_decay)

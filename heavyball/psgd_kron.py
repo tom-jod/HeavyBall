@@ -39,7 +39,8 @@ class ForeachPSGDKron(PSGDBase):
                  max_size_triangular=2048, min_ndim_triangular=2, memory_save_mode=None,
                  momentum_into_precond_update=True, warmup_steps: int = 1, merge_dims: bool = False,
                  split: bool = False, clip_fn: Optional[callable] = None, store_triu_as_line: bool = True,
-                 foreach: bool = True, q_dtype='float32', stochastic_schedule: bool = True,  #
+                 foreach: bool = True, q_dtype='float32', stochastic_schedule: bool = True,
+                 storage_dtype: str = 'float32',  #
                  # expert parameters
                  precond_init_scale=1.0, precond_lr=0.1):
         if not 0.0 <= lr:
@@ -56,7 +57,7 @@ class ForeachPSGDKron(PSGDBase):
                         min_ndim_triangular=min_ndim_triangular, memory_save_mode=memory_save_mode,
                         momentum_into_precond_update=momentum_into_precond_update, precond_lr=precond_lr,
                         precond_init_scale=precond_init_scale, step=0, warmup_steps=warmup_steps, merge_dims=merge_dims,
-                        split=split, store_triu_as_line=store_triu_as_line, q_dtype=q_dtype)
+                        split=split, store_triu_as_line=store_triu_as_line, q_dtype=q_dtype, storage_dtype=storage_dtype)
         super().__init__(params, defaults, foreach, stochastic_schedule, clip_fn, preconditioner_update_probability)
 
     def _step(self, group):
@@ -72,6 +73,7 @@ class ForeachPSGDKron(PSGDBase):
         beta = group['beta']
         store_triu_as_line = group['store_triu_as_line']
         q_dtype = getattr(torch, group['q_dtype'])
+        storage_dtype = getattr(torch, group['storage_dtype'])
 
         vals = []
 
@@ -79,7 +81,7 @@ class ForeachPSGDKron(PSGDBase):
             state = self.state_(p)
 
             if 'Q' not in state:
-                state["exp_avg"] = torch.zeros_like(g, dtype=torch.float32)
+                state["exp_avg"] = torch.zeros_like(g, dtype=storage_dtype)
                 Q, state["exprs"] = init_Q_exprs(p, precond_init_scale, max_size_triangular, min_ndim_triangular,
                                                  memory_save_mode, dtype=q_dtype)
                 state['Q'] = triu_to_line(Q) if store_triu_as_line else Q
@@ -96,7 +98,7 @@ class ForeachPSGDKron(PSGDBase):
 
         beta = beta_debias(beta, group["step"])
         beta = torch.empty((), dtype=torch.float32, device=grad_list[0].device).fill_(1 - beta)
-        stochastic_lerp_(exp_avg_list, grad_list, beta)
+        stochastic_lerp_(exp_avg_list, grad_list, 1 - beta)
 
         grad_list, Q_list, exp_avg_list = list(grad_list), list(Q_list), list(exp_avg_list)
 
@@ -111,6 +113,5 @@ class ForeachPSGDKron(PSGDBase):
                 q32 = [promote(q_) for q_ in q]
                 self.do_update(group, [p], [ea if momentum_into_precond_update else g], [q32], precond_lr, [q_orig],
                                store_triu_as_line)
-            update = psgd_precond_grad(q, self.state_(p)["exprs"], ea)
-            update = self.clip_fn([update])[0]
-            update_param_([p], [update], lr, weight_decay)
+            g = psgd_precond_grad(q, self.state_(p)["exprs"], ea)
+            update_param_([p], self.clip_fn([g]), lr, weight_decay)

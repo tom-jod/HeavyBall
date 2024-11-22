@@ -1,7 +1,7 @@
 import torch
 
 from .utils import init_preconditioner, update_preconditioner, project, beta_debias, exp_avg_sq_, update_param_, set_, \
-    split_p_and_g_in_group, StatefulOptimizer
+    split_p_and_g_in_group, StatefulOptimizer, exp_avg_
 
 
 class ForeachSOAP(StatefulOptimizer):
@@ -26,8 +26,7 @@ class ForeachSOAP(StatefulOptimizer):
                  weight_decay: float = 0.01, precondition_frequency: int = 2, max_precond_dim: int = 2048,  #
                  merge_dims: bool = True, precondition_1d: bool = False, normalize_grads: bool = False,
                  data_format: str = "channels_first", correct_bias: bool = True, warmup_steps: int = 1,
-                 split: bool = False,
-                 foreach: bool = True):
+                 split: bool = False, foreach: bool = True):
         defaults = {"lr": lr, "betas": betas, "shampoo_beta": shampoo_beta, "eps": eps, "weight_decay": weight_decay,
                     "precondition_frequency": precondition_frequency, "max_precond_dim": max_precond_dim,
                     "merge_dims": merge_dims, "precondition_1d": precondition_1d, "normalize_grads": normalize_grads,
@@ -65,14 +64,12 @@ class ForeachSOAP(StatefulOptimizer):
         p_list, grad, grad_projected, exp_avg, exp_avg_sq = zip(*vals)
         beta1, beta2 = group["betas"]
 
-        old_debiased1 = beta_debias(beta1, step)
         old_debiased2 = beta_debias(beta2, step)
 
         # Decay the first and second moment running average coefficient
         # In-place operations to update the averages at the same time
-        torch._foreach_mul_(exp_avg, old_debiased1)
-        torch._foreach_add_(exp_avg, grad, alpha=1 - old_debiased1)
-        denom = exp_avg_sq_(exp_avg_sq, grad_projected, old_debiased2, group['eps'])
+        step_tensor = torch.empty((), dtype=torch.int32, device=p_list[0].device).fill_(step)
+        denom = exp_avg_(exp_avg, exp_avg_sq, grad, grad_projected, beta1, beta2, step_tensor)
 
         for p, g, ea, d in zip(p_list, grad, exp_avg, denom):
             state = self.state_(p)

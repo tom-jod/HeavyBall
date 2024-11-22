@@ -141,6 +141,7 @@ def beta_debias(beta, step):
     return 1 - (1 - beta) / (1 - beta ** step)
 
 
+@torch.compile(mode='max-autotune-no-cudagraphs', fullgraph=True, dynamic=True)
 def exp_avg_sq_(state, grad, beta2, eps, out=None):
     if isinstance(state, torch.Tensor):
         state.mul_(beta2).addcmul_(grad, grad, value=1 - beta2)
@@ -570,6 +571,20 @@ def copy_stochastic_list_(target: List[torch.Tensor], source: List[torch.Tensor]
         copy_stochastic_(t, s)
 
 
+@torch.compile(mode='max-autotune-no-cudagraphs', fullgraph=True, dynamic=True)
+def exp_avg_(exp_avg, exp_avg_sq, grad, grad_projected, beta1, beta2, step):
+    beta1 = beta_debias(beta1, step)
+    beta2 = beta_debias(beta2, step)
+
+    g32, gp32, exp_avg_sq32 = [list(map(promote, x)) for x in [grad, grad_projected, exp_avg_sq]]
+
+    stochastic_lerp_(exp_avg, g32, 1 - beta1)
+    denom = exp_avg_sq_(exp_avg_sq32, gp32, beta2, 1e-8)
+
+    copy_stochastic_list_(exp_avg_sq, exp_avg_sq32)
+    return denom
+
+
 # this can be dynamic for most optimizers - just not for PSGD. So, it's disabled for all
 @torch.compile(mode='max-autotune-no-cudagraphs', fullgraph=True)
 def _compilable_copy_stochastic_(target: torch.Tensor, source: torch.Tensor):
@@ -706,7 +721,7 @@ def init_Q_exprs(t, scale, max_size, min_ndim_triangular, memory_save_mode, dtyp
     return [Q, (exprA, tuple(exprGs), exprP)]
 
 
-@decorator
+@torch.compile(mode='max-autotune-no-cudagraphs', fullgraph=True, dynamic=False)
 def psgd_balance_Q(Q_in):
     norms = torch.stack([q.norm(float("inf")) for q in Q_in])
     geometric_mean = norms.log().mean().exp()
@@ -714,12 +729,13 @@ def psgd_balance_Q(Q_in):
     torch._foreach_mul_(Q_in, list(norms))
 
 
-def psgd_calc_A_and_conjB(exprA, G, Q, V):
+def psgd_calc_A_and_conjB(exprA, G, Q):
     md = min_dtype(Q + [G])
     A = torch.einsum(exprA, *[q.to(md) for q in Q], G.to(md)).to(G.dtype)
     order = G.dim()
     p = list(range(order))
-    conjB = torch.permute(promote(V), p[1:] + p[:1])
+    V = torch.randn_like(G, dtype=promote(G.dtype))
+    conjB = torch.permute(V, p[1:] + p[:1])
     Q = [promote(q) for q in Q]
     for i, q in enumerate(Q):
         if q.dim() <= 1:
@@ -746,23 +762,25 @@ def psgd_lb(A, max_abs):
     j = torch.argmax(a1)
 
     comp = value0 > value1
-    x = torch.cond(comp, lambda a: torch.index_select(a, 1, i).flatten().contiguous(), #
+    x = torch.cond(comp, lambda a: torch.index_select(a, 1, i).flatten().contiguous(),  #
                    lambda a: torch.index_select(a, 0, j).flatten().contiguous(), (A,))
 
-    x = torch.cond(comp, lambda x_, a: torch.einsum('i,ij->j', x_, a), lambda x_, a: torch.einsum('i,ji->j', x_, a), (x, A,))
+    x = torch.cond(comp, lambda x_, a: torch.einsum('i,ij->j', x_, a), lambda x_, a: torch.einsum('i,ji->j', x_, a),
+                   (x, A,))
     x /= x.norm()
-    x = torch.cond(comp, lambda x_, a: torch.einsum('j,kj->k', x_, a), lambda x_, a: torch.einsum('j,jk->k', x_, a), (x, A,))
+    x = torch.cond(comp, lambda x_, a: torch.einsum('j,kj->k', x_, a), lambda x_, a: torch.einsum('j,jk->k', x_, a),
+                   (x, A,))
     x = x.norm()
     x *= max_abs
     return x
 
 
-@torch.compile(mode='max-autotune-no-cudagraphs', fullgraph=True, dynamic=True)
-def psgd_update_precond(Q, exprs, V, G, step, tiny, oq, store_triu_as_line):
+@torch.compile(mode='max-autotune-no-cudagraphs', fullgraph=True, dynamic=False)
+def psgd_update_precond(Q, exprs, G, precond_lr, tiny, oq, store_triu_as_line):
     """Update Kronecker product preconditioner Q with pair (V, G)."""
     exprA, exprGs, _ = exprs
 
-    A, conjB = psgd_calc_A_and_conjB(exprA, G, Q, V)
+    A, conjB = psgd_calc_A_and_conjB(exprA, G, Q)
 
     for q, exprG, o in zip(Q, exprGs, oq):
         term1 = promote(torch.einsum(exprG, A, A))
@@ -775,7 +793,7 @@ def psgd_update_precond(Q, exprs, V, G, step, tiny, oq, store_triu_as_line):
         else:
             term1 = term1 - term2
 
-        term1 *= step
+        term1 *= precond_lr
         norm = term2.norm(float('inf'))
         if q.dim() < 2:
             term1 *= q.to(term1.dtype)
@@ -922,9 +940,8 @@ class PSGDBase(StatefulOptimizer):
         return int(group[name]) > int(cumulative_prob)
 
     def do_update(self, group, p_list, grad_list, q_list, precond_lr, original_q: List, store_triu_as_line=False):
-        for i, (p, grad, Q, oq) in enumerate(zip(p_list, grad_list, q_list, original_q)):
-            psgd_update_precond(Q, self.state_(p)["exprs"], torch.randn_like(grad), grad, precond_lr, self._tiny, oq,
-                                store_triu_as_line)
+        for p, grad, Q, oq in zip(p_list, grad_list, q_list, original_q):
+            psgd_update_precond(Q, self.state_(p)["exprs"], grad, precond_lr, self._tiny, oq, store_triu_as_line)
 
         if self.should_update(group, self.balance_probability, "balance_prob"):
             for g, q in zip(grad_list, original_q if original_q else q_list):

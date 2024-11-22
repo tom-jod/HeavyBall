@@ -5,10 +5,10 @@ Source available at https://github.com/evanatyourservice/kron_torch/blob/97a2b5e
 """
 
 import torch
-from heavyball.utils import copy_stochastic_list_
 
+from heavyball.utils import stochastic_lerp_, beta_debias
 from .utils import update_param_, warmup, psgd_precond_grad, init_Q_exprs, trust_region_clip_, PSGDBase, \
-    precond_update_prob_schedule, split_p_and_g_in_group, triu_to_line, line_to_triu, set_, promote
+    split_p_and_g_in_group, triu_to_line, line_to_triu, promote
 
 
 class ForeachDelayedPSGD(PSGDBase):
@@ -38,8 +38,8 @@ class ForeachDelayedPSGD(PSGDBase):
     def __init__(self, params, lr=0.001, beta=0.9, weight_decay=0.0, preconditioner_update_probability=None,
                  max_size_triangular=2048, min_ndim_triangular=2, memory_save_mode=None,
                  momentum_into_precond_update=True, warmup_steps: int = 1, merge_dims: bool = False,
-                 split: bool = False, clip_fn: callable = None, store_triu_as_line: bool = True,
-                 foreach: bool = True, q_dtype='float32', stochastic_schedule: bool = True,  #
+                 split: bool = False, clip_fn: callable = None, store_triu_as_line: bool = True, foreach: bool = True,
+                 q_dtype='float32', stochastic_schedule: bool = True, storage_dtype:str='float32', #
                  # expert parameters
                  precond_init_scale=1.0, precond_lr=0.1):
         if not 0.0 <= lr:
@@ -55,11 +55,9 @@ class ForeachDelayedPSGD(PSGDBase):
         defaults = dict(lr=lr, beta=beta, weight_decay=weight_decay, max_size_triangular=max_size_triangular,
                         min_ndim_triangular=min_ndim_triangular, memory_save_mode=memory_save_mode,
                         momentum_into_precond_update=momentum_into_precond_update, precond_lr=precond_lr,
-                        precond_init_scale=precond_init_scale,
-                        step=0, warmup_steps=warmup_steps, merge_dims=merge_dims, split=split,
-                        store_triu_as_line=store_triu_as_line, q_dtype=q_dtype)
+                        precond_init_scale=precond_init_scale, step=0, warmup_steps=warmup_steps, merge_dims=merge_dims,
+                        split=split, store_triu_as_line=store_triu_as_line, q_dtype=q_dtype)
         super().__init__(params, defaults, foreach, stochastic_schedule, clip_fn, preconditioner_update_probability)
-
 
     def _step(self, group):
         should_update = self.should_update(group)
@@ -74,14 +72,15 @@ class ForeachDelayedPSGD(PSGDBase):
         beta = group['beta']
         store_triu_as_line = group['store_triu_as_line']
         q_dtype = getattr(torch, group['q_dtype'])
+        storage_dtype = getattr(torch, group['storage_dtype'])
 
         vals = []
 
-        for p, g in split_p_and_g_in_group(group):
+        for p, g in split_p_and_g_in_group(group, should_promote=False):
             state = self.state_(p)
 
             if 'Q' not in state:
-                state["exp_avg"] = torch.zeros_like(g)
+                state["exp_avg"] = torch.zeros_like(g, dtype=storage_dtype)
                 Q, state["exprs"] = init_Q_exprs(p, precond_init_scale, max_size_triangular, min_ndim_triangular,
                                                  memory_save_mode, dtype=q_dtype)
                 state["Q"] = triu_to_line(Q) if store_triu_as_line else Q
@@ -96,7 +95,9 @@ class ForeachDelayedPSGD(PSGDBase):
 
         group["step"] += 1
 
-        torch._foreach_lerp_(exp_avg_list, grad_list, (1 - beta) / (1 - beta ** group["step"]))
+        stochastic_lerp_(exp_avg_list, grad_list, beta_debias(beta, group["step"]))
+
+        lr = -warmup(lr, group['step'], group['warmup_steps'])
 
         Q_list, exp_avg_list = list(Q_list), list(exp_avg_list)
         for i, (p, g) in enumerate(zip(p_list, grad_list)):
@@ -106,10 +107,6 @@ class ForeachDelayedPSGD(PSGDBase):
             new = psgd_precond_grad(q, self.state_(p)["exprs"], ea)
             if should_update:
                 q32 = [promote(q_) for q_ in q]
-                self.do_update(group,[p], [ea if momentum_into_precond_update else g], [q32], precond_lr, [q_orig], store_triu_as_line)
-            set_(g, new)
-
-        grad_list = self.clip_fn(grad_list)
-
-        lr = -warmup(lr, group['step'], group['warmup_steps'])
-        update_param_(p_list, grad_list, lr, weight_decay)
+                self.do_update(group, [p], [ea if momentum_into_precond_update else g], [q32], precond_lr, [q_orig],
+                               store_triu_as_line)
+            update_param_([p], self.clip_fn([new]), lr, weight_decay)

@@ -2,8 +2,19 @@ import random
 
 import torch
 
-from .utils import init_preconditioner, update_preconditioner, project, set_, adaptive_gradient_clipping_, \
-    exp_avg_sq_, beta_debias, schedule_free_, warmup, ScheduleFree, precond_schedule, split_p_and_g_in_group
+from .utils import init_preconditioner, update_preconditioner, project, set_, adaptive_gradient_clipping_, exp_avg_sq_, \
+    beta_debias, schedule_free_, warmup, ScheduleFree, precond_schedule, split_p_and_g_in_group, copy_stochastic_list_, \
+    promote
+
+
+@torch.compile(mode='max-autotune-no-cudagraphs', fullgraph=True, dynamic=True)
+def _compilable_exp_avg_sq_(exp_avg_sq, grad_projected, old_debiased2, eps):
+    eas32, gp32 = [list(map(promote, x)) for x in (exp_avg_sq, grad_projected)]
+    denom = exp_avg_sq_(eas32, gp32, old_debiased2, eps)
+    torch._foreach_div_(gp32, denom)
+
+    copy_stochastic_list_(exp_avg_sq, eas32)
+    copy_stochastic_list_(grad_projected, gp32)
 
 
 class PrecondScheduleSFPaLMSOAP(ScheduleFree):
@@ -40,8 +51,8 @@ class PrecondScheduleSFPaLMSOAP(ScheduleFree):
                  weight_decay: float = 0.01, precondition_frequency: int = 2, max_precond_dim: int = 2048,  #
                  merge_dims: bool = True, precondition_1d: bool = False, normalize_grads: bool = False,
                  data_format: str = "channels_first", correct_bias: bool = True, warmup_steps: int = 1, r=0.0,
-                 weight_lr_power=2.0, gradient_clip_val: float = 0.1, precond_scheduler=(1 / 3, 9),
-                 betas=(None, None), split: bool = False, foreach: bool = True):
+                 weight_lr_power=2.0, gradient_clip_val: float = 0.1, precond_scheduler=(1 / 3, 9), betas=(None, None),
+                 split: bool = False, foreach: bool = True):
         if betas[0] is not None:
             beta = betas[0]
         defaults = {"lr": lr, "beta": beta, "beta2_scale": beta2_scale, "eps": eps, "weight_decay": weight_decay,
@@ -103,8 +114,8 @@ class PrecondScheduleSFPaLMSOAP(ScheduleFree):
 
         # Decay the first and second moment running average coefficient
         # In-place operations to update the averages at the same time
-        denom = exp_avg_sq_(exp_avg_sq, grad_projected, old_debiased2, group['eps'])
-        torch._foreach_div_(grad_projected, denom)
+        old_debiased_tensor = torch.empty((), dtype=torch.float32, device=p_list[0].device).fill_(old_debiased2)
+        _compilable_exp_avg_sq_(exp_avg_sq, grad_projected, old_debiased_tensor, group["eps"])
 
         update_precond = precond_schedule(step, group['precond_scheduler'], self.rng)
 
@@ -114,13 +125,12 @@ class PrecondScheduleSFPaLMSOAP(ScheduleFree):
             # to the original space
             set_(gp, project(gp, state['Q'], back=True))
 
-            update_preconditioner(g, state, max_precond_dim, precondition_1d, old_debiased2,
-                                  update_precond)
+            update_preconditioner(g, state, max_precond_dim, precondition_1d, old_debiased2, update_precond)
 
         # Weight decay calculated at y
         if group["weight_decay"] > 0:
             torch._foreach_add_(grad, p_list, alpha=group["weight_decay"])
 
         lr = warmup(group['lr'], step, group['warmup_steps'])
-        group['weight_sum'] = schedule_free_(lr, group['weight_lr_power'], group['weight_sum'], group['beta'],
-                                             p_list, z, grad_projected, group['r'], step)
+        group['weight_sum'] = schedule_free_(lr, group['weight_lr_power'], group['weight_sum'], group['beta'], p_list,
+                                             z, grad_projected, group['r'], step)

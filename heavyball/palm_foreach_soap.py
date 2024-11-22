@@ -1,7 +1,8 @@
 import torch
 
 from .utils import init_preconditioner, update_preconditioner, project, beta_debias, exp_avg_sq_, update_param_, set_, \
-    split_p_and_g_in_group, StatefulOptimizer
+    split_p_and_g_in_group, StatefulOptimizer, exp_avg_
+
 
 
 class PaLMForeachSOAP(StatefulOptimizer):
@@ -32,8 +33,7 @@ class PaLMForeachSOAP(StatefulOptimizer):
                  max_precond_dim: int = 2048,  #
                  merge_dims: bool = True, precondition_1d: bool = False, normalize_grads: bool = False,
                  data_format: str = "channels_first", correct_bias: bool = True, warmup_steps: int = 1,
-                 beta2_scale: float = 0.8, split: bool = False,
-                 foreach: bool = True):
+                 beta2_scale: float = 0.8, split: bool = False, foreach: bool = True):
         if betas[0] is not None:
             beta = betas[0]
         defaults = {"lr": lr, "beta": beta, "shampoo_beta": shampoo_beta, "eps": eps, "weight_decay": weight_decay,
@@ -75,13 +75,13 @@ class PaLMForeachSOAP(StatefulOptimizer):
         beta1 = group["beta"]
 
         beta2 = 1 - step ** -group['beta2_scale']
-        old_debiased1 = beta_debias(beta1, step)
         old_debiased2 = beta_debias(beta2, step)
 
         # Decay the first and second moment running average coefficient
         # In-place operations to update the averages at the same time
-        torch._foreach_lerp_(exp_avg, grad, 1 - old_debiased1)
-        denom = exp_avg_sq_(exp_avg_sq, grad_projected, old_debiased2, group['eps'])
+        beta2 = torch.empty((), dtype=torch.float32, device=p_list[0].device).fill_(beta2)
+        step_tensor = torch.empty((), dtype=torch.int32, device=p_list[0].device).fill_(step)
+        denom = exp_avg_(exp_avg, exp_avg_sq, grad, grad_projected, beta1, beta2, step_tensor)
 
         for p, g, ea, d in zip(p_list, grad, exp_avg, denom):
             state = self.state_(p)

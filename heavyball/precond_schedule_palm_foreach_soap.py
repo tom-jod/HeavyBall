@@ -2,7 +2,7 @@ import random
 
 import torch
 
-from .utils import init_preconditioner, update_preconditioner, project, beta_debias, exp_avg_sq_, update_param_, \
+from .utils import init_preconditioner, update_preconditioner, project, beta_debias, exp_avg_, update_param_, \
     precond_schedule, set_, split_p_and_g_in_group, StatefulOptimizer
 
 
@@ -81,9 +81,9 @@ class PrecondSchedulePaLMForeachSOAP(StatefulOptimizer):
 
         # Decay the first and second moment running average coefficient
         # In-place operations to update the averages at the same time
-        torch._foreach_mul_(exp_avg, old_debiased1)
-        torch._foreach_add_(exp_avg, grad, alpha=1 - old_debiased1)
-        denom = exp_avg_sq_(exp_avg_sq, grad_projected, old_debiased2, group['eps'])
+        beta2 = torch.empty((), dtype=torch.float32, device=p_list[0].device).fill_(beta2)
+        step_tensor = torch.empty((), dtype=torch.int32, device=p_list[0].device).fill_(step)
+        denom = exp_avg_(exp_avg, exp_avg_sq, grad, grad_projected, beta1, beta2, step_tensor)
 
         update_precond = precond_schedule(step, group['precond_scheduler'], self.rng)
         for p, g, ea, d in zip(p_list, grad, exp_avg, denom):

@@ -9,7 +9,7 @@ from typing import Optional
 import torch
 
 from .utils import update_param_, warmup, init_Q_exprs, trust_region_clip_, PSGDBase, split_p_and_g_in_group, \
-    line_to_triu, triu_to_line, set_, einsum_base, promote
+    line_to_triu, triu_to_line, einsum_base, promote, stochastic_lerp_, beta_debias
 
 
 class ForeachCachedDelayedPSGDKron(PSGDBase):
@@ -41,7 +41,8 @@ class ForeachCachedDelayedPSGDKron(PSGDBase):
                  max_size_triangular=2048, min_ndim_triangular=2, memory_save_mode=None,
                  momentum_into_precond_update=True, warmup_steps: int = 1, merge_dims: bool = False,
                  split: bool = False, clip_fn: Optional[callable] = None, store_triu_as_line: bool = True,
-                 foreach: bool = True, q_dtype='float32', stochastic_schedule: bool = True,  #
+                 foreach: bool = True, q_dtype='float32', stochastic_schedule: bool = True,
+                 storage_dtype: str = 'float32',  #
                  # expert parameters
                  precond_init_scale=1.0, precond_lr=0.1):
         if not 0.0 <= lr:
@@ -58,7 +59,7 @@ class ForeachCachedDelayedPSGDKron(PSGDBase):
                         min_ndim_triangular=min_ndim_triangular, memory_save_mode=memory_save_mode,
                         momentum_into_precond_update=momentum_into_precond_update, precond_lr=precond_lr,
                         precond_init_scale=precond_init_scale, step=0, warmup_steps=warmup_steps, merge_dims=merge_dims,
-                        split=split, store_triu_as_line=store_triu_as_line, q_dtype=q_dtype)
+                        split=split, store_triu_as_line=store_triu_as_line, q_dtype=q_dtype, storage_dtype=storage_dtype)
         super().__init__(params, defaults, foreach, stochastic_schedule, clip_fn, preconditioner_update_probability)
 
     def _step(self, group):
@@ -74,14 +75,15 @@ class ForeachCachedDelayedPSGDKron(PSGDBase):
         beta = group['beta']
         store_triu_as_line = group['store_triu_as_line']
         q_dtype = getattr(torch, group['q_dtype'])
+        storage_dtype = getattr(torch, group['storage_dtype'])
 
         vals = []
 
-        for p, g in split_p_and_g_in_group(group):
+        for p, g in split_p_and_g_in_group(group, should_promote=False):
             state = self.state_(p)
 
             if 'Q' not in state:
-                state["exp_avg"] = torch.zeros_like(g)
+                state["exp_avg"] = torch.zeros_like(g, dtype=storage_dtype)
                 Q, state["exprs"] = init_Q_exprs(p, precond_init_scale, max_size_triangular, min_ndim_triangular,
                                                  memory_save_mode, dtype=q_dtype)
                 state['Q'] = triu_to_line(Q) if store_triu_as_line else Q
@@ -105,7 +107,9 @@ class ForeachCachedDelayedPSGDKron(PSGDBase):
 
         group["step"] += 1
 
-        torch._foreach_lerp_(exp_avg_list, grad_list, (1 - beta) / (1 - beta ** group["step"]))
+        stochastic_lerp_(exp_avg_list, grad_list, 1 - beta_debias(beta, group['step']))
+
+        lr = -warmup(lr, group['step'], group['warmup_steps'])
 
         grad_list, Q_list, Q_cache_list, exp_avg_list = list(grad_list), list(Q_list), list(Q_cache_list), list(
             exp_avg_list)
@@ -127,8 +131,4 @@ class ForeachCachedDelayedPSGDKron(PSGDBase):
                     else:
                         torch.mul(q_.conj(), q_, out=c_)
 
-            set_(g, new)
-        grad_list = self.clip_fn(grad_list)
-
-        lr = -warmup(lr, group['step'], group['warmup_steps'])
-        update_param_(p_list, grad_list, lr, weight_decay)
+            update_param_([p], self.clip_fn([new]), lr, weight_decay)
