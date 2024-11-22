@@ -968,7 +968,7 @@ class PSGDBase(StatefulOptimizer):
 @torch.compile(mode='max-autotune-no-cudagraphs', fullgraph=True, dynamic=True)
 def _compilable_precond_grad_cached_(cached_q, ea, expr, param, lr, weight_decay):
     md = min_dtype(cached_q + [ea])
-    new = torch.einsum(self.state_(p)['cache_expr'], *[c_.to(md) for c_ in cached_q], ea.to(md)).to(torch.float32)
+    new = torch.einsum(expr, *[c_.to(md) for c_ in cached_q], ea.to(md)).to(torch.float32)
     update_param_([param], self.clip_fn([new]), lr, weight_decay)
 
 
