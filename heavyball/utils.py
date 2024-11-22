@@ -330,31 +330,33 @@ def get_orthogonal_matrix(mat):
 
 @torch.compile(mode='max-autotune-no-cudagraphs', fullgraph=True, dynamic=True)
 def _compilable_stochastic_lerp_(x: List[torch.Tensor], y: List[torch.Tensor], a: Union[float, int, torch.Tensor]):
-    x32 = [promote(x_) for x_ in x]
-    y32 = [promote(y_) for y_ in y]
+    for x_, y_ in zip(x, y):
+        x32 = promote(x_)
+        y32 = promote(y_)
+        x32.lerp_(y32, a)
+        copy_stochastic_(x_, x32)
 
-    torch._foreach_lerp_(x32, y32, a)
-
-    copy_stochastic_list_(x, x32)
 
 def stochastic_lerp_(x: List[torch.Tensor], y: List[torch.Tensor], a: Union[float, int, torch.Tensor]):
     if not isinstance(a, torch.Tensor):
         a = torch.empty((), dtype=torch.float32, device=x[0].device).fill_(a)
     _compilable_stochastic_lerp_(x, y, a)
 
+
 @torch.compile(mode='max-autotune-no-cudagraphs', fullgraph=True, dynamic=True)
 def _compilable_stochastic_add_(x: List[torch.Tensor], y: List[torch.Tensor], alpha: Union[float, int, torch.Tensor]):
-    x32 = [promote(x_) for x_ in x]
-    y32 = [promote(y_) for y_ in y]
+    for x_, y_ in zip(x, y):
+        x32 = promote(x_)
+        y32 = promote(y_)
+        x32.add_(y32, alpha=alpha)
+        copy_stochastic_(x_, x32)
 
-    [x_.add_(y_, alpha=alpha) for x_, y_ in zip(x32, y32)]
-
-    copy_stochastic_list_(x, x32)
 
 def stochastic_add_(x: List[torch.Tensor], y: List[torch.Tensor], alpha: Union[float, int, torch.Tensor]):
     if not isinstance(alpha, torch.Tensor):
         alpha = torch.empty((), dtype=torch.float32, device=x[0].device).fill_(alpha)
     _compilable_stochastic_add_(x, y, alpha)
+
 
 @decorator
 def compute_ggt(grad, GG, max_precond_dim, precondition_1d, beta):
@@ -592,6 +594,7 @@ def _compilable_exp_avg_(exp_avg, exp_avg_sq, grad, grad_projected, beta1, beta2
     copy_stochastic_list_(exp_avg_sq, exp_avg_sq32)
     return denom
 
+
 def exp_avg_(exp_avg: List[torch.Tensor], exp_avg_sq: List[torch.Tensor], grad: List[torch.Tensor],
              grad_projected: List[torch.Tensor], beta1: float, beta2: float, step: int):
     if isinstance(beta1, float):
@@ -602,6 +605,7 @@ def exp_avg_(exp_avg: List[torch.Tensor], exp_avg_sq: List[torch.Tensor], grad: 
         step = torch.empty((), dtype=torch.int32, device=exp_avg[0].device).fill_(step)
     denom = _compilable_exp_avg_(exp_avg, exp_avg_sq, grad, grad_projected, beta1, beta2, step)
     return denom
+
 
 # this can be dynamic for most optimizers - just not for PSGD. So, it's disabled for all
 @torch.compile(mode='max-autotune-no-cudagraphs', fullgraph=True)
