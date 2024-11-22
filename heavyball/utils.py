@@ -409,6 +409,8 @@ def project(grad, Q, back: bool):
 
 
 class StatefulOptimizer(torch.optim.Optimizer):
+    ema_decay: float = 0.001
+
     def __init__(self, params, defaults, foreach: bool = True, use_ema: bool = False):
         super().__init__(params, {**defaults, 'foreach': foreach})
         self.fake_groups = {}
@@ -446,30 +448,33 @@ class StatefulOptimizer(torch.optim.Optimizer):
     def _step(self, group):
         raise NotImplementedError
 
-    def ema_update(self, group):
+    def ema_update(self):
         with torch.no_grad():
-            active_p = [p for p in group['params']]
-            
-            if not active_p:
-                return
+            for top_group in self.param_groups:
+                for group in self.get_groups(top_group):
+                    active_p = [p for p in group['params']]
 
-            k = group['ema_step'] = group.get('ema_step', -1) + 1
-            
-            for p in active_p:
-                if 'param_ema' not in self.state_(p):
-                    self.state_(p)['param_ema'] = torch.zeros_like(p.data, memory_format=torch.preserve_format, dtype=self.ema_dtype)
-        
+                    if not active_p:
+                        return
 
-            y, param_ema = zip(*[(p.data, self.state_(p)['param_ema']) for p in active_p])
-            torch._foreach_lerp_(param_ema, y, weight=beta_debias(1 - self.ema_decay, k))
+                    k = group['ema_step'] = group.get('ema_step', -1) + 1
+
+                    for p in active_p:
+                        if 'param_ema' not in self.state_(p):
+                            self.state_(p)['param_ema'] = torch.zeros_like(p.data, memory_format=torch.preserve_format)
+
+                    y, param_ema = zip(*[(p.data, self.state_(p)['param_ema']) for p in active_p])
+                    torch._foreach_lerp_(param_ema, y, weight=beta_debias(1 - self.ema_decay, k + 1))
 
     def copy_emas_to_params(self):
         with torch.no_grad():
             for top_group in self.param_groups:
                 for group in self.get_groups(top_group):
-                    active_p = [p for p in group['params'] if p.grad is not None]
+                    active_p = [p for p in group['params']]
+
                     if not active_p:
                         return
+
                     for p in active_p:
                         if 'param_ema' in self.state_(p):
                             p_clone = p.data.clone()
@@ -480,15 +485,16 @@ class StatefulOptimizer(torch.optim.Optimizer):
         with torch.no_grad():
             for top_group in self.param_groups:
                 for group in self.get_groups(top_group):
-                    active_p = [p for p in group['params'] if p.grad is not None]
+                    active_p = [p for p in group['params']]
+
                     if not active_p:
                         return
+
                     for p in active_p:
                         if 'param_ema' in self.state_(p):
                             ema_clone = self.state_(p)['param_ema'].data.clone()
                             set_(self.state_(p)['param_ema'], p.data)
                             set_(p.data, ema_clone)
-                            
 
     def step(self, closure: Optional[Callable] = None):
         if closure is None:
