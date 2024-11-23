@@ -38,7 +38,7 @@ def warmup(lr: float, step: int, warmup_steps: int):
     return lr * step / warmup_steps
 
 
-@torch.compile(mode='max-autotune-no-cudagraphs', fullgraph=True, dynamic=True)
+@torch.compile(mode='max-autotune-no-cudagraphs', fullgraph=True, dynamic=False)
 def _compilable_schedule_free_(p, z, ckp1, grad, lr, beta1):
     p32 = promote(p)
     z32 = promote(z)
@@ -141,7 +141,7 @@ def beta_debias(beta, step):
     return 1 - (1 - beta) / (1 - beta ** step)
 
 
-@torch.compile(mode='max-autotune-no-cudagraphs', fullgraph=True, dynamic=True)
+@torch.compile(mode='max-autotune-no-cudagraphs', fullgraph=True, dynamic=False)
 def exp_avg_sq_(state, grad, beta2, eps, out=None):
     if isinstance(state, torch.Tensor):
         state.mul_(beta2).addcmul_(grad, grad, value=1 - beta2)
@@ -328,7 +328,7 @@ def get_orthogonal_matrix(mat):
     return final
 
 
-@torch.compile(mode='max-autotune-no-cudagraphs', fullgraph=True, dynamic=True)
+@torch.compile(mode='max-autotune-no-cudagraphs', fullgraph=True, dynamic=False)
 def _compilable_stochastic_lerp_(x: List[torch.Tensor], y: List[torch.Tensor], a: Union[float, int, torch.Tensor]):
     for x_, y_ in zip(x, y):
         x32 = promote(x_)
@@ -343,7 +343,7 @@ def stochastic_lerp_(x: List[torch.Tensor], y: List[torch.Tensor], a: Union[floa
     _compilable_stochastic_lerp_(x, y, a)
 
 
-@torch.compile(mode='max-autotune-no-cudagraphs', fullgraph=True, dynamic=True)
+@torch.compile(mode='max-autotune-no-cudagraphs', fullgraph=True, dynamic=False)
 def _compilable_stochastic_add_(x: List[torch.Tensor], y: List[torch.Tensor], alpha: Union[float, int, torch.Tensor]):
     for x_, y_ in zip(x, y):
         x32 = promote(x_)
@@ -581,7 +581,7 @@ def copy_stochastic_list_(target: List[torch.Tensor], source: List[torch.Tensor]
         copy_stochastic_(t, s)
 
 
-@torch.compile(mode='max-autotune-no-cudagraphs', fullgraph=True, dynamic=True)
+@torch.compile(mode='max-autotune-no-cudagraphs', fullgraph=True, dynamic=False)
 def _compilable_exp_avg_(exp_avg, exp_avg_sq, grad, grad_projected, beta1, beta2, step):
     beta1 = beta_debias(beta1, step)
     beta2 = beta_debias(beta2, step)
@@ -632,7 +632,7 @@ def copy_stochastic_(target: torch.Tensor, source: torch.Tensor):
     _compilable_copy_stochastic_(target, source)
 
 
-@torch.compile(mode='max-autotune-no-cudagraphs', fullgraph=True, dynamic=True)
+@torch.compile(mode='max-autotune-no-cudagraphs', fullgraph=True, dynamic=False)
 def _compilable_update_(p, u, decay, add_fn, lr):
     u = [u_.view_as(p_) for u_, p_ in zip(u, p)]
     p32, u32 = [list(map(promote, x)) for x in [p, u]]
@@ -788,7 +788,7 @@ def psgd_lb(A, max_abs):
     return x
 
 
-@torch.compile(mode='max-autotune-no-cudagraphs', fullgraph=True, dynamic=True)
+@torch.compile(mode='max-autotune-no-cudagraphs', fullgraph=True, dynamic=False)
 def psgd_update_precond(Q, exprs, G, precond_lr, tiny, oq, store_triu_as_line):
     """Update Kronecker product preconditioner Q with pair (V, G)."""
     exprA, exprGs, _ = exprs
@@ -821,7 +821,7 @@ def psgd_update_precond(Q, exprs, G, precond_lr, tiny, oq, store_triu_as_line):
         stochastic_add_([o], [term1], -1)
 
 
-@torch.compile(mode='max-autotune-no-cudagraphs', fullgraph=True, dynamic=True)
+@torch.compile(mode='max-autotune-no-cudagraphs', fullgraph=True, dynamic=False)
 def psgd_precond_grad(Q, exprs, G, inplace: bool = False):
     """Precondition gradient G with preconditioner Q."""
     md = min_dtype(Q)
@@ -965,7 +965,7 @@ class PSGDBase(StatefulOptimizer):
                         psgd_balance_Q(q)
 
 
-@torch.compile(mode='max-autotune-no-cudagraphs', fullgraph=True, dynamic=True)
+@torch.compile(mode='max-autotune-no-cudagraphs', fullgraph=True, dynamic=False)
 def _compilable_precond_grad_cached_(cached_q, ea, expr, param, lr, weight_decay, clip_fn):
     md = min_dtype(cached_q + [ea])
     new = torch.einsum(expr, *[c_.to(md) for c_ in cached_q], ea.to(md)).to(torch.float32)
