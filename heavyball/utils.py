@@ -964,8 +964,8 @@ class PSGDBase(StatefulOptimizer):
                     else:
                         psgd_balance_Q(q)
 
-
-@torch.compile(mode='max-autotune-no-cudagraphs', fullgraph=True, dynamic=False)
+#TODO: Figure out why this sometimes crashes
+#@torch.compile(mode='max-autotune-no-cudagraphs', fullgraph=True, dynamic=False)
 def _compilable_precond_grad_cached_(cached_q, ea, expr, param, lr, weight_decay, clip_fn):
     md = min_dtype(cached_q + [ea])
     new = torch.einsum(expr, *[c_.to(md) for c_ in cached_q], ea.to(md)).to(torch.float32)
