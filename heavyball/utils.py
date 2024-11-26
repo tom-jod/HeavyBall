@@ -10,6 +10,7 @@ import torch
 from torch import Tensor
 from torch.backends import cudnn, opt_einsum
 from torch.utils._pytree import tree_map
+from torch._dynamo.exc import TorchDynamoException
 
 compile_mode = None
 zeroth_power_mode = 'qr'  # 'qr' is baseline, 'newtonschulz' converges better and faster, 'eigh' is perfect but slow
@@ -175,7 +176,7 @@ def adaptive_gradient_clipping_(parameters: List[Tensor], gradients: List[Tensor
 def is_compiling():
     try:
         return torch.compiler.is_compiling()
-    except AttributeError:
+    except TorchDynamoException:
         return True
 
 
