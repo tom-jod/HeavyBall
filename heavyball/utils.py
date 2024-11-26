@@ -1031,7 +1031,7 @@ class PSGDBase(StatefulOptimizer):
 
 
 # TODO: Figure out why this sometimes crashes
-@torch.compile(mode='max-autotune-no-cudagraphs', fullgraph=True, dynamic=False)
+#@torch.compile(mode='max-autotune-no-cudagraphs', fullgraph=True, dynamic=False)
 def _compilable_precond_grad_cached_(ea: Tensor, expr: str, param: Tensor, lr: Tensor, weight_decay: Tensor,
                                      clip_fn: callable, caution: bool, grad: Optional[Tensor], *cached_q: Tensor):
     md = min_dtype(cached_q + [ea])
