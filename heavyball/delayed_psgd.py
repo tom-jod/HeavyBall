@@ -11,7 +11,7 @@ from .utils import update_param_, warmup, psgd_precond_grad, init_Q_exprs, trust
     split_p_and_g_in_group, triu_to_line, line_to_triu, promote
 
 
-@torch.compile(mode='max-autotune-no-cudagraphs', fullgraph=True, dynamic=True)
+@torch.compile(mode='max-autotune-no-cudagraphs', fullgraph=True, dynamic=False)
 def _compilable_psgd_precond_grad_(q, exprs, ea, p, lr, weight_deca, clip_fn):
     new = psgd_precond_grad(q, exprs, ea)
     update_param_([p], clip_fn([new]), lr, weight_decay)

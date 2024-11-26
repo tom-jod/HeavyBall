@@ -5,7 +5,7 @@ from heavyball.utils import copy_stochastic_list_
 from .utils import warmup, exp_avg_sq_, beta_debias, update_param_, StatefulOptimizer, promote
 
 
-@torch.compile(mode='max-autotune-no-cudagraphs', fullgraph=True, dynamic=True)
+@torch.compile(mode='max-autotune-no-cudagraphs', fullgraph=True, dynamic=False)
 def _compilable_step_(y, grad, exp_avg_sq, exp_avg, beta1, beta2, step, lr, eps, decay):
     g32, exp_avg32, exp_avg_sq32 = [list(map(promote, x)) for x in [grad, exp_avg, exp_avg_sq]]
 
