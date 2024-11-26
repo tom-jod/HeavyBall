@@ -5,16 +5,16 @@ Source available at https://github.com/evanatyourservice/kron_torch/blob/97a2b5e
 """
 
 import torch
-from heavyball.utils import stochastic_lerp_, beta_debias
+from heavyball.utils import stochastic_lerp_, beta_debias, stochastic_add_
 
 from .utils import update_param_, warmup, psgd_precond_grad, init_Q_exprs, trust_region_clip_, PSGDBase, \
-    triu_to_line, line_to_triu, promote
+    triu_to_line, line_to_triu, promote,_compilable_update_
 
 
 @torch.compile(mode='max-autotune-no-cudagraphs', fullgraph=True, dynamic=False)
-def _compilable_psgd_precond_grad_(q, exprs, ea, p, lr, weight_deca, clip_fn, caution, grad):
-    new = psgd_precond_grad(q, exprs, ea)
-    update_param_([p], clip_fn([new]), lr, weight_decay, caution=caution, grad=grad)
+def _compilable_psgd_precond_grad_(q, exprs, ea, p, lr, weight_decay, clip_fn, caution, grad):
+    new = psgd_precond_grad(False, exprs, ea, *q)
+    _compilable_update_([p], clip_fn([new]), weight_decay, stochastic_add_, lr, caution, [grad])
 
 
 class ForeachDelayedPSGD(PSGDBase):
@@ -114,7 +114,7 @@ class ForeachDelayedPSGD(PSGDBase):
             q_orig = Q_list.pop(0)
             ea = exp_avg_list.pop(0)
             q = line_to_triu(q_orig) if store_triu_as_line else q_orig
-            _compilable_psgd_precond_grad_(q, self.state_(p)["exprs"], ea, p, lr, weight_decay, self.clip_fn, group['caution'],
+            _compilable_psgd_precond_grad_(q, self.state_(p)["exprs"][-1], ea, p, lr, weight_decay, self.clip_fn, group['caution'],
                                            g)
             if should_update:
                 q32 = [promote(q_) for q_ in q]

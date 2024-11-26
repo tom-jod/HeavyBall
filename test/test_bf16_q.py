@@ -11,14 +11,6 @@ from heavyball.utils import clean, set_torch, PSGDBase
 config.cache_size_limit = 128
 
 
-def get_memory():
-    clean()
-    torch.cuda.synchronize()
-    clean()
-    torch.cuda.synchronize()
-    return torch.cuda.memory_allocated()
-
-
 @pytest.mark.parametrize("opt", heavyball.__all__)
 @pytest.mark.parametrize("size,depth", [(256, 2)])
 def test_foreach(opt, size, depth: int, iterations: int = 128, outer_iterations: int = 3):

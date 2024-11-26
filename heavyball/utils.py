@@ -7,6 +7,7 @@ from typing import List, Optional, Tuple, Callable, Union
 
 import numpy as np
 import torch
+from torch import Tensor
 from torch.backends import cudnn, opt_einsum
 from torch.utils._pytree import tree_map
 
@@ -39,15 +40,14 @@ def warmup(lr: float, step: int, warmup_steps: int):
 
 
 @torch.compile(mode='max-autotune-no-cudagraphs', fullgraph=True, dynamic=False)
-def _compilable_schedule_free_(p, z, ckp1, grad, lr, beta1):
-    p32 = promote(p)
-    z32 = promote(z)
-    p32.lerp_(end=z32, weight=ckp1)
-    p32.add_(grad, alpha=lr * (beta1 * (1 - ckp1) - 1))
-    copy_stochastic_(p, p32)
-
-    z32.add_(grad, alpha=-lr)
-    copy_stochastic_(z, z32)
+def _compilable_schedule_free_(p: List[Tensor], z: List[Tensor], ckp1: Tensor, grad: List[Tensor], lr: Tensor, beta1: Tensor):
+    p32, z32, g32 = [promote(x) for x in (p, z, grad)]
+    for p_, z_, g_ in zip(p32, z32, g32):
+        p_.lerp_(z_, ckp1)
+        p_.add_(g_, alpha=lr * (beta1 * (1 - ckp1) - 1))
+        z_.add(g_, alpha=-lr)
+    copy_stochastic_list_(p, p32)
+    copy_stochastic_list_(z, z32)
 
 
 def get_ckp1(lr, weight_lr_power, weight_sum, r, step):
@@ -61,8 +61,8 @@ def get_ckp1(lr, weight_lr_power, weight_sum, r, step):
     return ckp1, weight_sum
 
 
-def schedule_free_(lr: float, weight_lr_power: float, weight_sum: float, beta1: float, parameters: List[torch.Tensor],
-                   z: List[torch.Tensor], grad: list[torch.Tensor], r: float = 0.0, step: int = 0):
+def schedule_free_(lr: float, weight_lr_power: float, weight_sum: float, beta1: float, parameters: List[Tensor],
+                   z: List[Tensor], grad: list[Tensor], r: float = 0.0, step: int = 0):
     weight = lr ** weight_lr_power * max(step, 1) ** r
     weight_sum = weight_sum + weight
 
@@ -73,10 +73,8 @@ def schedule_free_(lr: float, weight_lr_power: float, weight_sum: float, beta1: 
 
     # These operations update y in-place,
     # without computing x explicitly.
-    lr_tensor = torch.empty((), dtype=torch.float32, device=parameters[0].device).fill_(lr)
-    ckp1_tensor = torch.empty((), dtype=torch.float32, device=parameters[0].device).fill_(ckp1)
-    for p, z_, g in zip(parameters, z, grad):
-        _compilable_schedule_free_(p, z_, ckp1_tensor, g, lr_tensor, beta1)
+    lr, ckp1 = scalar_guard(lr, parameters[0]), scalar_guard(ckp1, parameters[0])
+    _compilable_schedule_free_(parameters, z, ckp1, grad, lr, beta1)
     return weight_sum
 
 
@@ -142,27 +140,25 @@ def beta_debias(beta, step):
 
 
 @torch.compile(mode='max-autotune-no-cudagraphs', fullgraph=True, dynamic=False)
-def _compilable_exp_avg_sq_(state, grad, beta2, eps, out=None):
+def _compilable_exp_avg_sq_(state: List[Tensor], grad: List[Tensor], beta2: Tensor, eps: Tensor, out: List[Optional[Tensor]]):
     torch._foreach_mul_(state, beta2)
     [s.addcmul_(g, g, value=1 - beta2) for s, g in zip(state, grad)]
     denom = torch._foreach_sqrt(state)
     [denom.clamp_(min=eps) for denom in denom]
-    if out is not None:
-        copy_stochastic_list_(out, denom)
-        return out
+    if out[0] is None:
+        return denom
 
-    return denom
+    copy_stochastic_list_(out, denom)
+    return out
 
 
 def exp_avg_sq_(state, grad, beta2, eps, out=None):
-    state, grad = list_guard(state), list_guard(grad)
-    if not isinstance(beta2, torch.Tensor):
-        beta2 = torch.empty((), dtype=torch.float32, device=state[0].device).fill_(beta2)
-    if not isinstance(eps, torch.Tensor):
-        eps = torch.empty((), dtype=torch.float32, device=state[0].device).fill_(eps)
+    state, grad, out = list_guard(state), list_guard(grad), list_guard(out)
+    beta2, eps = scalar_guard(beta2, state[0]), scalar_guard(eps, state[0])
     return _compilable_exp_avg_sq_(state, grad, beta2, eps, out)
 
-def adaptive_gradient_clipping_(parameters: List[torch.Tensor], gradients: List[torch.Tensor], clip_val: float,
+
+def adaptive_gradient_clipping_(parameters: List[Tensor], gradients: List[Tensor], clip_val: float,
                                 minimum: float = 1e-3, eps: float = 1e-8):
     if clip_val <= 0:
         return
@@ -183,7 +179,7 @@ def is_compiling():
         return True
 
 
-def set_(dst: torch.Tensor, src: torch.Tensor):
+def set_(dst: Tensor, src: Tensor):
     if not is_compiling() and src.data_ptr() == dst.data_ptr():
         return
     if src.shape != dst.shape:
@@ -344,7 +340,7 @@ def get_orthogonal_matrix(mat):
 
 
 @torch.compile(mode='max-autotune-no-cudagraphs', fullgraph=True, dynamic=False)
-def _compilable_stochastic_lerp_(x: List[torch.Tensor], y: List[torch.Tensor], a: Union[float, int, torch.Tensor]):
+def _compilable_stochastic_lerp_(x: List[Tensor], y: List[Tensor], a: Union[float, int, Tensor]):
     for x_, y_ in zip(x, y):
         x32 = promote(x_)
         y32 = promote(y_)
@@ -352,10 +348,9 @@ def _compilable_stochastic_lerp_(x: List[torch.Tensor], y: List[torch.Tensor], a
         copy_stochastic_(x_, x32)
 
 
-def stochastic_lerp_(x: List[torch.Tensor], y: List[torch.Tensor], a: Union[float, int, torch.Tensor]):
+def stochastic_lerp_(x: List[Tensor], y: List[Tensor], a: Union[float, int, Tensor]):
     x, y = list_guard(x), list_guard(y)
-    if not isinstance(a, torch.Tensor):
-        a = torch.empty((), dtype=torch.float32, device=x[0].device).fill_(a)
+    a = scalar_guard(a, x[0])
     _compilable_stochastic_lerp_(x, y, a)
 
 
@@ -365,8 +360,16 @@ def list_guard(x):
     return [x]
 
 
+def scalar_guard(x, ref):
+    if isinstance(x, float):
+        return torch.empty((), dtype=torch.float32, device=ref.device).fill_(x)
+    if isinstance(x, int):
+        return torch.empty((), dtype=torch.int64, device=ref.device).fill_(x)
+    return x
+
+
 @torch.compile(mode='max-autotune-no-cudagraphs', fullgraph=True, dynamic=False)
-def _compilable_stochastic_add_(x: List[torch.Tensor], y: List[torch.Tensor], alpha: Union[float, int, torch.Tensor]):
+def _compilable_stochastic_add_(x: List[Tensor], y: List[Tensor], alpha: Union[float, int, Tensor]):
     for x_, y_ in zip(x, y):
         x32 = promote(x_)
         y32 = promote(y_)
@@ -374,10 +377,9 @@ def _compilable_stochastic_add_(x: List[torch.Tensor], y: List[torch.Tensor], al
         copy_stochastic_(x_, x32)
 
 
-def stochastic_add_(x: List[torch.Tensor], y: List[torch.Tensor], alpha: Union[float, int, torch.Tensor]):
+def stochastic_add_(x: List[Tensor], y: List[Tensor], alpha: Union[float, int, Tensor]):
     x, y = list_guard(x), list_guard(y)
-    if not isinstance(alpha, torch.Tensor):
-        alpha = torch.empty((), dtype=torch.float32, device=x[0].device).fill_(alpha)
+    alpha = scalar_guard(alpha, x[0])
     _compilable_stochastic_add_(x, y, alpha)
 
 
@@ -399,12 +401,12 @@ def compute_ggt(grad, GG, max_precond_dim, precondition_1d, beta):
 def promote(x):
     if isinstance(x, torch.dtype) and x in (torch.bfloat16, torch.float16):
         return torch.float32
-    if isinstance(x, torch.Tensor) and x.dtype in (torch.bfloat16, torch.float16):
+    if isinstance(x, Tensor) and x.dtype in (torch.bfloat16, torch.float16):
         return x.float()
     return x
 
 
-def min_dtype(xs: List[torch.Tensor]):
+def min_dtype(xs: List[Tensor]):
     dtypes = [x.dtype for x in xs]
     for d in (torch.float32, torch.bfloat16, torch.float16):
         if all(x in (d, torch.float32, torch.float64) for x in dtypes):
@@ -470,7 +472,7 @@ class StatefulOptimizer(torch.optim.Optimizer):
         self.fake_groups = {}
         self.use_ema = use_ema
 
-    def key(self, param: torch.Tensor):
+    def key(self, param: Tensor):
         return (param.data_ptr(), tuple(param.shape))
 
     def get_groups(self, group):
@@ -483,7 +485,7 @@ class StatefulOptimizer(torch.optim.Optimizer):
 
         return [self.fake_groups[self.key(p)] for p in group['params']]
 
-    def state_(self, arg: torch.Tensor):
+    def state_(self, arg: Tensor):
         return self.state[self.key(arg)]
 
     def mars_correct_list(self, group, p_list, g_list, mars_gamma, beta):
@@ -515,7 +517,7 @@ class StatefulOptimizer(torch.optim.Optimizer):
             p_views = merge_group(group, p)
             if grad is not None:
                 grad = merge_group(group, grad)
-            if isinstance(p_views, torch.Tensor):
+            if isinstance(p_views, Tensor):
                 yield p_views, grad
                 continue
             if grad is None:
@@ -528,7 +530,7 @@ class StatefulOptimizer(torch.optim.Optimizer):
 
         def _add(x):
             nonlocal total_bytes
-            if isinstance(x, torch.Tensor):
+            if isinstance(x, Tensor):
                 total_bytes += x.numel() * x.element_size()
 
         for group in self.param_groups:
@@ -636,13 +638,14 @@ class ScheduleFree(StatefulOptimizer):
         raise NotImplementedError
 
 
-def copy_stochastic_list_(target: List[torch.Tensor], source: List[torch.Tensor]):
+def copy_stochastic_list_(target: List[Tensor], source: List[Tensor]):
     for t, s in zip(target, source):
         copy_stochastic_(t, s)
 
 
 @torch.compile(mode='max-autotune-no-cudagraphs', fullgraph=True, dynamic=False)
-def _compilable_exp_avg_(exp_avg, exp_avg_sq, grad, grad_projected, beta1, beta2, step):
+def _compilable_exp_avg_(exp_avg: List[Tensor], exp_avg_sq: List[Tensor], grad: List[Tensor],
+                         grad_projected: List[Tensor], beta1: Tensor, beta2: Tensor, step: Tensor):
     beta1 = beta_debias(beta1, step)
     beta2 = beta_debias(beta2, step)
 
@@ -655,21 +658,17 @@ def _compilable_exp_avg_(exp_avg, exp_avg_sq, grad, grad_projected, beta1, beta2
     return denom
 
 
-def exp_avg_(exp_avg: List[torch.Tensor], exp_avg_sq: List[torch.Tensor], grad: List[torch.Tensor],
-             grad_projected: List[torch.Tensor], beta1: float, beta2: float, step: int):
-    if isinstance(beta1, float):
-        beta1 = torch.empty((), dtype=torch.float32, device=exp_avg[0].device).fill_(beta1)
-    if isinstance(beta2, float):
-        beta2 = torch.empty((), dtype=torch.float32, device=exp_avg[0].device).fill_(beta2)
-    if isinstance(step, int):
-        step = torch.empty((), dtype=torch.int32, device=exp_avg[0].device).fill_(step)
+def exp_avg_(exp_avg: List[Tensor], exp_avg_sq: List[Tensor], grad: List[Tensor], grad_projected: List[Tensor],
+             beta1: float, beta2: float, step: int):
+    exp_avg, exp_avg_sq, grad, grad_projected = list_guard(exp_avg), list_guard(exp_avg_sq), list_guard(
+        grad), list_guard(grad_projected)
+    beta1, beta, step = scalar_guard(beta1, exp_avg[0]), scalar_guard(beta2, exp_avg[0]), scalar_guard(step, exp_avg[0])
     denom = _compilable_exp_avg_(exp_avg, exp_avg_sq, grad, grad_projected, beta1, beta2, step)
     return denom
 
 
-# this can be dynamic for most optimizers - just not for PSGD. So, it's disabled for all
-@torch.compile(mode='max-autotune-no-cudagraphs', fullgraph=True)
-def _compilable_copy_stochastic_(target: torch.Tensor, source: torch.Tensor):
+@torch.compile(mode='max-autotune-no-cudagraphs', fullgraph=True, dynamic=False)
+def _compilable_copy_stochastic_(target: Tensor, source: Tensor):
     """Taken as-is from https://github.com/pytorch/pytorch/issues/120376#issuecomment-1974828905"""
     # create a random 16 bit integer
     result = torch.randint_like(source, dtype=torch.int32, low=0, high=(1 << 16))
@@ -684,7 +683,7 @@ def _compilable_copy_stochastic_(target: torch.Tensor, source: torch.Tensor):
     target.copy_(result.view(dtype=torch.float32))
 
 
-def copy_stochastic_(target: torch.Tensor, source: torch.Tensor):
+def copy_stochastic_(target: Tensor, source: Tensor):
     if not is_compiling() and target.data_ptr() == source.data_ptr():
         return
     if target.dtype != torch.bfloat16 or source.dtype not in (torch.float16, torch.float32, torch.float64):
@@ -693,31 +692,31 @@ def copy_stochastic_(target: torch.Tensor, source: torch.Tensor):
 
 
 @torch.compile(mode='max-autotune-no-cudagraphs', fullgraph=True, dynamic=False)
-def _compilable_update_(p, u, decay, add_fn, lr, caution, g):
+def _compilable_update_(p: List[Tensor], u: List[Tensor], decay: Tensor, add_fn: callable, lr: Tensor, caution: bool,
+                        g: List[Optional[Tensor]]):
     u = [u_.view_as(p_) for u_, p_ in zip(u, p)]
-    p32, u32, g32 = [list(map(promote, x)) for x in [p, u, g]]
+    p32, u32 = [list(map(promote, x)) for x in [p, u]]
 
     if decay > 0:
         torch._foreach_mul_(p32, 1 - decay * lr)
 
-    for p32_, u32_, g32_ in zip(p32, u32, g32):  # lr is data-dependent -> can't compile a foreach
+    for p32_, u32_, g_ in zip(p32, u32, g):  # lr is data-dependent -> can't compile a foreach
         if caution:
-            _compilable_cautioning_(g32_, u32_)
-        if add_fn is None:
-            p32_.add_(u32_, alpha=lr)
-        else:
-            add_fn(p32_, u32_, lr)
+            _compilable_cautioning_(promote(g_), u32_)
+        add_fn(p32_, u32_, lr)
 
     copy_stochastic_list_(p, p32)
 
 
-def update_param_(param: List[torch.Tensor], update: List[torch.Tensor], lr: float, decay: float,
-                  add_fn: callable = None, caution: bool = False, grad: List[torch.Tensor] = None):
-    lr_tensor = torch.empty((), dtype=torch.float32, device=param[0].device).fill_(lr)
+def update_param_(param: List[Tensor], update: List[Tensor], lr: float, decay: float, add_fn: callable = None,
+                  caution: bool = False, grad: List[Tensor] = None):
     param, update, grad = list_guard(param), list_guard(update), list_guard(grad)
+    lr = scalar_guard(lr, param[0])
     if not caution:
         grad = [None] * len(param)
-    _compilable_update_(param, update, decay, add_fn, lr_tensor, caution, grad)
+    if add_fn is None:
+        add_fn = stochastic_add_
+    _compilable_update_(param, update, decay, add_fn, lr, caution, grad)
 
 
 def precond_schedule(step, precond_scheduler, rng):
@@ -887,14 +886,14 @@ def psgd_update_precond(Q, exprs, G, precond_lr, tiny, oq, store_triu_as_line):
 
 
 @torch.compile(mode='max-autotune-no-cudagraphs', fullgraph=True, dynamic=False)
-def psgd_precond_grad(Q, exprs, G, inplace: bool = False):
+def psgd_precond_grad(inplace: bool, exprs: str, grad: Tensor, *preconds: Tensor):
     """Precondition gradient G with preconditioner Q."""
-    md = min_dtype(Q)
-    out = torch.einsum(exprs[-1], *[q.conj().to(md) for q in Q], *[q.to(md) for q in Q], G.to(md))
+    md = min_dtype(preconds)
+    out = torch.einsum(exprs, *[q.conj().to(md) for q in preconds], *[q.to(md) for q in preconds], grad.to(md))
     if inplace:
-        set_(G, out)
-        return G
-    return out.to(G.dtype)
+        set_(grad, out)
+        return grad
+    return out.to(grad.dtype)
 
 
 def norm_clip_(x, scale=None):
@@ -957,7 +956,7 @@ def trust_region_clip_(grad, lerp: float = 0.9, scale: float = 1.5):
 
 
 @decorator
-def triu_to_line(Q_list: List[torch.Tensor]):
+def triu_to_line(Q_list: List[Tensor]):
     out = []
     for q in Q_list:
         if q.dim() < 2:
@@ -974,7 +973,7 @@ def _triu_shape(numel):
 
 
 @decorator
-def line_to_triu(Q_list: List[Tuple[Optional[List[int]], torch.Tensor]]):
+def line_to_triu(Q_list: List[Tuple[Optional[List[int]], Tensor]]):
     new = []
     for shape, q in Q_list:
         if shape is not None:
@@ -1031,22 +1030,22 @@ class PSGDBase(StatefulOptimizer):
 
 
 # TODO: Figure out why this sometimes crashes
-# @torch.compile(mode='max-autotune-no-cudagraphs', fullgraph=True, dynamic=False)
-def _compilable_precond_grad_cached_(cached_q, ea, expr, param, lr, weight_decay, clip_fn, caution, grad):
+@torch.compile(mode='max-autotune-no-cudagraphs', fullgraph=True, dynamic=False)
+def _compilable_precond_grad_cached_(ea: Tensor, expr: str, param: Tensor, lr: Tensor, weight_decay: Tensor,
+                                     clip_fn: callable, caution: bool, grad: Optional[Tensor], *cached_q: Tensor):
     md = min_dtype(cached_q + [ea])
     new = torch.einsum(expr, *[c_.to(md) for c_ in cached_q], ea.to(md)).to(torch.float32)
     update_param_([param], clip_fn([new]), lr, weight_decay, caution=caution, grad=grad)
 
 
-def precond_grad_cached_(cached_q: List[torch.Tensor], ea: torch.Tensor, expr: str, param: torch.Tensor, lr: float,
-                         weight_decay: float, clip_fn, caution, grad):
-    if isinstance(lr, float):
-        lr = torch.empty((), dtype=torch.float32, device=param.device).fill_(lr)
-    _compilable_precond_grad_cached_(cached_q, ea, expr, param, lr, weight_decay, clip_fn, caution, grad)
+def precond_grad_cached_(cached_q: List[Tensor], ea: Tensor, expr: str, param: Tensor, lr: float, weight_decay: float,
+                         clip_fn, caution, grad):
+    lr = scalar_guard(lr, param)
+    _compilable_precond_grad_cached_(ea, expr, param, lr, weight_decay, clip_fn, caution, grad, *cached_q)
 
 
 @torch.compile(mode='max-autotune-no-cudagraphs', fullgraph=True, dynamic=False)
-def _compilable_mars_correction_(g, old_g, a):
+def _compilable_mars_correction_(g: Tensor, old_g: Tensor, a: Tensor):
     g_copy = [g_.clone() for g_ in g]
     _compilable_stochastic_lerp_(g, old_g, a)
     copy_stochastic_list_(old_g, g_copy)
@@ -1055,12 +1054,12 @@ def _compilable_mars_correction_(g, old_g, a):
 def mars_correction(g, old_g, beta1, gamma):
     a = -gamma * beta1 / (1 - beta1)
     g, old_g = list_guard(g), list_guard(old_g)
-    a = torch.empty((), dtype=torch.float32, device=g[0].device).fill_(a)
+    a = scalar_guard(a, g[0])
     _compilable_mars_correction_(g, old_g, a)
 
 
 @torch.compile(mode='max-autotune-no-cudagraphs', fullgraph=True, dynamic=False)
-def _compilable_cautioning_(g, update):
+def _compilable_cautioning_(g: Tensor, update: Tensor):
     mask = (g * update) > 0
     update.masked_fill_(~mask, 0)
     scale = mask.numel() / mask.sum().clamp(min=1)

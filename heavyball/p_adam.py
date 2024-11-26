@@ -110,8 +110,8 @@ class ForeachPaLMPAdam(PSGDBase):
 
         for p, Q, g, ea, eas in zip(p_list, Q_triu, grad_list, exp_avg, exp_avg_sq):
             gc = g.clone() if group['caution'] else None
-            psgd_precond_grad(Q, self.state_(p)["exprs"], g, inplace=True)
-            ea = psgd_precond_grad(Q, self.state_(p)["exprs"], ea)
+            psgd_precond_grad(True, self.state_(p)["exprs"][-1], g, *Q)
+            ea = psgd_precond_grad(False, self.state_(p)["exprs"][-1], ea, *Q)
             exp_avg_sq_(eas, g, beta_debias(beta2, group['step']), 1e-8, out=g)
             torch.div(ea, g, out=g)
             """

@@ -101,5 +101,5 @@ class ForeachPurePSGD(PSGDBase):
             if group:
                 q32 = [promote(q_) for q_ in q]
                 self.do_update(group, [p], [g], [q32], precond_lr, [q_orig], store_triu_as_line)
-            psgd_precond_grad(q, self.state_(p)["exprs"], g, inplace=True)
+            psgd_precond_grad(True, self.state_(p)["exprs"][-1], g, *q)
             update_param_([p], self.clip_fn([g]), lr, weight_decay, caution=group['caution'], grad=[g])
