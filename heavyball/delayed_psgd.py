@@ -8,13 +8,13 @@ import torch
 from heavyball.utils import stochastic_lerp_, beta_debias
 
 from .utils import update_param_, warmup, psgd_precond_grad, init_Q_exprs, trust_region_clip_, PSGDBase, \
-    split_p_and_g_in_group, triu_to_line, line_to_triu, promote
+    triu_to_line, line_to_triu, promote
 
 
 @torch.compile(mode='max-autotune-no-cudagraphs', fullgraph=True, dynamic=False)
-def _compilable_psgd_precond_grad_(q, exprs, ea, p, lr, weight_deca, clip_fn):
+def _compilable_psgd_precond_grad_(q, exprs, ea, p, lr, weight_deca, clip_fn, caution, grad):
     new = psgd_precond_grad(q, exprs, ea)
-    update_param_([p], clip_fn([new]), lr, weight_decay)
+    update_param_([p], clip_fn([new]), lr, weight_decay, caution=caution, grad=grad)
 
 
 class ForeachDelayedPSGD(PSGDBase):
@@ -45,7 +45,8 @@ class ForeachDelayedPSGD(PSGDBase):
                  max_size_triangular=2048, min_ndim_triangular=2, memory_save_mode=None,
                  momentum_into_precond_update=True, warmup_steps: int = 1, merge_dims: bool = False,
                  split: bool = False, clip_fn: callable = None, store_triu_as_line: bool = True, foreach: bool = True,
-                 q_dtype='float32', stochastic_schedule: bool = True, storage_dtype: str = 'float32',  #
+                 q_dtype='float32', stochastic_schedule: bool = True, storage_dtype: str = 'float32',
+                 mars: bool = False, caution: bool = False, mars_gamma: float = 0.0025,  #
                  # expert parameters
                  precond_init_scale=1.0, precond_lr=0.1):
         if not 0.0 <= lr:
@@ -62,7 +63,9 @@ class ForeachDelayedPSGD(PSGDBase):
                         min_ndim_triangular=min_ndim_triangular, memory_save_mode=memory_save_mode,
                         momentum_into_precond_update=momentum_into_precond_update, precond_lr=precond_lr,
                         precond_init_scale=precond_init_scale, step=0, warmup_steps=warmup_steps, merge_dims=merge_dims,
-                        split=split, store_triu_as_line=store_triu_as_line, q_dtype=q_dtype, storage_dtype=storage_dtype)
+                        split=split, store_triu_as_line=store_triu_as_line, q_dtype=q_dtype,
+                        storage_dtype=storage_dtype,
+                        caution=caution, mars_gamma=mars_gamma, mars=mars)
         super().__init__(params, defaults, foreach, stochastic_schedule, clip_fn, preconditioner_update_probability)
 
     def _step(self, group):
@@ -82,7 +85,7 @@ class ForeachDelayedPSGD(PSGDBase):
 
         vals = []
 
-        for p, g in split_p_and_g_in_group(group, should_promote=False):
+        for p, g in self.split_p_and_g_in_group(group, should_promote=False, beta1=beta):
             state = self.state_(p)
 
             if 'Q' not in state:
@@ -111,7 +114,8 @@ class ForeachDelayedPSGD(PSGDBase):
             q_orig = Q_list.pop(0)
             ea = exp_avg_list.pop(0)
             q = line_to_triu(q_orig) if store_triu_as_line else q_orig
-            _compilable_psgd_precond_grad_(q, self.state_(p)["exprs"], ea, p, lr, weight_decay, self.clip_fn)
+            _compilable_psgd_precond_grad_(q, self.state_(p)["exprs"], ea, p, lr, weight_decay, self.clip_fn, group['caution'],
+                                           g)
             if should_update:
                 q32 = [promote(q_) for q_ in q]
                 self.do_update(group, [p], [ea if momentum_into_precond_update else g], [q32], precond_lr, [q_orig],

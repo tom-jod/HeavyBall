@@ -3,7 +3,7 @@ import random
 import torch
 
 from .utils import init_preconditioner, update_preconditioner, project, set_, adaptive_gradient_clipping_, exp_avg_sq_, \
-    beta_debias, schedule_free_, warmup, ScheduleFree, precond_schedule, split_p_and_g_in_group, copy_stochastic_list_, \
+    beta_debias, schedule_free_, warmup, ScheduleFree, precond_schedule, copy_stochastic_list_, \
     promote
 
 
@@ -52,15 +52,20 @@ class PrecondScheduleSFPaLMSOAP(ScheduleFree):
                  merge_dims: bool = True, precondition_1d: bool = False, normalize_grads: bool = False,
                  data_format: str = "channels_first", correct_bias: bool = True, warmup_steps: int = 1, r=0.0,
                  weight_lr_power=2.0, gradient_clip_val: float = 0.1, precond_scheduler=(1 / 3, 9), betas=(None, None),
-                 split: bool = False, foreach: bool = True):
+                 split: bool = False, foreach: bool = True, mars: bool = False, caution: bool = False,
+                 mars_gamma: float = 0.0025):
         if betas[0] is not None:
             beta = betas[0]
+
+        assert not caution, "Caution is not implemented in ScheduleFree optimizers"
+
         defaults = {"lr": lr, "beta": beta, "beta2_scale": beta2_scale, "eps": eps, "weight_decay": weight_decay,
                     "precondition_frequency": precondition_frequency, "max_precond_dim": max_precond_dim,
                     "merge_dims": merge_dims, "precondition_1d": precondition_1d, "normalize_grads": normalize_grads,
                     "correct_bias": correct_bias, 'warmup_steps': warmup_steps, 'r': r,
                     'weight_lr_power': weight_lr_power, 'train_mode': True, 'step': -1, 'weight_sum': 0,
-                    'gradient_clip_val': gradient_clip_val, 'precond_scheduler': precond_scheduler, 'split': split}
+                    'gradient_clip_val': gradient_clip_val, 'precond_scheduler': precond_scheduler, 'split': split,
+                    'mars': mars, 'caution': caution, 'mars_gamma': mars_gamma}
         super().__init__(params, defaults, foreach)
         self._data_format = data_format
         self.rng = random.Random(0x120983109)
@@ -87,7 +92,7 @@ class PrecondScheduleSFPaLMSOAP(ScheduleFree):
         # adaptive gradient clipping
         adaptive_gradient_clipping_(p_list, grad, group["gradient_clip_val"], eps=group["eps"])
 
-        for p, g in split_p_and_g_in_group(group):
+        for p, g in self.split_p_and_g_in_group(group, beta1=group['beta']):
             state = self.state_(p)
 
             if "z" not in state:

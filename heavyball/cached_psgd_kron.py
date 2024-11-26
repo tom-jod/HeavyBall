@@ -8,7 +8,7 @@ from typing import Optional
 
 import torch
 
-from .utils import update_param_, warmup, init_Q_exprs, trust_region_clip_, PSGDBase, split_p_and_g_in_group, \
+from .utils import update_param_, warmup, init_Q_exprs, trust_region_clip_, PSGDBase, \
     line_to_triu, triu_to_line, einsum_base, promote, stochastic_lerp_, beta_debias, precond_grad_cached_
 
 
@@ -40,7 +40,8 @@ class ForeachCachedPSGDKron(PSGDBase):
                  momentum_into_precond_update=True, warmup_steps: int = 1, merge_dims: bool = False,
                  split: bool = False, clip_fn: Optional[callable] = None, store_triu_as_line: bool = True,
                  foreach: bool = True, q_dtype='float32', stochastic_schedule: bool = True,
-                 storage_dtype: str = 'float32',  #
+                 storage_dtype: str = 'float32', mars: bool = False, caution: bool = False, mars_gamma: float = 0.0025,
+                 #
                  # expert parameters
                  precond_init_scale=1.0, precond_lr=0.1):
         if not 0.0 <= lr:
@@ -58,7 +59,7 @@ class ForeachCachedPSGDKron(PSGDBase):
                         momentum_into_precond_update=momentum_into_precond_update, precond_lr=precond_lr,
                         precond_init_scale=precond_init_scale, step=0, warmup_steps=warmup_steps, merge_dims=merge_dims,
                         split=split, store_triu_as_line=store_triu_as_line, q_dtype=q_dtype,
-                        storage_dtype=storage_dtype)
+                        storage_dtype=storage_dtype, caution=caution, mars_gamma=mars_gamma, mars=mars)
         super().__init__(params, defaults, foreach, stochastic_schedule, clip_fn, preconditioner_update_probability)
 
     def _step(self, group):
@@ -78,7 +79,7 @@ class ForeachCachedPSGDKron(PSGDBase):
 
         vals = []
 
-        for p, g in split_p_and_g_in_group(group, should_promote=False):
+        for p, g in self.split_p_and_g_in_group(group, should_promote=False, beta1=beta):
             state = self.state_(p)
 
             if 'Q' not in state:
@@ -128,4 +129,5 @@ class ForeachCachedPSGDKron(PSGDBase):
                     else:
                         torch.mul(q_.conj(), q_, out=c_)
 
-            precond_grad_cached_(cached_q, ea, self.state_(p)['cache_expr'], p, lr, weight_decay, self.clip_fn)
+            precond_grad_cached_(cached_q, ea, self.state_(p)['cache_expr'], p, lr, weight_decay, self.clip_fn,
+                                 group['caution'], g)

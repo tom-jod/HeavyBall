@@ -3,7 +3,7 @@ import random
 import torch
 
 from .utils import init_preconditioner, update_preconditioner, project, beta_debias, update_param_, \
-    precond_schedule, set_, split_p_and_g_in_group, StatefulOptimizer, exp_avg_
+    precond_schedule, set_, StatefulOptimizer, exp_avg_
 
 
 class PrecondScheduleForeachSOAP(StatefulOptimizer):
@@ -27,12 +27,13 @@ class PrecondScheduleForeachSOAP(StatefulOptimizer):
                  weight_decay: float = 0.01, precondition_frequency: int = 2, max_precond_dim: int = 2048,  #
                  merge_dims: bool = True, precondition_1d: bool = False, normalize_grads: bool = False,
                  data_format: str = "channels_first", correct_bias: bool = True, warmup_steps: int = 1,
-                 precond_scheduler=(1 / 3, 9), split: bool = False, foreach: bool = True):
+                 precond_scheduler=(1 / 3, 9), split: bool = False, foreach: bool = True, mars: bool = False,
+                 caution: bool = False, mars_gamma: float = 0.0025):
         defaults = {"lr": lr, "betas": betas, "shampoo_beta": shampoo_beta, "eps": eps, "weight_decay": weight_decay,
                     "precondition_frequency": precondition_frequency, "max_precond_dim": max_precond_dim,
                     "merge_dims": merge_dims, "precondition_1d": precondition_1d, "normalize_grads": normalize_grads,
                     "correct_bias": correct_bias, 'warmup_steps': warmup_steps, 'precond_scheduler': precond_scheduler,
-                    'split': split}
+                    'split': split, 'mars': mars, 'caution': caution, 'mars_gamma': mars_gamma}
         super().__init__(params, defaults, foreach)
         self._data_format = data_format
         self.rng = random.Random(0x120983109)
@@ -44,7 +45,7 @@ class PrecondScheduleForeachSOAP(StatefulOptimizer):
         max_precond_dim = group['max_precond_dim']
         precondition_1d = group['precondition_1d']
 
-        for p, g in split_p_and_g_in_group(group):
+        for p, g in self.split_p_and_g_in_group(group, beta1=group['betas'][0]):
             state = self.state_(p)
             step = state['step'] = state.get("step", -1) + 1
 
@@ -75,6 +76,8 @@ class PrecondScheduleForeachSOAP(StatefulOptimizer):
         denom = exp_avg_(exp_avg, exp_avg_sq, grad, grad_projected, beta1, beta2, step_tensor)
 
         update_precond = precond_schedule(step, group['precond_scheduler'], self.rng)
+        step_size = -group["lr"] * min(step / group['warmup_steps'], 1)
+
         for p, g, ea, d in zip(p_list, grad, exp_avg, denom):
             state = self.state_(p)
             # Projecting the exponential moving average of gradients to the eigenbases of Shampoo's preconditioner
@@ -84,10 +87,9 @@ class PrecondScheduleForeachSOAP(StatefulOptimizer):
             # Projecting back the preconditioned (by Adam) exponential moving average of gradients
             # to the original space
             # CANT DO /= HERE AS EXP_AVG MAY POINT TO THE BUFFER
-            set_(d, project(exp_avg_projected / d, state['Q'], True))
+            precond = project(exp_avg_projected / d, state['Q'], True)
 
             update_preconditioner(g, state, max_precond_dim, precondition_1d, old_debiased2, update_precond)
 
-        # Why does this have to be rebiased here?
-        step_size = -group["lr"] * min(step / group['warmup_steps'], 1)
-        update_param_(p_list, denom, step_size, group["weight_decay"])
+            update_param_([p], [precond], step_size, group["weight_decay"], caution=group['caution'], grad=[g])
+

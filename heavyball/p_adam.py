@@ -5,10 +5,10 @@ Source available at https://github.com/evanatyourservice/kron_torch/blob/97a2b5e
 """
 
 import torch
-
 from heavyball.utils import triu_to_line, line_to_triu, identity, stochastic_lerp_
+
 from .utils import update_param_, warmup, psgd_precond_grad, init_Q_exprs, PSGDBase, exp_avg_sq_, beta_debias, \
-    split_p_and_g_in_group, promote
+    promote
 
 
 class ForeachPaLMPAdam(PSGDBase):
@@ -39,7 +39,8 @@ class ForeachPaLMPAdam(PSGDBase):
                  momentum_into_precond_update=True, warmup_steps: int = 1, betas=(None, None), beta: float = 0.9,
                  beta2_scale: float = 0.8, merge_dims: bool = False, split: bool = False, clip_fn: callable = None,
                  store_triu_as_line: bool = True, foreach: bool = True, q_dtype='float32',
-                 stochastic_schedule: bool = True,  storage_dtype:str ='float32',#
+                 stochastic_schedule: bool = True, storage_dtype: str = 'float32', mars: bool = False,
+                 caution: bool = False, mars_gamma: float = 0.0025,  #
                  # expert parameters
                  precond_init_scale=1.0, precond_lr=0.1):
         if not 0.0 <= lr:
@@ -57,7 +58,8 @@ class ForeachPaLMPAdam(PSGDBase):
                         momentum_into_precond_update=momentum_into_precond_update, precond_lr=precond_lr,
                         precond_init_scale=precond_init_scale, step=0, warmup_steps=warmup_steps, beta=beta,
                         beta2_scale=beta2_scale, merge_dims=merge_dims, split=split,
-                        store_triu_as_line=store_triu_as_line, q_dtype=q_dtype, storage_dtype=storage_dtype)
+                        store_triu_as_line=store_triu_as_line, q_dtype=q_dtype, storage_dtype=storage_dtype,
+                        mars=mars, caution=caution, mars_gamma=mars_gamma)
         super().__init__(params, defaults, foreach, stochastic_schedule, clip_fn, preconditioner_update_probability)
 
     def _step(self, group):
@@ -75,7 +77,7 @@ class ForeachPaLMPAdam(PSGDBase):
 
         vals = []
 
-        for p, g in split_p_and_g_in_group(group, should_promote=False):
+        for p, g in self.split_p_and_g_in_group(group, should_promote=False, beta1=group['beta']):
             state = self.state_(p)
 
             if 'Q' not in state:
@@ -107,6 +109,7 @@ class ForeachPaLMPAdam(PSGDBase):
         lr = -warmup(lr, group['step'], group['warmup_steps'])
 
         for p, Q, g, ea, eas in zip(p_list, Q_triu, grad_list, exp_avg, exp_avg_sq):
+            gc = g.clone() if group['caution'] else None
             psgd_precond_grad(Q, self.state_(p)["exprs"], g, inplace=True)
             ea = psgd_precond_grad(Q, self.state_(p)["exprs"], ea)
             exp_avg_sq_(eas, g, beta_debias(beta2, group['step']), 1e-8, out=g)
@@ -115,5 +118,4 @@ class ForeachPaLMPAdam(PSGDBase):
             divide by g here, because g == denom (from exp_avg_sq_(out=g)), avoids denom allocation
             divide into g so we can deallocate ea, avoids one allocation (-> less memory than equivalent foreach)
             """
-            update_param_([p], self.clip_fn([g]), lr, weight_decay)
-
+            update_param_([p], self.clip_fn([g]), lr, weight_decay, caution=group['caution'], grad=gc)

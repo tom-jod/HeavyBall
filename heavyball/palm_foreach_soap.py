@@ -1,8 +1,7 @@
 import torch
 
 from .utils import init_preconditioner, update_preconditioner, project, beta_debias, exp_avg_sq_, update_param_, set_, \
-    split_p_and_g_in_group, StatefulOptimizer, exp_avg_
-
+    StatefulOptimizer, exp_avg_
 
 
 class PaLMForeachSOAP(StatefulOptimizer):
@@ -33,14 +32,15 @@ class PaLMForeachSOAP(StatefulOptimizer):
                  max_precond_dim: int = 2048,  #
                  merge_dims: bool = True, precondition_1d: bool = False, normalize_grads: bool = False,
                  data_format: str = "channels_first", correct_bias: bool = True, warmup_steps: int = 1,
-                 beta2_scale: float = 0.8, split: bool = False, foreach: bool = True):
+                 beta2_scale: float = 0.8, split: bool = False, foreach: bool = True, mars: bool = False,
+                 caution: bool = False, mars_gamma: float = 0.0025):
         if betas[0] is not None:
             beta = betas[0]
         defaults = {"lr": lr, "beta": beta, "shampoo_beta": shampoo_beta, "eps": eps, "weight_decay": weight_decay,
                     "precondition_frequency": precondition_frequency, "max_precond_dim": max_precond_dim,
                     "merge_dims": merge_dims, "precondition_1d": precondition_1d, "normalize_grads": normalize_grads,
                     "correct_bias": correct_bias, 'warmup_steps': warmup_steps, 'beta2_scale': beta2_scale,
-                    'split': split}
+                    'split': split, 'mars': mars, 'caution': caution, 'mars_gamma': mars_gamma}
         super().__init__(params, defaults, foreach)
         self._data_format = data_format
 
@@ -51,7 +51,7 @@ class PaLMForeachSOAP(StatefulOptimizer):
         max_precond_dim = group['max_precond_dim']
         precondition_1d = group['precondition_1d']
 
-        for p, g in split_p_and_g_in_group(group):
+        for p, g in self.split_p_and_g_in_group(group, beta1=group['beta']):
             state = self.state_(p)
             step = state['step'] = state.get("step", -1) + 1
 
@@ -82,6 +82,7 @@ class PaLMForeachSOAP(StatefulOptimizer):
         beta2 = torch.empty((), dtype=torch.float32, device=p_list[0].device).fill_(beta2)
         step_tensor = torch.empty((), dtype=torch.int32, device=p_list[0].device).fill_(step)
         denom = exp_avg_(exp_avg, exp_avg_sq, grad, grad_projected, beta1, beta2, step_tensor)
+        step_size = -group["lr"] * min(step / group['warmup_steps'], 1)
 
         for p, g, ea, d in zip(p_list, grad, exp_avg, denom):
             state = self.state_(p)
@@ -92,11 +93,9 @@ class PaLMForeachSOAP(StatefulOptimizer):
             # Projecting back the preconditioned (by Adam) exponential moving average of gradients
             # to the original space
             # CANT DO /= HERE AS EXP_AVG MAY POINT TO THE BUFFER
-            set_(d, project(exp_avg_projected / d, state['Q'], True))
+            precond = project(exp_avg_projected / d, state['Q'], True)
 
             update_preconditioner(g, state, max_precond_dim, precondition_1d, old_debiased2,
                                   step > 0 and step % group['precondition_frequency'] == 0)
 
-        # Why does this have to be rebiased here?
-        step_size = -group["lr"] * min(step / group['warmup_steps'], 1)
-        update_param_(p_list, denom, step_size, group["weight_decay"])
+            update_param_([p], [precond], step_size, group["weight_decay"], caution=group['caution'], grad=[g])

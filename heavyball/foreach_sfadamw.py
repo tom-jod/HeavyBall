@@ -21,13 +21,17 @@ def _compilable_step_(y, grad, exp_avg_sq, z, beta1, beta2, step, ckp1, eps, dec
 
     copy_stochastic_list_(exp_avg_sq, exp_avg_sq32)
 
+
 class ForeachSFAdamW(ScheduleFree):
     def __init__(self, params, lr=0.0025, betas=(0.9, 0.99), eps=1e-8, weight_decay=0, warmup_steps=0, r=0.0,
-                 weight_lr_power=2.0, foreach: bool = True, storage_dtype: str = 'float32'):
+                 weight_lr_power=2.0, foreach: bool = True, storage_dtype: str = 'float32', mars: bool = False,
+                 caution: bool = False, mars_gamma: float = 0.0025):
+
+        assert not caution, "Caution not implemented for SFAdamW"
 
         defaults = dict(lr=lr, betas=betas, eps=eps, r=r, k=0, warmup_steps=warmup_steps, train_mode=True,
                         weight_sum=0.0, lr_max=-1.0, weight_lr_power=weight_lr_power, weight_decay=weight_decay,
-                        foreach=foreach, storage_dtype=storage_dtype)
+                        foreach=foreach, storage_dtype=storage_dtype, mars=mars, caution=caution, mars_gamma=mars_gamma)
         super().__init__(params, defaults, foreach)
 
     def _step(self, group):
@@ -52,6 +56,9 @@ class ForeachSFAdamW(ScheduleFree):
 
         y, grad, exp_avg_sq, z = zip(*[(p.data, p.grad, self.state_(p)['exp_avg_sq'], self.state_(p)['z'])  #
                                        for p in active_p])
+
+        if group['mars']:
+            self.mars_correct_list(group, y, grad, group['mars_gamma'], group['betas'][0])
 
         lr = warmup(group['lr'], k + 1, group['warmup_steps'])
         ckp1, group['weight_sum'] = get_ckp1(lr, group['weight_lr_power'], group['weight_sum'], group['r'], k + 1)

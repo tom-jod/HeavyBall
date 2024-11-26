@@ -142,17 +142,25 @@ def beta_debias(beta, step):
 
 
 @torch.compile(mode='max-autotune-no-cudagraphs', fullgraph=True, dynamic=False)
-def exp_avg_sq_(state, grad, beta2, eps, out=None):
-    if isinstance(state, torch.Tensor):
-        state.mul_(beta2).addcmul_(grad, grad, value=1 - beta2)
-        return torch.sqrt(state, out=out).clamp_(min=eps)
-
+def _compilable_exp_avg_sq_(state, grad, beta2, eps, out=None):
     torch._foreach_mul_(state, beta2)
     [s.addcmul_(g, g, value=1 - beta2) for s, g in zip(state, grad)]
     denom = torch._foreach_sqrt(state)
-    torch._foreach_maximum_(denom, eps)
+    [denom.clamp_(min=eps) for denom in denom]
+    if out is not None:
+        copy_stochastic_list_(out, denom)
+        return out
+
     return denom
 
+
+def exp_avg_sq_(state, grad, beta2, eps, out=None):
+    state, grad = list_guard(state), list_guard(grad)
+    if not isinstance(beta2, torch.Tensor):
+        beta2 = torch.empty((), dtype=torch.float32, device=state[0].device).fill_(beta2)
+    if not isinstance(eps, torch.Tensor):
+        eps = torch.empty((), dtype=torch.float32, device=state[0].device).fill_(eps)
+    return _compilable_exp_avg_sq_(state, grad, beta2, eps, out)
 
 def adaptive_gradient_clipping_(parameters: List[torch.Tensor], gradients: List[torch.Tensor], clip_val: float,
                                 minimum: float = 1e-3, eps: float = 1e-8):
@@ -168,12 +176,19 @@ def adaptive_gradient_clipping_(parameters: List[torch.Tensor], gradients: List[
     torch._foreach_mul_(gradients, p_norm)
 
 
+def is_compiling():
+    try:
+        return torch.compiler.is_compiling()
+    except AttributeError:
+        return True
+
+
 def set_(dst: torch.Tensor, src: torch.Tensor):
-    if not torch.compiler.is_compiling() and src.data_ptr() == dst.data_ptr():
+    if not is_compiling() and src.data_ptr() == dst.data_ptr():
         return
     if src.shape != dst.shape:
         src = src.reshape_as(dst)
-    if not torch.compiler.is_compiling() and src.is_contiguous() and dst.is_contiguous() and src.dtype == dst.dtype:
+    if not is_compiling() and src.is_contiguous() and dst.is_contiguous() and src.dtype == dst.dtype:
         dst.set_(src)
     else:
         dst.copy_(src)
@@ -338,9 +353,16 @@ def _compilable_stochastic_lerp_(x: List[torch.Tensor], y: List[torch.Tensor], a
 
 
 def stochastic_lerp_(x: List[torch.Tensor], y: List[torch.Tensor], a: Union[float, int, torch.Tensor]):
+    x, y = list_guard(x), list_guard(y)
     if not isinstance(a, torch.Tensor):
         a = torch.empty((), dtype=torch.float32, device=x[0].device).fill_(a)
     _compilable_stochastic_lerp_(x, y, a)
+
+
+def list_guard(x):
+    if isinstance(x, (list, tuple)):
+        return x
+    return [x]
 
 
 @torch.compile(mode='max-autotune-no-cudagraphs', fullgraph=True, dynamic=False)
@@ -353,6 +375,7 @@ def _compilable_stochastic_add_(x: List[torch.Tensor], y: List[torch.Tensor], al
 
 
 def stochastic_add_(x: List[torch.Tensor], y: List[torch.Tensor], alpha: Union[float, int, torch.Tensor]):
+    x, y = list_guard(x), list_guard(y)
     if not isinstance(alpha, torch.Tensor):
         alpha = torch.empty((), dtype=torch.float32, device=x[0].device).fill_(alpha)
     _compilable_stochastic_add_(x, y, alpha)
@@ -463,6 +486,43 @@ class StatefulOptimizer(torch.optim.Optimizer):
     def state_(self, arg: torch.Tensor):
         return self.state[self.key(arg)]
 
+    def mars_correct_list(self, group, p_list, g_list, mars_gamma, beta):
+        for p, g in zip(p_list, g_list):
+            state = self.state_(p)
+            if 'mars_old_grad' not in state:
+                state['mars_old_grad'] = torch.zeros_like(g)
+        old_gs = [self.state_(p)['mars_old_grad'] for p in p_list]
+        mars_correction(g_list, old_gs, mars_gamma, beta)
+
+    def split_p_and_g_in_group(self, group: dict, skip_none: bool = True, should_promote: bool = True,
+                               beta1: float = -1.0):
+        for p in group["params"]:
+            if skip_none and p.grad is None:
+                continue
+
+            if p.grad is None:
+                grad = None
+            else:
+                if should_promote:
+                    grad = promote(p.grad)
+                else:
+                    grad = p.grad
+                if beta1 >= 0 and group.get('mars', False):
+                    self.mars_correct_list(group, [p], [grad], group['mars_gamma'], beta1)
+
+                p.grad = None
+
+            p_views = merge_group(group, p)
+            if grad is not None:
+                grad = merge_group(group, grad)
+            if isinstance(p_views, torch.Tensor):
+                yield p_views, grad
+                continue
+            if grad is None:
+                yield from zip(p_views, [None] * len(p_views))
+                continue
+            yield from zip(p_views, grad)
+
     def state_size(self) -> int:
         total_bytes = 0
 
@@ -472,7 +532,7 @@ class StatefulOptimizer(torch.optim.Optimizer):
                 total_bytes += x.numel() * x.element_size()
 
         for group in self.param_groups:
-            for p, _ in split_p_and_g_in_group(group, skip_none=False):
+            for p, _ in self.split_p_and_g_in_group(group, skip_none=False):
                 tree_map(_add, self.state_(p))
         return total_bytes
 
@@ -625,7 +685,7 @@ def _compilable_copy_stochastic_(target: torch.Tensor, source: torch.Tensor):
 
 
 def copy_stochastic_(target: torch.Tensor, source: torch.Tensor):
-    if not torch.compiler.is_compiling() and target.data_ptr() == source.data_ptr():
+    if not is_compiling() and target.data_ptr() == source.data_ptr():
         return
     if target.dtype != torch.bfloat16 or source.dtype not in (torch.float16, torch.float32, torch.float64):
         set_(target, source)
@@ -633,14 +693,16 @@ def copy_stochastic_(target: torch.Tensor, source: torch.Tensor):
 
 
 @torch.compile(mode='max-autotune-no-cudagraphs', fullgraph=True, dynamic=False)
-def _compilable_update_(p, u, decay, add_fn, lr):
+def _compilable_update_(p, u, decay, add_fn, lr, caution, g):
     u = [u_.view_as(p_) for u_, p_ in zip(u, p)]
-    p32, u32 = [list(map(promote, x)) for x in [p, u]]
+    p32, u32, g32 = [list(map(promote, x)) for x in [p, u, g]]
 
     if decay > 0:
         torch._foreach_mul_(p32, 1 - decay * lr)
 
-    for p32_, u32_ in zip(p32, u32):  # lr is data-dependent -> can't compile a foreach
+    for p32_, u32_, g32_ in zip(p32, u32, g32):  # lr is data-dependent -> can't compile a foreach
+        if caution:
+            _compilable_cautioning_(g32_, u32_)
         if add_fn is None:
             p32_.add_(u32_, alpha=lr)
         else:
@@ -650,9 +712,12 @@ def _compilable_update_(p, u, decay, add_fn, lr):
 
 
 def update_param_(param: List[torch.Tensor], update: List[torch.Tensor], lr: float, decay: float,
-                  add_fn: callable = None):
+                  add_fn: callable = None, caution: bool = False, grad: List[torch.Tensor] = None):
     lr_tensor = torch.empty((), dtype=torch.float32, device=param[0].device).fill_(lr)
-    _compilable_update_(param, update, decay, add_fn, lr_tensor)
+    param, update, grad = list_guard(param), list_guard(update), list_guard(grad)
+    if not caution:
+        grad = [None] * len(param)
+    _compilable_update_(param, update, decay, add_fn, lr_tensor, caution, grad)
 
 
 def precond_schedule(step, precond_scheduler, rng):
@@ -964,19 +1029,46 @@ class PSGDBase(StatefulOptimizer):
                     else:
                         psgd_balance_Q(q)
 
-#TODO: Figure out why this sometimes crashes
-#@torch.compile(mode='max-autotune-no-cudagraphs', fullgraph=True, dynamic=False)
-def _compilable_precond_grad_cached_(cached_q, ea, expr, param, lr, weight_decay, clip_fn):
+
+# TODO: Figure out why this sometimes crashes
+# @torch.compile(mode='max-autotune-no-cudagraphs', fullgraph=True, dynamic=False)
+def _compilable_precond_grad_cached_(cached_q, ea, expr, param, lr, weight_decay, clip_fn, caution, grad):
     md = min_dtype(cached_q + [ea])
     new = torch.einsum(expr, *[c_.to(md) for c_ in cached_q], ea.to(md)).to(torch.float32)
-    update_param_([param], clip_fn([new]), lr, weight_decay)
+    update_param_([param], clip_fn([new]), lr, weight_decay, caution=caution, grad=grad)
 
 
 def precond_grad_cached_(cached_q: List[torch.Tensor], ea: torch.Tensor, expr: str, param: torch.Tensor, lr: float,
-                         weight_decay: float, clip_fn):
+                         weight_decay: float, clip_fn, caution, grad):
     if isinstance(lr, float):
         lr = torch.empty((), dtype=torch.float32, device=param.device).fill_(lr)
-    _compilable_precond_grad_cached_(cached_q, ea, expr, param, lr, weight_decay, clip_fn)
+    _compilable_precond_grad_cached_(cached_q, ea, expr, param, lr, weight_decay, clip_fn, caution, grad)
+
+
+@torch.compile(mode='max-autotune-no-cudagraphs', fullgraph=True, dynamic=False)
+def _compilable_mars_correction_(g, old_g, a):
+    g_copy = [g_.clone() for g_ in g]
+    _compilable_stochastic_lerp_(g, old_g, a)
+    copy_stochastic_list_(old_g, g_copy)
+
+
+def mars_correction(g, old_g, beta1, gamma):
+    a = -gamma * beta1 / (1 - beta1)
+    g, old_g = list_guard(g), list_guard(old_g)
+    a = torch.empty((), dtype=torch.float32, device=g[0].device).fill_(a)
+    _compilable_mars_correction_(g, old_g, a)
+
+
+@torch.compile(mode='max-autotune-no-cudagraphs', fullgraph=True, dynamic=False)
+def _compilable_cautioning_(g, update):
+    mask = (g * update) > 0
+    update.masked_fill_(~mask, 0)
+    scale = mask.numel() / mask.sum().clamp(min=1)
+    update.mul_(scale)
+
+
+def caution(g, update):
+    _compilable_cautioning_(g, update)
 
 
 def precond_update_prob_schedule(max_prob=1.0, min_prob=0.03, decay=0.001, flat_start=250):
@@ -1013,29 +1105,3 @@ def merge_group(group, *tensors):
         append_or_extend(out, dim_merger(t, group['max_size_triangular'] if 'max_size_triangular' in group else group[
             'max_precond_dim'], group.get('split', False)))
     return out
-
-
-def split_p_and_g_in_group(group: dict, skip_none: bool = True, should_promote: bool = True):
-    for p in group["params"]:
-        if skip_none and p.grad is None:
-            continue
-
-        if p.grad is None:
-            grad = None
-        else:
-            if should_promote:
-                grad = promote(p.grad)
-            else:
-                grad = p.grad
-            p.grad = None
-
-        p_views = merge_group(group, p)
-        if grad is not None:
-            grad = merge_group(group, grad)
-        if isinstance(p_views, torch.Tensor):
-            yield p_views, grad
-            continue
-        if grad is None:
-            yield from zip(p_views, [None] * len(p_views))
-            continue
-        yield from zip(p_views, grad)

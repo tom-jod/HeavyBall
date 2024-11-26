@@ -1,9 +1,10 @@
 import random
 
 import torch
+from heavyball.utils import mars_correction
 
 from .utils import init_preconditioner, update_preconditioner, project, set_, adaptive_gradient_clipping_, exp_avg_sq_, \
-    beta_debias, schedule_free_, warmup, ScheduleFree, split_p_and_g_in_group, copy_stochastic_list_, promote
+    beta_debias, schedule_free_, warmup, ScheduleFree, copy_stochastic_list_, promote
 
 
 @torch.compile(mode='max-autotune-no-cudagraphs', fullgraph=True, dynamic=False)
@@ -44,15 +45,19 @@ class SFPaLMForeachSOAP(ScheduleFree):
                  merge_dims: bool = True, precondition_1d: bool = False, normalize_grads: bool = False,
                  data_format: str = "channels_first", correct_bias: bool = True, warmup_steps: int = 1, r=0.0,
                  weight_lr_power=2.0, gradient_clip_val: float = 0.1, betas=(None, None), split: bool = False,
-                 foreach: bool = True):
+                 foreach: bool = True, mars: bool = False, caution: bool = False, mars_gamma: float = 0.0025):
         if betas[0] is not None:
             beta = betas[0]
+
+        assert not caution, "Caution is not implemented in ScheduleFree optimizers"
+
         defaults = {"lr": lr, "beta": beta, "beta2_scale": beta2_scale, "eps": eps, "weight_decay": weight_decay,
                     "precondition_frequency": precondition_frequency, "max_precond_dim": max_precond_dim,
                     "merge_dims": merge_dims, "precondition_1d": precondition_1d, "normalize_grads": normalize_grads,
                     "correct_bias": correct_bias, 'warmup_steps': warmup_steps, 'r': r,
                     'weight_lr_power': weight_lr_power, 'train_mode': True, 'step': -1,
-                    'gradient_clip_val': gradient_clip_val, 'weight_sum': 0, 'split': split}
+                    'gradient_clip_val': gradient_clip_val, 'weight_sum': 0, 'split': split, 'mars': mars,
+                    'caution': caution, 'mars_gamma': mars_gamma}
         super().__init__(params, defaults, foreach)
         self._data_format = data_format
         self.rng = random.Random(0x120983109)
@@ -61,6 +66,7 @@ class SFPaLMForeachSOAP(ScheduleFree):
         vals = []
         max_precond_dim = group['max_precond_dim']
         precondition_1d = group['precondition_1d']
+        mars = group['mars']
 
         step = group['step'] = group.get("step", 0) + 1
 
@@ -79,12 +85,14 @@ class SFPaLMForeachSOAP(ScheduleFree):
 
         vals = []
 
-        for p, g in split_p_and_g_in_group(group):
+        for p, g in self.split_p_and_g_in_group(group, beta1=group['beta']):
             state = self.state_(p)
 
             if "z" not in state:
                 state["z"] = torch.clone(p).float()
                 state["exp_avg_sq"] = torch.zeros_like(g, dtype=torch.float32)
+                if mars:
+                    state['mars_prev_grad'] = g.clone()
                 init_preconditioner(g, state, max_precond_dim, precondition_1d)
                 update_preconditioner(g, state, max_precond_dim, precondition_1d, 0, True)
                 continue  # first step is skipped so that we never use the current gradients in the projection.

@@ -5,9 +5,9 @@ Source available at https://github.com/evanatyourservice/kron_torch/blob/97a2b5e
 """
 
 import torch
-
 from heavyball.utils import identity
-from .utils import update_param_, warmup, psgd_precond_grad, init_Q_exprs, PSGDBase, split_p_and_g_in_group, \
+
+from .utils import update_param_, warmup, psgd_precond_grad, init_Q_exprs, PSGDBase, \
     line_to_triu, triu_to_line, promote
 
 
@@ -38,7 +38,8 @@ class ForeachPurePSGD(PSGDBase):
                  max_size_triangular=2048, min_ndim_triangular=2, memory_save_mode=None,
                  momentum_into_precond_update=True, warmup_steps: int = 1, merge_dims: bool = False,
                  split: bool = False, clip_fn: callable = None, store_triu_as_line: bool = True, foreach: bool = True,
-                 q_dtype='float32', stochastic_schedule: bool = True,  #
+                 q_dtype='float32', stochastic_schedule: bool = True, mars: bool = False, caution: bool = False,
+                 mars_gamma: float = 0.0025,  #
                  # expert parameters
                  precond_init_scale=1.0, precond_lr=0.1):
         if not 0.0 <= lr:
@@ -49,11 +50,14 @@ class ForeachPurePSGD(PSGDBase):
         if clip_fn is None:
             clip_fn = identity
 
+        assert not mars, "MARS is not supported in this optimizer"
+
         defaults = dict(lr=lr, weight_decay=weight_decay, max_size_triangular=max_size_triangular,
                         min_ndim_triangular=min_ndim_triangular, memory_save_mode=memory_save_mode,
                         momentum_into_precond_update=momentum_into_precond_update, precond_lr=precond_lr,
                         precond_init_scale=precond_init_scale, step=0, warmup_steps=warmup_steps, merge_dims=merge_dims,
-                        split=split, store_triu_as_line=store_triu_as_line, q_dtype=q_dtype)
+                        split=split, store_triu_as_line=store_triu_as_line, q_dtype=q_dtype, mars=mars, caution=caution,
+                        mars_gamma=mars_gamma)
         super().__init__(params, defaults, foreach, stochastic_schedule, clip_fn, preconditioner_update_probability)
 
     def _step(self, group):
@@ -70,7 +74,7 @@ class ForeachPurePSGD(PSGDBase):
 
         vals = []
 
-        for p, g in split_p_and_g_in_group(group, should_promote=False):
+        for p, g in self.split_p_and_g_in_group(group, should_promote=False, beta1=0.0):
             state = self.state_(p)
 
             if 'Q' not in state:
@@ -98,4 +102,4 @@ class ForeachPurePSGD(PSGDBase):
                 q32 = [promote(q_) for q_ in q]
                 self.do_update(group, [p], [g], [q32], precond_lr, [q_orig], store_triu_as_line)
             psgd_precond_grad(q, self.state_(p)["exprs"], g, inplace=True)
-            update_param_([p], self.clip_fn([g]), lr, weight_decay)
+            update_param_([p], self.clip_fn([g]), lr, weight_decay, caution=group['caution'], grad=[g])
