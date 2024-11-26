@@ -686,9 +686,9 @@ def _compilable_copy_stochastic_(target: Tensor, source: Tensor):
 def copy_stochastic_(target: Tensor, source: Tensor):
     if not is_compiling() and target.data_ptr() == source.data_ptr():
         return
-    if target.dtype != torch.bfloat16 or source.dtype not in (torch.float16, torch.float32, torch.float64):
-        set_(target, source)
-    _compilable_copy_stochastic_(target, source)
+    if target.dtype == torch.bfloat16 and source.dtype in (torch.float16, torch.float32, torch.float64):
+        _compilable_copy_stochastic_(target, source.float())
+    set_(target, source)
 
 
 @torch.compile(mode='max-autotune-no-cudagraphs', fullgraph=True, dynamic=False)
