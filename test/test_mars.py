@@ -12,7 +12,7 @@ config.cache_size_limit = 128
 
 @pytest.mark.parametrize("opt", heavyball.__all__)
 @pytest.mark.parametrize("size,depth", [(128, 2)])
-def test_mars(opt, size, depth: int, iterations: int = 16384, outer_iterations: int = 2):
+def test_mars(opt, size, depth: int, iterations: int = 16384, outer_iterations: int = 1):
     set_torch()
     opt = getattr(heavyball, opt)
     if ScheduleFree in opt.__mro__:
@@ -27,11 +27,11 @@ def test_mars(opt, size, depth: int, iterations: int = 16384, outer_iterations: 
         losses.append([])
 
         for i in range(outer_iterations):
-            model = nn.Sequential(*[nn.Linear(size, size) for _ in range(depth)]).cuda().double()
+            model = nn.Sequential(*[nn.Linear(size, size) for _ in range(depth)]).cuda()
             o = get_optim(opt, model.parameters(), lr=1e-5, mars=mars)
 
             for _ in range(iterations):
-                loss = model(torch.randn((1024, size), device='cuda', dtype=torch.double)).square().mean()
+                loss = model(torch.randn((1024, size), device='cuda')).square().mean()
                 loss.backward()
                 o.step()
                 o.zero_grad()

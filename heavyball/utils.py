@@ -1035,7 +1035,7 @@ def _compilable_precond_grad_cached_(ea: Tensor, expr: str, param: Tensor, lr: T
                                      clip_fn: callable, caution: bool, grad: Optional[Tensor], *cached_q: Tensor):
     md = min_dtype(cached_q + [ea])
     new = torch.einsum(expr, *[c_.to(md) for c_ in cached_q], ea.to(md)).to(torch.float32)
-    update_param_([param], clip_fn([new]), lr, weight_decay, caution=caution, grad=grad)
+    _compilable_update_([param], clip_fn([new]), weight_decay, stochastic_add_, lr, caution, [grad])
 
 
 def precond_grad_cached_(cached_q: List[Tensor], ea: Tensor, expr: str, param: Tensor, lr: float, weight_decay: float,
