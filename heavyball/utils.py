@@ -1129,3 +1129,12 @@ def merge_group(group, *tensors):
         append_or_extend(out, dim_merger(t, group['max_size_triangular'] if 'max_size_triangular' in group else group[
             'max_precond_dim'], group.get('split', False)))
     return out
+
+def hook_optimizer_into_model(model, optimizer, *args, **kwargs):
+    def _step(p: Tensor, o: torch.optim.Optimizer):
+        o.step()
+        o.zero_grad()
+
+
+    for p in model.parameters():
+        p.register_post_accumulate_grad_hook(functools.partial(_step, o=optimizer([p], *args, **kwargs)))
