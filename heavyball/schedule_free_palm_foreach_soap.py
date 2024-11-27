@@ -90,7 +90,7 @@ class SFPaLMForeachSOAP(ScheduleFree):
 
             if "z" not in state:
                 state["z"] = torch.clone(p).float()
-                state["exp_avg_sq"] = torch.zeros_like(g, dtype=torch.float32)
+                state["exp_avg_sq"] = torch.zeros_like(g, dtype=torch.float32, memory_format=torch.preserve_format)
                 if mars:
                     state['mars_prev_grad'] = g.clone()
                 init_preconditioner(g, state, max_precond_dim, precondition_1d)

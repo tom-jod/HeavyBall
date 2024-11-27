@@ -58,8 +58,8 @@ class PrecondSchedulePaLMForeachSOAP(StatefulOptimizer):
             step = state['step'] = state.get("step", -1) + 1
 
             if "exp_avg" not in state:
-                state["exp_avg"] = torch.zeros_like(g, dtype=torch.float32)
-                state["exp_avg_sq"] = torch.zeros_like(g, dtype=torch.float32)
+                state["exp_avg"] = torch.zeros_like(g, dtype=torch.float32, memory_format=torch.preserve_format)
+                state["exp_avg_sq"] = torch.zeros_like(g, dtype=torch.float32, memory_format=torch.preserve_format)
                 init_preconditioner(g, state, max_precond_dim, precondition_1d)
                 update_preconditioner(g, state, max_precond_dim, precondition_1d, 0, True)
                 continue  # first step is skipped so that we never use the current gradients in the projection.

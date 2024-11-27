@@ -45,8 +45,8 @@ class ForeachAdamW(StatefulOptimizer):
 
         for p in active_p:
             if 'exp_avg' not in self.state_(p):
-                self.state_(p)['exp_avg'] = torch.zeros_like(p.data, dtype=storage_dtype)
-                self.state_(p)['exp_avg_sq'] = torch.zeros_like(p.data, dtype=storage_dtype)
+                self.state_(p)['exp_avg'] = torch.zeros_like(p.data, dtype=storage_dtype, memory_format=torch.preserve_format)
+                self.state_(p)['exp_avg_sq'] = torch.zeros_like(p.data, dtype=storage_dtype, memory_format=torch.preserve_format)
 
         y, grad, exp_avg_sq, exp_avg = zip(
             *[(p.data, p.grad, self.state_(p)['exp_avg_sq'], self.state_(p)['exp_avg']) for p in active_p])

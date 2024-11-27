@@ -60,11 +60,11 @@ def warmup(lr: float, step: int, warmup_steps: int):
 @decorator_knowngood
 def _compilable_schedule_free_(p: List[Tensor], z: List[Tensor], ckp1: Tensor, grad: List[Tensor], lr: Tensor,
                                beta1: Tensor):
-    p32, z32, g32 = [promote(x) for x in (p, z, grad)]
+    p32, z32, g32 = [list(map(promote, x)) for x in (p, z, grad)]
     for p_, z_, g_ in zip(p32, z32, g32):
         p_.lerp_(z_, ckp1)
         p_.add_(g_, alpha=lr * (beta1 * (1 - ckp1) - 1))
-        z_.add(g_, alpha=-lr)
+        z_.add_(g_, alpha=-lr)
     copy_stochastic_list_(p, p32)
     copy_stochastic_list_(z, z32)
 

@@ -83,7 +83,7 @@ class ForeachCachedPSGDKron(PSGDBase):
             state = self.state_(p)
 
             if 'Q' not in state:
-                state["exp_avg"] = torch.zeros_like(g, dtype=storage_dtype)
+                state["exp_avg"] = torch.zeros_like(g, dtype=storage_dtype, memory_format=torch.preserve_format)
                 Q, state["exprs"] = init_Q_exprs(p, precond_init_scale, max_size_triangular, min_ndim_triangular,
                                                  memory_save_mode, dtype=q_dtype)
                 state['Q'] = triu_to_line(Q) if store_triu_as_line else Q
