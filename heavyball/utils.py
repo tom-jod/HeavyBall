@@ -8,9 +8,9 @@ from typing import List, Optional, Tuple, Callable, Union
 import numpy as np
 import torch
 from torch import Tensor
+from torch._dynamo.exc import TorchDynamoException
 from torch.backends import cudnn, opt_einsum
 from torch.utils._pytree import tree_map
-from torch._dynamo.exc import TorchDynamoException
 
 compile_mode = "max-autotune-no-cudagraphs"
 dynamic = False
@@ -23,26 +23,26 @@ def decorator(func):
 
     @functools.wraps(func)
     def _fn(*args, **kwargs):
-        if compile_mode is None:
+        if is_compiling() or compile_mode is None:
             return func(*args, **kwargs)
         nonlocal compiled
         if compiled is None:
-            compiled = torch.compile(func, fullgraph=True, dynamic=dynamic, mode=compile_mode_recommended_to_none)
+            compiled = torch.compile(fullgraph=True, dynamic=dynamic, mode=compile_mode_recommended_to_none)(func)
         return compiled(*args, **kwargs)
 
     return _fn
 
 
-def decorator_knowngood(func):
+def decorator_knowngood(func: Callable):
     compiled = None
 
     @functools.wraps(func)
     def _fn(*args, **kwargs):
-        if compile_mode is None:
+        if is_compiling() or compile_mode is None:
             return func(*args, **kwargs)
         nonlocal compiled
         if compiled is None:
-            compiled = torch.compile(func, fullgraph=True, dynamic=dynamic, mode=compile_mode)
+            compiled = torch.compile(fullgraph=True, dynamic=dynamic, mode=compile_mode)(func)
         return compiled(*args, **kwargs)
 
     return _fn
@@ -58,7 +58,8 @@ def warmup(lr: float, step: int, warmup_steps: int):
 
 
 @decorator_knowngood
-def _compilable_schedule_free_(p: List[Tensor], z: List[Tensor], ckp1: Tensor, grad: List[Tensor], lr: Tensor, beta1: Tensor):
+def _compilable_schedule_free_(p: List[Tensor], z: List[Tensor], ckp1: Tensor, grad: List[Tensor], lr: Tensor,
+                               beta1: Tensor):
     p32, z32, g32 = [promote(x) for x in (p, z, grad)]
     for p_, z_, g_ in zip(p32, z32, g32):
         p_.lerp_(z_, ckp1)
@@ -158,7 +159,8 @@ def beta_debias(beta, step):
 
 
 @decorator_knowngood
-def _compilable_exp_avg_sq_(state: List[Tensor], grad: List[Tensor], beta2: Tensor, eps: Tensor, out: List[Optional[Tensor]]):
+def _compilable_exp_avg_sq_(state: List[Tensor], grad: List[Tensor], beta2: Tensor, eps: Tensor,
+                            out: List[Optional[Tensor]]):
     torch._foreach_mul_(state, beta2)
     [s.addcmul_(g, g, value=1 - beta2) for s, g in zip(state, grad)]
     denom = torch._foreach_sqrt(state)
@@ -1050,7 +1052,7 @@ class PSGDBase(StatefulOptimizer):
 
 
 # TODO: Figure out why this sometimes crashes
-#@decorator_knowngood
+# @decorator_knowngood
 def _compilable_precond_grad_cached_(ea: Tensor, expr: str, param: Tensor, lr: Tensor, weight_decay: Tensor,
                                      clip_fn: callable, caution: bool, grad: Optional[Tensor], *cached_q: Tensor):
     md = min_dtype(list(cached_q) + [ea])
