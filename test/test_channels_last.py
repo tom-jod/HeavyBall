@@ -11,6 +11,7 @@ from heavyball.utils import clean, set_torch
 from torch import nn
 from torch._dynamo import config
 
+heavyball.utils.compile_mode = 'default'
 config.cache_size_limit = 128
 
 
@@ -29,14 +30,14 @@ def test_foreach(opt, size, depth: int, iterations: int = 32, outer_iterations: 
         losses.append([])
 
         for i in range(outer_iterations):
-            model = nn.Sequential(*[nn.Conv2d(size, size, 1) for _ in range(depth)]).cuda()
+            model = nn.Sequential(*[nn.Conv2d(size, size, 3) for _ in range(depth)]).cuda()
             if is_channels_last:
                 model.to(memory_format=torch.channels_last)
 
             o = get_optim(opt, model.parameters(), lr=1e-3, weight_decay=1e-4, warmup_steps=16)
 
             for _ in range(iterations):
-                loss = model(torch.randn((1024, size, 1, 1), device='cuda')).square().mean()
+                loss = model(torch.randn((1024, size, 4, 4), device='cuda')).square().mean()
                 loss.backward()
                 o.step()
                 o.zero_grad()

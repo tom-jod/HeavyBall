@@ -134,7 +134,7 @@ def dim_merger(grad, max_precond_dim, split: bool = False):
     if curr_shape > 1 or len(new_shape) == 0:
         new_shape.append(curr_shape)
 
-    new_grad = grad.view(new_shape)
+    new_grad = grad.reshape(new_shape)  # needs to be .reshape() due to channels_last
     if not split:
         return new_grad
 
