@@ -1,10 +1,10 @@
 import torch
 import torch.optim
 
-from .utils import warmup, exp_avg_sq_, beta_debias, update_param_, StatefulOptimizer, promote, copy_stochastic_list_
+from .utils import warmup, exp_avg_sq_, beta_debias, update_param_, StatefulOptimizer, promote, copy_stochastic_list_, decorator_knowngood
 
 
-@torch.compile(mode='max-autotune-no-cudagraphs', fullgraph=True, dynamic=False)
+@decorator_knowngood
 def _compilable_step_(y, grad, exp_avg_sq, exp_avg, beta1, beta2, step, lr, eps, decay, caution):
     g32, exp_avg32, exp_avg_sq32 = [list(map(promote, x)) for x in [grad, exp_avg, exp_avg_sq]]
 

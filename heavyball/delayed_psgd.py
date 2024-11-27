@@ -8,10 +8,10 @@ import torch
 from heavyball.utils import stochastic_lerp_, beta_debias, stochastic_add_
 
 from .utils import update_param_, warmup, psgd_precond_grad, init_Q_exprs, trust_region_clip_, PSGDBase, \
-    triu_to_line, line_to_triu, promote,_compilable_update_
+    triu_to_line, line_to_triu, promote,_compilable_update_, decorator_knowngood
 
 
-@torch.compile(mode='max-autotune-no-cudagraphs', fullgraph=True, dynamic=False)
+@decorator_knowngood
 def _compilable_psgd_precond_grad_(q, exprs, ea, p, lr, weight_decay, clip_fn, caution, grad):
     new = psgd_precond_grad(False, exprs, ea, *q)
     _compilable_update_([p], clip_fn([new]), weight_decay, stochastic_add_, lr, caution, [grad])

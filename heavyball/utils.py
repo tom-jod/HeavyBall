@@ -12,7 +12,9 @@ from torch.backends import cudnn, opt_einsum
 from torch.utils._pytree import tree_map
 from torch._dynamo.exc import TorchDynamoException
 
-compile_mode = None
+compile_mode = "max-autotune-no-cudagraphs"
+dynamic = False
+compile_mode_recommended_to_none = None
 zeroth_power_mode = 'qr'  # 'qr' is baseline, 'newtonschulz' converges better and faster, 'eigh' is perfect but slow
 
 
@@ -25,7 +27,22 @@ def decorator(func):
             return func(*args, **kwargs)
         nonlocal compiled
         if compiled is None:
-            compiled = torch.compile(func, fullgraph=True, dynamic=False, mode=compile_mode)
+            compiled = torch.compile(func, fullgraph=True, dynamic=dynamic, mode=compile_mode_recommended_to_none)
+        return compiled(*args, **kwargs)
+
+    return _fn
+
+
+def decorator_knowngood(func):
+    compiled = None
+
+    @functools.wraps(func)
+    def _fn(*args, **kwargs):
+        if compile_mode is None:
+            return func(*args, **kwargs)
+        nonlocal compiled
+        if compiled is None:
+            compiled = torch.compile(func, fullgraph=True, dynamic=dynamic, mode=compile_mode)
         return compiled(*args, **kwargs)
 
     return _fn
@@ -40,7 +57,7 @@ def warmup(lr: float, step: int, warmup_steps: int):
     return lr * step / warmup_steps
 
 
-@torch.compile(mode='max-autotune-no-cudagraphs', fullgraph=True, dynamic=False)
+@decorator_knowngood
 def _compilable_schedule_free_(p: List[Tensor], z: List[Tensor], ckp1: Tensor, grad: List[Tensor], lr: Tensor, beta1: Tensor):
     p32, z32, g32 = [promote(x) for x in (p, z, grad)]
     for p_, z_, g_ in zip(p32, z32, g32):
@@ -140,7 +157,7 @@ def beta_debias(beta, step):
     return 1 - (1 - beta) / (1 - beta ** step)
 
 
-@torch.compile(mode='max-autotune-no-cudagraphs', fullgraph=True, dynamic=False)
+@decorator_knowngood
 def _compilable_exp_avg_sq_(state: List[Tensor], grad: List[Tensor], beta2: Tensor, eps: Tensor, out: List[Optional[Tensor]]):
     torch._foreach_mul_(state, beta2)
     [s.addcmul_(g, g, value=1 - beta2) for s, g in zip(state, grad)]
@@ -340,7 +357,7 @@ def get_orthogonal_matrix(mat):
     return final
 
 
-@torch.compile(mode='max-autotune-no-cudagraphs', fullgraph=True, dynamic=False)
+@decorator_knowngood
 def _compilable_stochastic_lerp_(x: List[Tensor], y: List[Tensor], a: Union[float, int, Tensor]):
     for x_, y_ in zip(x, y):
         x32 = promote(x_)
@@ -369,7 +386,7 @@ def scalar_guard(x, ref):
     return x
 
 
-@torch.compile(mode='max-autotune-no-cudagraphs', fullgraph=True, dynamic=False)
+@decorator_knowngood
 def _compilable_stochastic_add_(x: List[Tensor], y: List[Tensor], alpha: Union[float, int, Tensor]):
     for x_, y_ in zip(x, y):
         x32 = promote(x_)
@@ -596,7 +613,9 @@ class StatefulOptimizer(torch.optim.Optimizer):
         else:
             with torch.enable_grad():
                 loss = closure()
-        with torch.no_grad():
+
+        # we assume that parameters are constant and that there are no excessive recompiles
+        with torch.no_grad(), torch._dynamo.utils.disable_cache_limit():
             for top_group in self.param_groups:
                 for group in self.get_groups(top_group):
                     self._step(group)
@@ -644,7 +663,7 @@ def copy_stochastic_list_(target: List[Tensor], source: List[Tensor]):
         copy_stochastic_(t, s)
 
 
-@torch.compile(mode='max-autotune-no-cudagraphs', fullgraph=True, dynamic=False)
+@decorator_knowngood
 def _compilable_exp_avg_(exp_avg: List[Tensor], exp_avg_sq: List[Tensor], grad: List[Tensor],
                          grad_projected: List[Tensor], beta1: Tensor, beta2: Tensor, step: Tensor):
     beta1 = beta_debias(beta1, step)
@@ -668,7 +687,7 @@ def exp_avg_(exp_avg: List[Tensor], exp_avg_sq: List[Tensor], grad: List[Tensor]
     return denom
 
 
-@torch.compile(mode='max-autotune-no-cudagraphs', fullgraph=True, dynamic=False)
+@decorator_knowngood
 def _compilable_copy_stochastic_(target: Tensor, source: Tensor):
     """Taken as-is from https://github.com/pytorch/pytorch/issues/120376#issuecomment-1974828905"""
     # create a random 16 bit integer
@@ -692,7 +711,7 @@ def copy_stochastic_(target: Tensor, source: Tensor):
     set_(target, source)
 
 
-@torch.compile(mode='max-autotune-no-cudagraphs', fullgraph=True, dynamic=False)
+@decorator_knowngood
 def _compilable_update_(p: List[Tensor], u: List[Tensor], decay: Tensor, add_fn: callable, lr: Tensor, caution: bool,
                         g: List[Optional[Tensor]]):
     u = [u_.view_as(p_) for u_, p_ in zip(u, p)]
@@ -853,7 +872,7 @@ def psgd_lb(A, max_abs):
     return x
 
 
-@torch.compile(mode='max-autotune-no-cudagraphs', fullgraph=True, dynamic=False)
+@decorator_knowngood
 def psgd_update_precond(Q, exprs, G, precond_lr, tiny, oq, store_triu_as_line):
     """Update Kronecker product preconditioner Q with pair (V, G)."""
     exprA, exprGs, _ = exprs
@@ -886,7 +905,7 @@ def psgd_update_precond(Q, exprs, G, precond_lr, tiny, oq, store_triu_as_line):
         stochastic_add_([o], [term1], -1)
 
 
-@torch.compile(mode='max-autotune-no-cudagraphs', fullgraph=True, dynamic=False)
+@decorator_knowngood
 def psgd_precond_grad(inplace: bool, exprs: str, grad: Tensor, *preconds: Tensor):
     """Precondition gradient G with preconditioner Q."""
     md = min_dtype(preconds)
@@ -1031,7 +1050,7 @@ class PSGDBase(StatefulOptimizer):
 
 
 # TODO: Figure out why this sometimes crashes
-#@torch.compile(mode='max-autotune-no-cudagraphs', fullgraph=True, dynamic=False)
+#@decorator_knowngood
 def _compilable_precond_grad_cached_(ea: Tensor, expr: str, param: Tensor, lr: Tensor, weight_decay: Tensor,
                                      clip_fn: callable, caution: bool, grad: Optional[Tensor], *cached_q: Tensor):
     md = min_dtype(list(cached_q) + [ea])
@@ -1048,7 +1067,7 @@ def precond_grad_cached_(cached_q: List[Tensor], ea: Tensor, expr: str, param: T
     _compilable_precond_grad_cached_(ea, expr, param, lr, weight_decay, clip_fn, caution, grad, *cached_q)
 
 
-@torch.compile(mode='max-autotune-no-cudagraphs', fullgraph=True, dynamic=False)
+@decorator_knowngood
 def _compilable_mars_correction_(g: Tensor, old_g: Tensor, a: Tensor):
     g_copy = [g_.clone() for g_ in g]
     _compilable_stochastic_lerp_(g, old_g, a)
@@ -1062,7 +1081,7 @@ def mars_correction(g, old_g, beta1, gamma):
     _compilable_mars_correction_(g, old_g, a)
 
 
-@torch.compile(mode='max-autotune-no-cudagraphs', fullgraph=True, dynamic=False)
+@decorator_knowngood
 def _compilable_cautioning_(g: Tensor, update: Tensor):
     mask = (g * update) > 0
     update.masked_fill_(~mask, 0)

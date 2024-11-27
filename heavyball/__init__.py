@@ -1,3 +1,4 @@
+from .cached_delayed_psgd_kron import ForeachCachedDelayedPSGDKron
 from .cached_psgd_kron import ForeachCachedPSGDKron
 from .delayed_psgd import ForeachDelayedPSGD
 from .foreach_adamw import ForeachAdamW
@@ -14,7 +15,6 @@ from .precond_schedule_sfpsoap import PrecondScheduleSFPaLMSOAP
 from .psgd_kron import ForeachPSGDKron
 from .pure_psgd import ForeachPurePSGD
 from .schedule_free_palm_foreach_soap import SFPaLMForeachSOAP
-from .cached_delayed_psgd_kron import ForeachCachedDelayedPSGDKron
 
 PalmForEachSoap = PaLMForeachSOAP
 
@@ -39,7 +39,8 @@ CachedDelayedPSGDKron = ForeachCachedDelayedPSGDKron
 __all__ = ['PalmForEachSoap', 'PaLMForeachSFAdamW', 'PaLMForeachSOAP', 'SFPaLMForeachSOAP', 'PrecondScheduleSFPaLMSOAP',
            'ForeachSOAP', 'ForeachSFAdamW', 'ForeachLaProp', 'ForeachADOPT', 'PrecondScheduleForeachSOAP',
            'PrecondSchedulePaLMForeachSOAP', 'ForeachPSGDKron', 'ForeachAdamW', 'ForeachPurePSGD', 'ForeachPaLMPAdam',
-           'ForeachDelayedPSGD', 'ForeachCachedPSGDKron', 'ForeachCachedDelayedPSGDKron',  #
-           'PaLMSOAP', 'PaLMSFAdamW', 'PaLMSFSoap', 'PaLMSFAdamW', 'PrecondScheduleSFPaLMSOAP',
-           'SOAP', 'SFAdamW', 'LaProp', 'ADOPT', 'PSGDKron', 'AdamW', 'PurePSGD', 'PaLMPAdam', 'DelayedPSGD',
-           'CachedPSGDKron', 'CachedDelayedPSGDKron', 'PrecondScheduleSOAP', 'PrecondSchedulePaLMSOAP']
+           'ForeachDelayedPSGD', 'ForeachCachedPSGDKron', 'ForeachCachedDelayedPSGDKron',
+             #
+           'PaLMSOAP', 'PaLMSFAdamW', 'PaLMSFSoap', 'PaLMSFAdamW', 'PrecondScheduleSFPaLMSOAP', 'SOAP', 'SFAdamW',
+           'LaProp', 'ADOPT', 'PSGDKron', 'AdamW', 'PurePSGD', 'PaLMPAdam', 'DelayedPSGD', 'CachedPSGDKron',
+           'CachedDelayedPSGDKron', 'PrecondScheduleSOAP', 'PrecondSchedulePaLMSOAP']

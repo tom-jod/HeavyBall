@@ -2,10 +2,10 @@ import torch
 import torch.optim
 
 from .utils import warmup, ScheduleFree, exp_avg_sq_, beta_debias, get_ckp1, promote, \
-    _compilable_schedule_free_, copy_stochastic_list_
+    _compilable_schedule_free_, copy_stochastic_list_, decorator_knowngood
 
 
-@torch.compile(mode='max-autotune-no-cudagraphs', fullgraph=True, dynamic=False)
+@decorator_knowngood
 def _compilable_step_(y, grad, exp_avg_sq, z, beta1, beta2, step, ckp1, eps, decay, lr):
     old_debiased2 = beta_debias(beta2, step)
 

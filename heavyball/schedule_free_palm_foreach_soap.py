@@ -1,13 +1,13 @@
 import random
 
 import torch
-from heavyball.utils import mars_correction
 
 from .utils import init_preconditioner, update_preconditioner, project, set_, adaptive_gradient_clipping_, exp_avg_sq_, \
-    beta_debias, schedule_free_, warmup, ScheduleFree, copy_stochastic_list_, promote
+    beta_debias, schedule_free_, warmup, ScheduleFree, copy_stochastic_list_, promote, decorator_knowngood, \
+    mars_correction
 
 
-@torch.compile(mode='max-autotune-no-cudagraphs', fullgraph=True, dynamic=False)
+@decorator_knowngood
 def _compilable_exp_avg_sq_(exp_avg_sq, grad_projected, old_debiased2, eps):
     eas32, gp32 = [list(map(promote, x)) for x in (exp_avg_sq, grad_projected)]
     denom = exp_avg_sq_(eas32, gp32, old_debiased2, eps)
