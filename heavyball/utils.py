@@ -23,7 +23,8 @@ def decorator(func):
 
     @functools.wraps(func)
     def _fn(*args, **kwargs):
-        if is_compiling() or compile_mode is None:
+        disable = compile_mode_recommended_to_none is None
+        if is_compiling() or compile_mode_recommended_to_none is None:
             return func(*args, **kwargs)
         nonlocal compiled
         if compiled is None:
