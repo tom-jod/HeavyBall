@@ -71,12 +71,11 @@ class ForeachSOAP(StatefulOptimizer):
         # Decay the first and second moment running average coefficient
         # In-place operations to update the averages at the same time
         step_tensor = torch.empty((), dtype=torch.int32, device=p_list[0].device).fill_(step)
-        denom = exp_avg_(exp_avg, exp_avg_sq, grad, grad_projected, beta1, beta2, step_tensor)
 
         step_size = -group["lr"] * min(step / group['warmup_steps'], 1)
 
-        for p, g, ea, d in zip(p_list, grad, exp_avg, denom):
-            state = self.state_(p)
+        for p, g, gp, ea, eas in zip(p_list, grad, grad_projected, exp_avg, exp_avg_sq):
+            d = exp_avg_(ea, eas, g, gp, beta1, beta2, step_tensor)[0]
             # Projecting the exponential moving average of gradients to the eigenbases of Shampoo's preconditioner
             # i.e. projecting to the eigenbases of matrices in state['GG']
             exp_avg_projected = project(ea, state['Q'], False)
