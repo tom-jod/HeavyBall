@@ -927,6 +927,13 @@ def norm_clip_(x, scale=None):
     return x
 
 
+def normalize_grads_(x, eps=1e-12):
+    norm = torch._foreach_norm(x)
+    torch._foreach_add_(norm, eps)
+    torch._foreach_div_(x, norm)
+    return x
+
+
 def mu_law_compress(x, mu=127.0):
     """
     Foreach version of https://github.com/opooladz/modded-nanogpt-psgd/blob/dc7c78082ac15fbf326f1bacd9e0ead0a2b45908/kron_mu.py
@@ -1096,7 +1103,7 @@ def caution(g, update):
     _compilable_cautioning_(g, update)
 
 
-def precond_update_prob_schedule(max_prob=1.0, min_prob=0.03, decay=0.001, flat_start=250):
+def precond_update_prob_schedule(max_prob=1.0, min_prob=0.03, decay=0.001, flat_start=500):
     """Anneal preconditioner update probability during beginning of training.
 
     PSGD benefits from more preconditioner updates at the beginning of training,
