@@ -7,8 +7,8 @@ Source available at https://github.com/evanatyourservice/kron_torch/blob/97a2b5e
 import torch
 from heavyball.utils import stochastic_lerp_, beta_debias, stochastic_add_
 
-from .utils import update_param_, warmup, psgd_precond_grad, init_Q_exprs, normalize_grads_, PSGDBase, \
-    triu_to_line, line_to_triu, promote,_compilable_update_, decorator_knowngood
+from .utils import update_param_, warmup, psgd_precond_grad, init_Q_exprs, trust_region_clip_, normalize_grads_, \
+    PSGDBase, triu_to_line, line_to_triu, promote,_compilable_update_, decorator_knowngood
 
 
 @decorator_knowngood
@@ -56,6 +56,9 @@ class ForeachDelayedPSGD(PSGDBase):
             raise ValueError(f"Invalid beta parameter: {beta}")
         if not 0.0 <= weight_decay:
             raise ValueError(f"Invalid weight_decay value: {weight_decay}")
+
+        if clip_fn is None:
+            clip_fn = lambda x: trust_region_clip_(x, 0.9, 1.5)
 
         defaults = dict(lr=lr, beta=beta, normalize_grads=normalize_grads, weight_decay=weight_decay,
                         max_size_triangular=max_size_triangular, min_ndim_triangular=min_ndim_triangular,

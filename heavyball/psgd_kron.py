@@ -8,8 +8,8 @@ from typing import Optional
 
 import torch
 
-from .utils import update_param_, warmup, psgd_precond_grad, init_Q_exprs, normalize_grads_, PSGDBase, \
-    line_to_triu, triu_to_line, promote, stochastic_lerp_, beta_debias
+from .utils import update_param_, warmup, psgd_precond_grad, init_Q_exprs, trust_region_clip_, normalize_grads_, \
+    PSGDBase, line_to_triu, triu_to_line, promote, stochastic_lerp_, beta_debias
 
 
 class ForeachPSGDKron(PSGDBase):
@@ -51,6 +51,9 @@ class ForeachPSGDKron(PSGDBase):
             raise ValueError(f"Invalid beta parameter: {beta}")
         if not 0.0 <= weight_decay:
             raise ValueError(f"Invalid weight_decay value: {weight_decay}")
+
+        if clip_fn is None:
+            clip_fn = lambda x: trust_region_clip_(x, 0.9, 1.5)
 
         defaults = dict(lr=lr, beta=beta, normalize_grads=normalize_grads, weight_decay=weight_decay,
                         max_size_triangular=max_size_triangular, min_ndim_triangular=min_ndim_triangular,

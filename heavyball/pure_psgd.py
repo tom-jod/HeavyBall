@@ -48,6 +48,9 @@ class ForeachPurePSGD(PSGDBase):
         if not 0.0 <= weight_decay:
             raise ValueError(f"Invalid weight_decay value: {weight_decay}")
 
+        if clip_fn is None:
+            clip_fn = identity
+
         assert not mars, "MARS is not supported in this optimizer"
 
         defaults = dict(lr=lr, normalize_grads=normalize_grads, weight_decay=weight_decay,
