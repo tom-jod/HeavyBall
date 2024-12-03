@@ -919,10 +919,12 @@ def psgd_precond_grad(inplace: bool, exprs: str, grad: Tensor, *preconds: Tensor
     return out.to(grad.dtype)
 
 
-def norm_clip_(x, scale=None):
-    norm = torch._foreach_norm(x)
+def norm_clip_(x, scale=None, eps=1e-12):
+    norm = [a.square_().mean_() for a in x]
+    torch._foreach_sqrt_(norm)
     if scale is not None:
         torch._foreach_div_(norm, scale)
+    torch._foreach_add_(norm, eps)
     torch._foreach_div_(x, norm)
     return x
 
