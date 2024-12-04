@@ -492,22 +492,20 @@ class StatefulOptimizer(torch.optim.Optimizer):
         super().__init__(params, {**defaults, 'foreach': foreach})
         self.fake_groups = {}
         self.use_ema = use_ema
-
-    def key(self, param: Tensor):
-        return (param.data_ptr(), tuple(param.shape))
+        self.mapping = {}
 
     def get_groups(self, group):
         if group['foreach']:
             return [group]
 
         for p in group['params']:
-            if self.key(p) not in self.fake_groups:
-                self.fake_groups[self.key(p)] = {**group, 'params': [p]}
+            if p not in self.fake_groups:
+                self.fake_groups[p] = {**group, 'params': [p]}
 
-        return [self.fake_groups[self.key(p)] for p in group['params']]
+        return [self.fake_groups[p] for p in group['params']]
 
     def state_(self, arg: Tensor):
-        return self.state[self.key(arg)]
+        return self.state[self.mapping.get(arg, arg)]
 
     def mars_correct_list(self, group, p_list, g_list, mars_gamma, beta):
         for p, g in zip(p_list, g_list):
@@ -538,6 +536,8 @@ class StatefulOptimizer(torch.optim.Optimizer):
             p_views = merge_group(group, p)
             if grad is not None:
                 grad = merge_group(group, grad)
+            for i, pv in enumerate(p_views):
+                self.mapping[pv] = (p, i)
             if isinstance(p_views, Tensor):
                 yield p_views, grad
                 continue
@@ -622,9 +622,12 @@ class StatefulOptimizer(torch.optim.Optimizer):
             for top_group in self.param_groups:
                 for group in self.get_groups(top_group):
                     self._step(group)
+                    self.mapping.clear()
                     if self.use_ema:
                         self.ema_update(group)
+
         return loss
+
 
 
 class ScheduleFree(StatefulOptimizer):
