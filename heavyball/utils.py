@@ -693,6 +693,29 @@ def exp_avg_(exp_avg: List[Tensor], exp_avg_sq: List[Tensor], grad: List[Tensor]
     return denom
 
 
+
+@decorator_knowngood
+def _compilable_laprop_exp_avg_(exp_avg: List[Tensor], exp_avg_sq: List[Tensor],
+                         grad_projected: List[Tensor], beta1: Tensor, beta2: Tensor, step: Tensor):
+    beta1 = beta_debias(beta1, step)
+    beta2 = beta_debias(beta2, step)
+
+    gp32, exp_avg_sq32 = [list(map(promote, x)) for x in [grad_projected, exp_avg_sq]]
+
+    denom = exp_avg_sq_(exp_avg_sq32, gp32, beta2, 1e-8)
+    gp32 = torch._foreach_div(gp32, denom)
+    stochastic_lerp_(exp_avg, gp32, 1 - beta1)
+
+    copy_stochastic_list_(exp_avg_sq, exp_avg_sq32)
+
+
+def laprop_exp_avg_(exp_avg: List[Tensor], exp_avg_sq: List[Tensor], grad_projected: List[Tensor],
+             beta1: float, beta2: float, step: int):
+    exp_avg, exp_avg_sq, grad_projected = list_guard(exp_avg), list_guard(exp_avg_sq), list_guard(grad_projected)
+    beta1, beta, step = scalar_guard(beta1, exp_avg[0]), scalar_guard(beta2, exp_avg[0]), scalar_guard(step, exp_avg[0])
+    _compilable_laprop_exp_avg_(exp_avg, exp_avg_sq, grad_projected, beta1, beta2, step)
+
+
 @decorator_knowngood
 def _compilable_copy_stochastic_(target: Tensor, source: Tensor):
     """Taken as-is from https://github.com/pytorch/pytorch/issues/120376#issuecomment-1974828905"""

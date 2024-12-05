@@ -1,40 +1,50 @@
+
+
+import random
+
 import torch
 
-from .utils import init_preconditioner, update_preconditioner, project, beta_debias, exp_avg_sq_, update_param_, set_, \
-    StatefulOptimizer, exp_avg_
+from .utils import init_preconditioner, update_preconditioner, project, beta_debias, update_param_, \
+    precond_schedule, set_, StatefulOptimizer, laprop_exp_avg_
 
 
-class ForeachSOAP(StatefulOptimizer):
+class PrecondScheduleForeachSOLP(StatefulOptimizer):
     """
-    ForeachSOAP
-
     Sources:
+        LaProp:
+            LaProp: Separating Momentum and Adaptivity in Adam
+            Liu Ziyin, Zhikang T.Wang, Masahito Ueda
+            https://arxiv.org/abs/2002.04839
+            https://github.com/ClashLuke/HeavyBall/blob/main/heavyball/foreach_laprop.py
+
+        Preconditioner Schedules:
+            Preconditioned Stochastic Gradient Descent
+            Xi-Lin Li, Omead Pooladzandi, Evan Walters
+            https://arxiv.org/abs/1512.04202
+            https://github.com/evanatyourservice/kron_torch
+            https://github.com/lixilinx/psgd_torch
+
         Baseline SOAP:
             SOAP: Improving and Stabilizing Shampoo using Adam
             Nikhil Vyas, Depen Morwani, Rosie Zhao, Itai Shapira, David Brandfonbrener, Lucas Janson, Sham Kakade
             https://arxiv.org/abs/2409.11321
             https://github.com/nikhilvyas/SOAP
-
-        ScheduleFree:
-            The Road Less Scheduled
-            Aaron Defazio, Xingyu Alice Yang, Harsh Mehta, Konstantin Mishchenko, Ahmed Khaled, Ashok Cutkosky
-            https://arxiv.org/abs/2405.15682
-            https://github.com/facebookresearch/schedule_free
     """
 
     def __init__(self, params, lr: float = 3e-3, betas=(0.9, 0.95), shampoo_beta: float = 0.95, eps: float = 1e-8,
                  weight_decay: float = 0.01, precondition_frequency: int = 2, max_precond_dim: int = 2048,  #
                  merge_dims: bool = True, precondition_1d: bool = False, normalize_grads: bool = False,
                  data_format: str = "channels_first", correct_bias: bool = True, warmup_steps: int = 1,
-                 split: bool = False, foreach: bool = True, mars: bool = False, caution: bool = False,
-                 mars_gamma: float = 0.0025):
+                 precond_scheduler=(1 / 3, 9), split: bool = False, foreach: bool = True, mars: bool = False,
+                 caution: bool = False, mars_gamma: float = 0.0025):
         defaults = {"lr": lr, "betas": betas, "shampoo_beta": shampoo_beta, "eps": eps, "weight_decay": weight_decay,
                     "precondition_frequency": precondition_frequency, "max_precond_dim": max_precond_dim,
                     "merge_dims": merge_dims, "precondition_1d": precondition_1d, "normalize_grads": normalize_grads,
-                    "correct_bias": correct_bias, 'warmup_steps': warmup_steps, 'split': split, 'mars': mars,
-                    'caution': caution, 'mars_gamma': mars_gamma}
+                    "correct_bias": correct_bias, 'warmup_steps': warmup_steps, 'precond_scheduler': precond_scheduler,
+                    'split': split, 'mars': mars, 'caution': caution, 'mars_gamma': mars_gamma}
         super().__init__(params, defaults, foreach)
         self._data_format = data_format
+        self.rng = random.Random(0x120983109)
 
     def _step(self, group):
         vals = []
@@ -72,22 +82,14 @@ class ForeachSOAP(StatefulOptimizer):
         # In-place operations to update the averages at the same time
         step_tensor = torch.empty((), dtype=torch.int32, device=p_list[0].device).fill_(step)
 
+        update_precond = precond_schedule(step, group['precond_scheduler'], self.rng)
         step_size = -group["lr"] * min(step / group['warmup_steps'], 1)
 
+
         for p, g, gp, ea, eas in zip(p_list, grad, grad_projected, exp_avg, exp_avg_sq):
+            laprop_exp_avg_(ea, eas, gp, beta1, beta2, step_tensor)
             state = self.state_(p)
+            precond = project(ea, state['Q'], True)
 
-            d = exp_avg_(ea, eas, g, gp, beta1, beta2, step_tensor)[0]
-            # Projecting the exponential moving average of gradients to the eigenbases of Shampoo's preconditioner
-            # i.e. projecting to the eigenbases of matrices in state['GG']
-            exp_avg_projected = project(ea, state['Q'], False)
-
-            # Projecting back the preconditioned (by Adam) exponential moving average of gradients
-            # to the original space
-            # CANT DO /= HERE AS EXP_AVG MAY POINT TO THE BUFFER
-            precond = project(exp_avg_projected / d, state['Q'], True)
-
-            update_preconditioner(g, state, max_precond_dim, precondition_1d, old_debiased2,
-                                  step > 0 and step % group['precondition_frequency'] == 0)
-
+            update_preconditioner(g, state, max_precond_dim, precondition_1d, old_debiased2, update_precond)
             update_param_([p], [precond], step_size, group["weight_decay"], caution=group['caution'], grad=[g])

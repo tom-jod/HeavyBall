@@ -1,14 +1,20 @@
 import torch
 
 from .utils import init_preconditioner, update_preconditioner, project, beta_debias, exp_avg_sq_, update_param_, set_, \
-    StatefulOptimizer, exp_avg_
+    StatefulOptimizer, laprop_exp_avg_
 
 
-class ForeachSOAP(StatefulOptimizer):
+class ForeachSOLP(StatefulOptimizer):
     """
-    ForeachSOAP
+    ForeachSOLP
 
     Sources:
+        LaProp:
+            LaProp: Separating Momentum and Adaptivity in Adam
+            Liu Ziyin, Zhikang T.Wang, Masahito Ueda
+            https://arxiv.org/abs/2002.04839
+            https://github.com/ClashLuke/HeavyBall/blob/main/heavyball/foreach_laprop.py
+
         Baseline SOAP:
             SOAP: Improving and Stabilizing Shampoo using Adam
             Nikhil Vyas, Depen Morwani, Rosie Zhao, Itai Shapira, David Brandfonbrener, Lucas Janson, Sham Kakade
@@ -75,19 +81,9 @@ class ForeachSOAP(StatefulOptimizer):
         step_size = -group["lr"] * min(step / group['warmup_steps'], 1)
 
         for p, g, gp, ea, eas in zip(p_list, grad, grad_projected, exp_avg, exp_avg_sq):
+            laprop_exp_avg_(ea, eas, gp, beta1, beta2, step_tensor)
             state = self.state_(p)
+            precond = project(ea, state['Q'], True)
 
-            d = exp_avg_(ea, eas, g, gp, beta1, beta2, step_tensor)[0]
-            # Projecting the exponential moving average of gradients to the eigenbases of Shampoo's preconditioner
-            # i.e. projecting to the eigenbases of matrices in state['GG']
-            exp_avg_projected = project(ea, state['Q'], False)
-
-            # Projecting back the preconditioned (by Adam) exponential moving average of gradients
-            # to the original space
-            # CANT DO /= HERE AS EXP_AVG MAY POINT TO THE BUFFER
-            precond = project(exp_avg_projected / d, state['Q'], True)
-
-            update_preconditioner(g, state, max_precond_dim, precondition_1d, old_debiased2,
-                                  step > 0 and step % group['precondition_frequency'] == 0)
-
+            update_preconditioner(g, state, max_precond_dim, precondition_1d, old_debiased2, step > 0 and step % group['precondition_frequency'] == 0)
             update_param_([p], [precond], step_size, group["weight_decay"], caution=group['caution'], grad=[g])
