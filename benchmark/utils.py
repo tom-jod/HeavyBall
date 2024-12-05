@@ -9,8 +9,7 @@ import numpy as np
 import torch
 
 base_args = {'betas': (0.9, 0.999), 'precondition_frequency': 1, 'merge_dims': True, 'warmup_steps': 100,
-             'max_precond_dim': 2 ** 16, 'beta': 0.9,
-             'max_size_triangular': 2 ** 16, 'split': False}
+             'max_precond_dim': 2 ** 16, 'beta': 0.9, 'max_size_triangular': 2 ** 16, 'split': False}
 
 
 def get_optim(optim, params, **kwargs):
@@ -21,7 +20,7 @@ def get_optim(optim, params, **kwargs):
 
 
 def trial(model, data, loss_fn, win_condition, steps, opt, dtype, size, batch, weight_decay, method, length, depth,
-          trials=10, failure_threshold=3, group=1000, base_lr: float = 1e-3):
+          trials=10, failure_threshold=3, group=100, base_lr: float = 1e-3):
     opt = getattr(heavyball, opt)
     if "soap" not in opt.__name__.lower() and method != 'qr':
         return
@@ -38,7 +37,9 @@ def trial(model, data, loss_fn, win_condition, steps, opt, dtype, size, batch, w
         torch.manual_seed(0x1239121)
 
         m = torch.compile(copy.deepcopy(model).to(dtype).cuda(), mode='max-autotune', fullgraph=False, dynamic=False)
-        o = get_optim(opt, m.parameters(), lr=lr, weight_decay=weight_decay)
+        o = get_optim(opt, m.parameters(), lr=lr, weight_decay=weight_decay,
+                      precond_update_prob_schedule=heavyball.utils.precond_update_prob_schedule(flat_start=0),
+                      store_triu_as_line=False)
         torch.cuda.empty_cache()
         gc.collect()
 
@@ -71,7 +72,7 @@ def trial(model, data, loss_fn, win_condition, steps, opt, dtype, size, batch, w
                     break
             if loss > failure_threshold * loss0 or not np.isfinite(loss):
                 break
-            print(datetime.datetime.now() - start, i + 1, sum(loss_hist[-group:]).div(group).item())
+            print(datetime.datetime.now() - start, (i + 1) * group, sum(loss_hist[-group:]).div(group).item())
 
         lrs.append(lr)
         lrs = sorted(lrs)

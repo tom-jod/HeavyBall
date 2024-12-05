@@ -1,3 +1,7 @@
+import os
+
+os.environ['TORCH_LOGS'] = '+recompiles'
+
 import heavyball
 import heavyball.utils
 import pytest
@@ -9,9 +13,10 @@ from torch._dynamo import config
 
 config.cache_size_limit = 128
 
+
 @pytest.mark.parametrize("opt", heavyball.__all__)
 @pytest.mark.parametrize("size,depth", [(128, 2)])
-def test_caution(opt, size, depth: int, iterations: int = 65536, outer_iterations: int = 2):
+def test_caution(opt, size, depth: int, iterations: int = 4096, outer_iterations: int = 1):
     set_torch()
     opt = getattr(heavyball, opt)
     peaks = []

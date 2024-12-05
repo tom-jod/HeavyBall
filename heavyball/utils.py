@@ -1,3 +1,11 @@
+"""
+
+
+Originally from Evan Walters and Omead Pooladzandi, 2024
+Modified under Creative Commons Attribution 4.0 International
+Source available at https://github.com/evanatyourservice/kron_torch/blob/97a2b5ee8a1a4c29e4780bbf6c521e545189eff9/kron_torch/kron.py
+"""
+
 import functools
 import gc
 import math
@@ -16,6 +24,7 @@ compile_mode = "max-autotune-no-cudagraphs"
 dynamic = False
 compile_mode_recommended_to_none = None
 zeroth_power_mode = 'qr'  # 'qr' is baseline, 'newtonschulz' converges better and faster, 'eigh' is perfect but slow
+tiny_bf16 = torch.finfo(torch.bfloat16).tiny
 
 
 def decorator(func):
@@ -177,6 +186,22 @@ def exp_avg_sq_(state, grad, beta2, eps, out=None):
     state, grad, out = list_guard(state), list_guard(grad), list_guard(out)
     beta2, eps = scalar_guard(beta2, state[0]), scalar_guard(eps, state[0])
     return _compilable_exp_avg_sq_(state, grad, beta2, eps, out)
+
+
+@decorator_knowngood
+def _compilable_scale_by_exp_avg_sq_(state: List[Tensor], grad: List[Tensor], beta2: Tensor, eps: Tensor,
+                                     out: List[Optional[Tensor]]):
+    torch._foreach_mul_(state, beta2)
+    [s.addcmul_(g, g, value=1 - beta2) for s, g in zip(state, grad)]
+    denom = torch._foreach_sqrt(state)
+    [denom.clamp_(min=eps) for denom in denom]
+    return torch._foreach_div_(grad, denom)
+
+
+def scale_by_exp_avg_sq_(grad, exp_avg_sq, beta2, eps):
+    grad, exp_avg_sq = list_guard(grad), list_guard(exp_avg_sq)
+    beta2, eps = scalar_guard(beta2, grad[0]), scalar_guard(eps, grad[0])
+    return _compilable_scale_by_exp_avg_sq_(exp_avg_sq, grad, beta2, eps, grad)
 
 
 def adaptive_gradient_clipping_(parameters: List[Tensor], gradients: List[Tensor], clip_val: float,
@@ -367,6 +392,27 @@ def _compilable_stochastic_lerp_(x: List[Tensor], y: List[Tensor], a: Union[floa
         y32 = promote(y_)
         x32.lerp_(y32, a)
         copy_stochastic_(x_, x32)
+
+
+def get_beta1(group):
+    beta = None
+    if 'beta' in group:
+        beta = group['beta']
+    if beta is None and 'betas' in group:
+        beta = group['betas'][0]
+    if beta is None:
+        raise ValueError("Beta not found in group.")
+    return beta
+
+
+def get_beta2(group):
+    beta = None
+    if 'beta2_scale' in group:
+        step = max(group.get("step", 1), 1)
+        return 1 - step ** -group['beta2_scale']
+    if 'betas' in group:
+        return group['betas'][1]
+    raise ValueError("Beta2 not found in group.")
 
 
 def stochastic_lerp_(x: List[Tensor], y: List[Tensor], a: Union[float, int, Tensor]):
@@ -629,7 +675,6 @@ class StatefulOptimizer(torch.optim.Optimizer):
         return loss
 
 
-
 class ScheduleFree(StatefulOptimizer):
     def eval(self):
         for group in self.param_groups:
@@ -670,33 +715,70 @@ def copy_stochastic_list_(target: List[Tensor], source: List[Tensor]):
 
 
 @decorator_knowngood
-def _compilable_exp_avg_(exp_avg: List[Tensor], exp_avg_sq: List[Tensor], grad: List[Tensor],
-                         grad_projected: List[Tensor], beta1: Tensor, beta2: Tensor, step: Tensor):
+def _compilable_adam_(exp_avg: List[Tensor], exp_avg_sq: List[Tensor], grad: List[Tensor], beta1: Tensor, beta2: Tensor,
+                      step: Tensor):
     beta1 = beta_debias(beta1, step)
     beta2 = beta_debias(beta2, step)
 
-    g32, gp32, exp_avg_sq32 = [list(map(promote, x)) for x in [grad, grad_projected, exp_avg_sq]]
+    g32, exp_avg_sq32, exp_avg32 = [list(map(promote, x)) for x in [grad, exp_avg_sq, exp_avg]]
 
-    stochastic_lerp_(exp_avg, g32, 1 - beta1)
-    denom = exp_avg_sq_(exp_avg_sq32, gp32, beta2, 1e-8)
+    [ea32.lerp_(g, 1 - beta1) for ea32, g in zip(exp_avg32, g32)]
+    denom = exp_avg_sq_(exp_avg_sq32, g32, beta2, 1e-8)
+    u32 = torch._foreach_div(exp_avg32, denom)
 
+    copy_stochastic_list_(exp_avg, exp_avg32)
     copy_stochastic_list_(exp_avg_sq, exp_avg_sq32)
-    return denom
+    return stochastic_round_list_(exp_avg, u32)
 
 
-def exp_avg_(exp_avg: List[Tensor], exp_avg_sq: List[Tensor], grad: List[Tensor], grad_projected: List[Tensor],
-             beta1: float, beta2: float, step: int):
-    exp_avg, exp_avg_sq, grad, grad_projected = list_guard(exp_avg), list_guard(exp_avg_sq), list_guard(
-        grad), list_guard(grad_projected)
+def adam_(exp_avg: List[Tensor], exp_avg_sq: List[Tensor], grad: List[Tensor], beta1: float, beta2: float, step: int):
+    exp_avg, exp_avg_sq, grad = map(list_guard, (exp_avg, exp_avg_sq, grad))
     beta1, beta, step = scalar_guard(beta1, exp_avg[0]), scalar_guard(beta2, exp_avg[0]), scalar_guard(step, exp_avg[0])
-    denom = _compilable_exp_avg_(exp_avg, exp_avg_sq, grad, grad_projected, beta1, beta2, step)
-    return denom
-
+    return _compilable_adam_(exp_avg, exp_avg_sq, grad, beta1, beta2, step)
 
 
 @decorator_knowngood
-def _compilable_laprop_exp_avg_(exp_avg: List[Tensor], exp_avg_sq: List[Tensor],
-                         grad_projected: List[Tensor], beta1: Tensor, beta2: Tensor, step: Tensor):
+def _compilable_rmsnorm(grad):
+    g32 = list(map(promote, grad))
+    norm = torch._foreach_norm(g32)
+    norm = [n.div_(g.numel() ** 0.5).clamp_(min=1e-6) for n, g in zip(norm, grad)]
+    return torch._foreach_div(grad, norm)
+
+
+def rmsnorm(grad: List[Tensor]):
+    grad = list_guard(grad)
+    return _compilable_rmsnorm_(grad)
+
+
+@decorator_knowngood
+def _fused_compilable_adam_(y: List[Tensor], exp_avg: List[Tensor], exp_avg_sq: List[Tensor], grad: List[Tensor],
+                            beta1: Tensor, beta2: Tensor, step: Tensor, decay: Tensor, lr: Tensor, eps: Tensor,
+                            caution: bool):
+    beta1 = beta_debias(beta1, step)
+    beta2 = beta_debias(beta2, step)
+
+    g32, exp_avg_sq32, exp_avg32 = [list(map(promote, x)) for x in [grad, exp_avg_sq, exp_avg]]
+
+    [ea32.lerp_(g, 1 - beta1) for ea32, g in zip(exp_avg32, g32)]
+    denom = exp_avg_sq_(exp_avg_sq32, g32, beta2, 1e-8)
+    u32 = torch._foreach_div(exp_avg32, denom)
+
+    copy_stochastic_list_(exp_avg, exp_avg32)
+    copy_stochastic_list_(exp_avg_sq, exp_avg_sq32)
+    _compilable_update_(y, u32, decay, lambda a, b, c: [a_.add_(b_, alpha=c) for a_, b_ in zip(a, b)], lr, caution,
+                        grad)
+
+
+def fused_adam_(y: List[Tensor], exp_avg: List[Tensor], exp_avg_sq: List[Tensor], grad: List[Tensor], beta1: float,
+                beta2: float, step: int, lr: float, eps: float, decay: float, caution: bool):
+    y, exp_avg, exp_avg_sq, grad = map(list_guard, (y, exp_avg, exp_avg_sq, grad))
+    beta1, beta2, step, lr, eps = map(scalar_guard, (beta1, beta2, step, lr, eps), y[0])
+    return _fused_compilable_adam_(y, exp_avg, exp_avg_sq, grad, beta1, beta2, step, decay, lr, eps, caution)
+
+
+@decorator_knowngood
+def _compilable_laprop_(exp_avg: List[Tensor], exp_avg_sq: List[Tensor], grad_projected: List[Tensor], beta1: Tensor,
+                        beta2: Tensor, step: Tensor):
     beta1 = beta_debias(beta1, step)
     beta2 = beta_debias(beta2, step)
 
@@ -709,27 +791,80 @@ def _compilable_laprop_exp_avg_(exp_avg: List[Tensor], exp_avg_sq: List[Tensor],
     copy_stochastic_list_(exp_avg_sq, exp_avg_sq32)
 
 
-def laprop_exp_avg_(exp_avg: List[Tensor], exp_avg_sq: List[Tensor], grad_projected: List[Tensor],
-             beta1: float, beta2: float, step: int):
+def laprop_(exp_avg: List[Tensor], exp_avg_sq: List[Tensor], grad_projected: List[Tensor], beta1: float, beta2: float,
+            step: int):
     exp_avg, exp_avg_sq, grad_projected = list_guard(exp_avg), list_guard(exp_avg_sq), list_guard(grad_projected)
     beta1, beta, step = scalar_guard(beta1, exp_avg[0]), scalar_guard(beta2, exp_avg[0]), scalar_guard(step, exp_avg[0])
-    _compilable_laprop_exp_avg_(exp_avg, exp_avg_sq, grad_projected, beta1, beta2, step)
+    _compilable_laprop_(exp_avg, exp_avg_sq, grad_projected, beta1, beta2, step)
+    return exp_avg
+
+
+@decorator_knowngood
+def _fused_compilable_laprop_(y: List[Tensor], exp_avg: List[Tensor], exp_avg_sq: List[Tensor],
+                              grad_projected: List[Tensor], beta1: Tensor, beta2: Tensor, step: Tensor, lr: Tensor,
+                              decay: Tensor, caution: bool):
+    beta1 = beta_debias(beta1, step)
+    beta2 = beta_debias(beta2, step)
+
+    gp32, exp_avg_sq32 = [list(map(promote, x)) for x in [grad_projected, exp_avg_sq]]
+
+    denom = exp_avg_sq_(exp_avg_sq32, gp32, beta2, 1e-8)
+    gp32 = torch._foreach_div(gp32, denom)
+    stochastic_lerp_(exp_avg, gp32, 1 - beta1)
+    update_param_(y, gp32, lr, decay, caution=caution, grad=gp32)
+
+    copy_stochastic_list_(exp_avg_sq, exp_avg_sq32)
+
+
+def fused_laprop_(y: List[Tensor], exp_avg: List[Tensor], exp_avg_sq: List[Tensor], grad_projected: List[Tensor],
+                  beta1: float, beta2: float, step: int, lr: float, decay: float, caution: bool):
+    y, exp_avg, exp_avg_sq, grad_projected = map(list_guard, (y, exp_avg, exp_avg_sq, grad_projected))
+    beta1, beta2, step, lr = map(scalar_guard, (beta1, beta2, step, lr), y[0])
+    _fused_compilable_laprop_(y, exp_avg, exp_avg_sq, grad_projected, beta1, beta2, step, lr, decay, caution)
+
+
+@decorator_knowngood
+def _fused_compilable_adopt_(y, grad, exp_avg_sq, exp_avg, beta1, beta2, step, lr, eps, decay, caution):
+    g32, exp_avg32, exp_avg_sq32 = [list(map(promote, x)) for x in [grad, exp_avg, exp_avg_sq]]
+    update_param_(y, exp_avg, lr, decay, caution=caution, grad=g32)
+
+    beta1 = beta_debias(beta1, step)
+    denom = torch._foreach_sqrt(exp_avg_sq32)
+    [denom.clamp_(min=eps) for denom in denom]
+    torch._foreach_mul_(exp_avg32, beta1)
+    [ea32.addcdiv_(g, d, value=1 - beta1) for ea32, g, d in zip(exp_avg32, g32, denom)]
+
+    beta2 = beta_debias(beta2, step + 1)
+    torch._foreach_mul_(exp_avg_sq32, beta2)
+    [eas32.addcmul_(g, g, value=1 - beta2) for eas32, g in zip(exp_avg_sq32, g32)]
+
+    copy_stochastic_list_(exp_avg, exp_avg32)
+    copy_stochastic_list_(exp_avg_sq, exp_avg_sq32)
+
+
+def fused_adopt_(y, grad, exp_avg_sq, exp_avg, beta1, beta2, step, lr, eps, decay, caution):
+    y, grad, exp_avg_sq, exp_avg = list_guard(y), list_guard(grad), list_guard(exp_avg_sq), list_guard(exp_avg)
+    beta1, beta2, step, lr, eps = map(scalar_guard, (beta1, beta2, step, lr, eps), y[0])
+    _fused_compilable_adopt_(y, grad, exp_avg_sq, exp_avg, beta1, beta2, step, lr, eps, decay, caution)
+
+
+def stochastic_round_list_(ref: List[Tensor], source: List[Tensor]):
+    return [stochastic_round_(r, s) for r, s in zip(ref, source)]
+
+
+@decorator_knowngood
+def stochastic_round_(ref: Tensor, source: Tensor):
+    if source.dtype == torch.bfloat16 or ref.dtype == source.dtype:
+        return source
+    result = torch.randint_like(source, dtype=torch.int32, low=0, high=(1 << 16))
+    result.add_(source.view(dtype=torch.int32))
+    result.bitwise_and_(-65536)  # -65536 = FFFF0000 as a signed int32
+    return result.view(dtype=torch.float32).bfloat16()
 
 
 @decorator_knowngood
 def _compilable_copy_stochastic_(target: Tensor, source: Tensor):
-    """Taken as-is from https://github.com/pytorch/pytorch/issues/120376#issuecomment-1974828905"""
-    # create a random 16 bit integer
-    result = torch.randint_like(source, dtype=torch.int32, low=0, high=(1 << 16))
-
-    # add the random number to the lower 16 bit of the mantissa
-    result.add_(source.view(dtype=torch.int32))
-
-    # mask off the lower 16 bit of the mantissa
-    result.bitwise_and_(-65536)  # -65536 = FFFF0000 as a signed int32
-
-    # copy the higher 16 bit into the target tensor
-    target.copy_(result.view(dtype=torch.float32))
+    target.copy_(stochastic_round_(target, source))
 
 
 def copy_stochastic_(target: Tensor, source: Tensor):
@@ -902,7 +1037,7 @@ def psgd_lb(A, max_abs):
 
 
 @decorator
-def psgd_update_precond(Q, exprs, G, precond_lr, tiny, oq, store_triu_as_line):
+def psgd_update_precond(Q, exprs, G, precond_lr, oq, store_triu_as_line):
     """Update Kronecker product preconditioner Q with pair (V, G)."""
     exprA, exprGs, _ = exprs
 
@@ -923,10 +1058,10 @@ def psgd_update_precond(Q, exprs, G, precond_lr, tiny, oq, store_triu_as_line):
         norm = term2.norm(float('inf'))
         if q.dim() < 2:
             term1 *= q.to(term1.dtype)
-            term1 /= norm.clamp_(min=tiny)
+            term1 /= norm.clamp_(min=tiny_bf16)
         else:
             torch.triu(term1, out=term1)
-            term1 /= psgd_lb(term2, norm).clamp_(tiny)
+            term1 /= psgd_lb(term2, norm).clamp_(tiny_bf16)
             torch.matmul(term1, q, out=term1)
         if store_triu_as_line:
             term1 = triu_to_line([term1])[0][1]
@@ -990,18 +1125,24 @@ def identity(x):
     return x
 
 
-def trust_region_clip_(grad, lerp: float = 0.9, scale: float = 1.5):
-    torch._foreach_mul_(grad, 1 / scale)
-    tanh = torch._foreach_tanh(grad)
-    torch._foreach_abs_(grad)
-    torch._foreach_log1p_(grad)
-    grad = [p.copysign_(t) for t, p in zip(tanh, grad)]  # torch doesn't have a foreach copysign
-    torch._foreach_lerp_(grad, tanh, lerp)  # sgn(x) * log(1 + |x|) * 0.1 + tanh(x) * 0.9
-    torch._foreach_mul_(grad, scale)
+@decorator_knowngood
+def _compilable_trust_region_clip_(grad, lerp: float = 0.9, scale: float = 1.5):
+    g32 = list(map(promote, grad))
+    [g.mul_(1 / scale) for g in g32]
+    tanh = torch._foreach_tanh(g32)
+    torch._foreach_abs_(g32)
+    torch._foreach_log1p_(g32)
+    [g.copysign_(t).lerp_(t, lerp).mul_(scale) for t, g in zip(tanh, g32)]
 
-    torch._foreach_maximum_(grad, -2)
-    torch._foreach_minimum_(grad, 2)
-    return grad
+    torch._foreach_maximum_(g32, -2)
+    torch._foreach_minimum_(g32, 2)
+    return [stochastic_round_(grad, g32) for grad, g32 in zip(grad, g32)]
+
+
+def trust_region_clip_(grad, lerp=0.9, scale=1.5):
+    grad = list_guard(grad)
+    lerp, scale = scalar_guard(lerp, grad[0]), scalar_guard(scale, grad[0])
+    return _compilable_trust_region_clip_(grad, lerp, scale)
 
 
 @decorator
@@ -1040,42 +1181,16 @@ def update_triu_(q_state, materialised):
         copy_stochastic_(q, m)
 
 
-class PSGDBase(StatefulOptimizer):
-    balance_probability: float = 0.01
-
-    def __init__(self, parameters, groups, foreach: bool, stochastic_schedule: bool, clip_fn,
-                 preconditioner_update_probability):
-        super().__init__(parameters, {**groups, 'stochastic_schedule': stochastic_schedule}, foreach)
-        self.rng = random.Random(0x1923213)
-        self._tiny = torch.finfo(torch.bfloat16).tiny
-        if clip_fn is None:
-            clip_fn = identity
-        if preconditioner_update_probability is None:
-            preconditioner_update_probability = precond_update_prob_schedule()
-        self.clip_fn = clip_fn
-        self.preconditioner_update_probability = preconditioner_update_probability
-
-    def should_update(self, group, prob: Optional[float] = None, name: str = 'cumulative_prob'):
-        group[f'{name}_prob_step'] = group.get(f'{name}_prob_step', 0) + 1
-        if prob is None:
-            prob = self.preconditioner_update_probability(group[f'{name}_prob_step'])
-        if group['stochastic_schedule']:
-            return self.rng.random() < prob
-        cumulative_prob = group.get(name, 0)
-        group[name] = cumulative_prob + prob
-        return int(group[name]) > int(cumulative_prob)
-
-    def do_update(self, group, p_list, grad_list, q_list, precond_lr, original_q: List, store_triu_as_line=False):
-        for p, grad, Q, oq in zip(p_list, grad_list, q_list, original_q):
-            psgd_update_precond(Q, self.state_(p)["exprs"], grad, precond_lr, self._tiny, oq, store_triu_as_line)
-
-        if self.should_update(group, self.balance_probability, "balance_prob"):
-            for g, q in zip(grad_list, original_q if original_q else q_list):
-                if g.dim() > 1:
-                    if store_triu_as_line:
-                        psgd_balance_Q([q_ for _, q_ in q])
-                    else:
-                        psgd_balance_Q(q)
+def psgd_should_update(state, group, prob: Union[float, callable], rng: Optional[random.Random] = None,
+                       name: str = 'cumulative_prob'):
+    state[f'{name}_prob_step'] = state.get(f'{name}_prob_step', 0) + 1
+    if not isinstance(prob, float):
+        prob = prob(state[f'{name}_prob_step'])
+    if group['stochastic_schedule']:
+        return rng.random() < prob
+    cumulative_prob = state.get(name, 0)
+    state[name] = cumulative_prob + prob
+    return int(state[name]) > int(cumulative_prob)
 
 
 # TODO: Figure out why this sometimes crashes
