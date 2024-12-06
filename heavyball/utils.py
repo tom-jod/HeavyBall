@@ -1078,10 +1078,19 @@ def psgd_precond_grad(inplace: bool, exprs: str, grad: Tensor, *preconds: Tensor
     return out.to(grad.dtype)
 
 
-def norm_clip_(x, scale=None):
-    norm = torch._foreach_norm(x)
+def norm_clip_(x, scale=None, eps=1e-12):
+    norm = [a.square_().mean_() for a in x]
+    torch._foreach_sqrt_(norm)
     if scale is not None:
         torch._foreach_div_(norm, scale)
+    torch._foreach_add_(norm, eps)
+    torch._foreach_div_(x, norm)
+    return x
+
+
+def normalize_grads_(x, eps=1e-12):
+    norm = torch._foreach_norm(x)
+    torch._foreach_add_(norm, eps)
     torch._foreach_div_(x, norm)
     return x
 
@@ -1235,7 +1244,7 @@ def caution(g, update):
     _compilable_cautioning_(g, update)
 
 
-def precond_update_prob_schedule(max_prob=1.0, min_prob=0.03, decay=0.001, flat_start=250):
+def precond_update_prob_schedule(max_prob=1.0, min_prob=0.03, decay=0.001, flat_start=500):
     """Anneal preconditioner update probability during beginning of training.
 
     PSGD benefits from more preconditioner updates at the beginning of training,

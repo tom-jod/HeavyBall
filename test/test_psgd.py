@@ -17,7 +17,8 @@ def get_memory():
 
 @pytest.mark.parametrize("opt", ['ForeachPSGDKron', 'ForeachPaLMPAdam', 'ForeachPurePSGD', 'ForeachDelayedPSGD'])
 @pytest.mark.parametrize("method",
-                         ['norm_clip_', 'mu_law_compress', 'a_law_compress', 'trust_region_clip_', 'identity'])
+                         ['norm_clip_', 'mu_law_compress', 'a_law_compress', 'trust_region_clip_', 'identity',
+                          'normalize_grads'])
 @pytest.mark.parametrize("size,depth", [(128, 1), (16, 4)])
 def test_clip(opt, method, size, depth: int, iterations: int = 100, outer_iterations: int = 3):
     set_torch()
@@ -33,7 +34,11 @@ def test_clip(opt, method, size, depth: int, iterations: int = 100, outer_iterat
         torch.cuda.reset_accumulated_memory_stats()
 
         model_allocated = get_memory()
-        o = get_optim(opt, model.parameters(), lr=1e-3, clip_fn=getattr(heavyball.utils, method))
+        o = get_optim(
+            opt, model.parameters(), lr=1e-3,
+            clip_fn=getattr(heavyball.utils, method) if method != 'normalize_grads' else 'identity',
+            normalize_grads=method == 'normalize_grads'
+        )
         losses = torch.zeros((iterations,), device='cuda')
         for itr in range(iterations):
             src = torch.randn((4, size), device='cuda')
