@@ -1,3 +1,4 @@
+import functools
 import random
 from typing import Optional, Union
 
@@ -8,15 +9,26 @@ from . import utils
 balance_probability: float = 0.01
 
 
+def _key_in_state(state, key):
+    if isinstance(key, str):
+        return key in state
+    for k in key:
+        if isinstance(k, (tuple, list)):
+            continue
+        if k not in state:
+            return False
+    return True
+
+
 def _inplace_guard_(state, key, template_fn):
-    key_not_in_state = key not in state
+    key_not_in_state = not _key_in_state(state, key)
     if key_not_in_state:
         template_fn()
     return key_not_in_state
 
 
 def _guard_in_state(state, key, template_fn):
-    if key not in state:
+    if not _key_in_state(state, key):
         state[key] = template_fn()
     return state[key]
 
@@ -30,102 +42,153 @@ def _storage_dtype(group):
     dtype = group.get('storage_dtype', "float32")
     return getattr(torch, dtype)
 
+
+def zero_guard(*names):
+    def _outer(fn):
+        def _fn(state, group, update, grad, param, *args, **kwargs):
+            vars = [[_zero_guard(state(p), name, p, _storage_dtype(group)) for p in param] for name in names]
+            return fn(state, group, update, grad, param, *args, *vars, **kwargs)
+
+        return _fn
+
+    return _outer
+
+
+def general_guard(*names, init_fn):
+    def _outer(fn):
+        def _fn(state, group, update, grad, param, *args, **kwargs):
+            vars = []
+            skip_update = False
+            for p, g, u in zip(param, grad, update):
+                st = state(p)
+                skip_update |= _inplace_guard_(st, names, lambda: init_fn(st, group, u, g, p, **kwargs))
+                vars.append([st[name] if isinstance(name, str) else st.get(name[0], name[1]) for name in names])
+            if skip_update:
+                raise SkipUpdate
+            return fn(state, group, update, grad, param, *args, *zip(*vars), **kwargs)
+
+        return _fn
+
+    return _outer
+
+
+def no_state(fn):
+    def _fn(state, *args, **kwargs):
+        return fn(*args, **kwargs)
+
+    return _fn
+
+
+def use_state_no_foreach(fn):
+    def _fn(state, *args, **kwargs):
+        return fn(state(param), *args, **kwargs)
+
+    return _fn
+
+
+def no_state_no_foreach(fn):
+    def _fn(state, group, *args, **kwargs):
+        for a in zip(*args):
+            return fn(group, *a, **kwargs)
+
+    return _fn
+
+
 class SkipUpdate(ValueError):
     pass
 
-def exp_avg(state, group, update, grad, param):
-    exp_avg = _zero_guard(state, "exp_avg", grad, _storage_dtype(group))
+
+@zero_guard("exp_avg")
+@no_state
+def exp_avg(group, update, grad, param, exp_avg):
     utils.stochastic_lerp_(exp_avg, grad, utils.beta_debias(utils.get_beta1(group), group["step"]))
     return exp_avg
 
 
-def scale_by_exp_avg_sq(state, group, update, grad, param):
-    exp_avg_sq = _zero_guard(state, "exp_avg_sq", grad, _storage_dtype(group))
+@zero_guard("exp_avg_sq")
+@no_state
+def scale_by_exp_avg_sq(group, update, grad, param, exp_avg_sq):
     return utils.scale_by_exp_avg_sq_(exp_avg_sq, grad, utils.beta_debias(utils.get_beta2(group), group["step"]),
                                       group['eps'])[0]
 
 
-def scale_by_adam(state, group, update, grad, param):
-    exp_avg = _zero_guard(state, "exp_avg", grad, _storage_dtype(group))
-    exp_avg_sq = _zero_guard(state, "exp_avg_sq", grad, _storage_dtype(group))
+@zero_guard("exp_avg", "exp_avg_sq")
+@no_state
+def scale_by_adam(group, update, grad, param, exp_avg, exp_avg_sq):
     return utils.adam_(exp_avg, exp_avg_sq, grad, utils.get_beta1(group), utils.get_beta2(group), group['step'],  #
                        group['eps'])[0]
 
 
-def update_by_adam(state, group, update, grad, param):
-    exp_avg = _zero_guard(state, "exp_avg", grad, _storage_dtype(group))
-    exp_avg_sq = _zero_guard(state, "exp_avg_sq", grad, _storage_dtype(group))
+@zero_guard("exp_avg", "exp_avg_sq")
+@no_state
+def update_by_adam(group, update, grad, param, exp_avg, exp_avg_sq):
     utils.fused_adam_(param, exp_avg, exp_avg_sq, grad, utils.get_beta1(group), utils.get_beta2(group), group['step'],
                       group['lr'], group['eps'], group['weight_decay'], group['caution'])
     raise SkipUpdate
 
 
-def scale_by_laprop(state, group, update, grad, param):
-    exp_avg = _zero_guard(state, "exp_avg", grad, _storage_dtype(group))
-    exp_avg_sq = _zero_guard(state, "exp_avg_sq", grad, _storage_dtype(group))
+@zero_guard("exp_avg", "exp_avg_sq")
+@no_state
+def scale_by_laprop(group, update, grad, param, exp_avg, exp_avg_sq):
     return utils.laprop_(exp_avg, exp_avg_sq, grad, utils.get_beta1(group), utils.get_beta2(group), group['step'],
                          group['eps'])[0]
 
 
-def update_by_laprop(state, group, update, grad, param):
-    exp_avg = _zero_guard(state, "exp_avg", grad, _storage_dtype(group))
-    exp_avg_sq = _zero_guard(state, "exp_avg_sq", grad, _storage_dtype(group))
+@zero_guard("exp_avg", "exp_avg_sq")
+@no_state
+def update_by_laprop(group, update, grad, param, exp_avg, exp_avg_sq):
     utils.fused_laprop_(param, exp_avg, exp_avg_sq, grad, utils.get_beta1(group), utils.get_beta2(group), group['step'],
                         group['lr'], group['weight_decay'], group['caution'])
     raise SkipUpdate
 
 
-def update_by_schedule_free(state, group, update, grad, param):
-    z = _zero_guard(state, "z", grad, _storage_dtype(group))
-    state['weight_sum'] = utils.schedule_free_(group['lr'], group['weight_lr_power'], state.get('weight_sum', 0),
-                                               utils.get_beta1(group), param, z, update, group['r'], group['step'])
+@zero_guard("z")
+@no_state
+def update_by_schedule_free(group, update, grad, param, z):
+    ws = [group.get(f'weight_sum_{id(z_)}', 0) for z_ in z]
+    ws = utils.schedule_free_(group['lr'], group['weight_lr_power'], ws, utils.get_beta1(group), param, z, update,
+                              group['r'], group['step'])
+    for z_, w in zip(z, ws):
+        group[f'weight_sum_{id(z_)}'] = w
     raise SkipUpdate
 
 
-def update_by_adopt(state, group, update, grad, param):
-    if 'exp_avg_sq' not in state:
-        state['exp_avg_sq'] = utils.promote(update).square().to(_storage_dtype(group))
+@zero_guard("exp_avg", "exp_avg_sq")
+@no_state
+def update_by_adopt(group, update, grad, param, exp_avg, exp_avg_sq):
+    if group['step'] == 1:
+        utils.exp_avg_sq_(exp_avg_sq, update, 0, 1)
         raise SkipUpdate
 
-    if 'exp_avg' not in state:
+    if group['step'] == 2:
         update = utils.promote(update)
-        easq = utils.promote(state['exp_avg_sq'])
-        state['exp_avg'] = (update / easq.sqrt().clamp_(min=group['eps'])).to(_storage_dtype(group))
-        utils.set_(state['exp_avg_sq'],
-                   easq.lerp_(update.square(), utils.beta_debias(utils.get_beta2(group), group['step'])))
+        easq = utils.promote(exp_avg_sq)
+        [utils.set_(ea, u / easq.sqrt().clamp_(min=group['eps'])) for ea, u, easq in zip(exp_avg, update, exp_avg_sq)]
+        utils.exp_avg_sq_(exp_avg_sq, update, utils.beta_debias(utils.get_beta2(group), group['step']), 1)
         raise SkipUpdate
 
-    utils.fused_adopt_(param, update, state['exp_avg_sq'], state['exp_avg'], utils.get_beta1(group),
-                       utils.get_beta2(group), group['step'] - 2, group['lr'], group['eps'], group['weight_decay'],
-                       group['caution'])
+    utils.fused_adopt_(param, update, exp_avg_sq, exp_avg, utils.get_beta1(group), utils.get_beta2(group),
+                       group['step'] - 2, group['lr'], group['eps'], group['weight_decay'], group['caution'])
     raise SkipUpdate
 
 
-def _init_soap(state, group, grad):
-    utils.init_preconditioner(grad, state, group['max_precond_dim'], group['precondition_1d'])
-    utils.update_preconditioner(grad, state, group['max_precond_dim'], group['precondition_1d'], 0, True)
+def _init_soap(state, group, update, grad, param):
+    utils.init_preconditioner(grad, state, utils.get_beta2(group), group['max_precond_dim'], group['precondition_1d'])
 
 
-def _init_psgd(state, group, grad, cached_q):
+def _init_psgd(state, group, update, grad, param, cached: bool = False, prob: Optional[callable] = None):
     Q, state["exprs"] = utils.init_Q_exprs(grad, group['precond_init_scale'], group['max_size_triangular'],
                                            group['min_ndim_triangular'], group['memory_save_mode'],
                                            dtype=getattr(torch, group['q_dtype']))
     state["Q"] = utils.triu_to_line(Q) if group['store_triu_as_line'] else Q
 
-    if not cached_q:
+    if not cached:
         return
 
     state['Q_cache'] = [torch.empty_like(q) for q in Q]
 
-    expr = [f'{c.upper()}{c}' if q_.ndim == 2 else c for c, q_ in zip(utils.einsum_base, Q)]
-    expr = ','.join(expr)
-    grad_expr = ''.join(c for c, _ in zip(utils.einsum_base, grad.shape))
-    out_expr = ''.join(c.upper() if c.upper() in expr else c for c in grad_expr)
-    expr = f'{expr},{grad_expr}->{out_expr}'
-    state['cache_expr'] = expr
 
-
-def precond_schedule(state, group, prob: Union[callable, float, None] = None, name: str = 'cumulative_prob'):
+def precond_schedule(group, prob: Union[callable, float, None] = None, name: str = 'cumulative_prob'):
     step = group['step']
     if 'precondition_frequency' in group:
         return step > 0 and step % group['precondition_frequency'] == 0
@@ -133,74 +196,75 @@ def precond_schedule(state, group, prob: Union[callable, float, None] = None, na
     if 'precond_scheduler' in group:
         return utils.precond_schedule(step, group['precond_scheduler'], rng)
     if prob is not None:
-        return utils.psgd_should_update(state, group, prob, rng, name=name)
+        return utils.psgd_should_update(group, prob, rng, name=name)
     raise ValueError("No preconditioner update schedule specified.")
 
 
-def scale_by_soap(state, group, update, grad, param):
+@zero_guard("exp_avg", "exp_avg_sq")
+@general_guard("Q", "GG", init_fn=_init_soap)
+@no_state
+def scale_by_soap(group, update, grad, param, exp_avg, exp_avg_sq, Q, GG):
     update = utils.promote(update)
     grad = utils.promote(grad)
 
-    exp_avg = _zero_guard(state, "exp_avg", grad, _storage_dtype(group))
-    exp_avg_sq = _zero_guard(state, "exp_avg_sq", grad, _storage_dtype(group))
-    if _inplace_guard_(state, "Q", lambda: _init_soap(state, group, grad)):
-        raise SkipUpdate
-
-    grad_projected = utils.project(update, state['Q'], False)
+    grad_projected = [utils.project(u, q, False) for u, q in zip(update, Q)]
     precond = utils.adam_(exp_avg, exp_avg_sq, grad_projected, utils.get_beta1(group), utils.get_beta2(group),
-                          utils.scalar_guard(group['step'], exp_avg))[0]
-    precond = utils.project(precond, state['Q'], True)
+                          utils.scalar_guard(group['step'], exp_avg[0]))
+    precond = [utils.project(p, q, False) for p, q in zip(precond, Q)]
 
-    utils.update_preconditioner(update, state, group['max_precond_dim'], group['precondition_1d'],
-                                utils.beta_debias(utils.get_beta2(group), group['step']),
-                                precond_schedule(state, group))
+    for u, q, gg, eas in zip(update, Q, GG, exp_avg_sq):
+        utils.update_preconditioner(u, q, gg, eas, group['max_precond_dim'], group['precondition_1d'],
+                                    utils.beta_debias(utils.get_beta2(group), group['step']), precond_schedule(group))
     return precond
 
 
-def _update_psgd_precond(state, group, param, grad, Q, prob: Optional[callable] = None):
+def _update_psgd_precond(group, param, grad, Q_mat, Q, exprs, prob: Optional[callable] = None):
     if prob is None:
         prob = utils.precond_update_prob_schedule()
-    if not precond_schedule(state, group, prob):
+    if not precond_schedule(group, prob, name=f"cumulative_prob_{id(Q)}"):
         return
 
     Q = [utils.promote(q_) for q_ in Q]
-    utils.psgd_update_precond(Q, state['exprs'], grad, group['precond_lr'], state['Q'], group['store_triu_as_line'])
+    utils.psgd_update_precond(Q_mat, exprs, grad, group['precond_lr'], Q, group['store_triu_as_line'])
 
-    if grad.dim() > 1 and precond_schedule(state, group, balance_probability, "balance_prob"):
+    if grad.dim() > 1 and precond_schedule(group, balance_probability, "balance_prob"):
         if group['store_triu_as_line']:
-            utils.psgd_balance_Q([q_ for _, q_ in state['Q']])
+            utils.psgd_balance_Q([q_ for _, q_ in Q])
         else:
-            utils.psgd_balance_Q(state['Q'])
+            utils.psgd_balance_Q(Q)
 
 
-def _update_psgd_cache(state, cached, q):
+def _update_psgd_cache(cached, Q_cache, q):
     if not cached:
         return q
 
-    for c_, q_ in zip(state['Q_cache'], q):
+    for c_, q_ in zip(Q_cache, q):
         if q_.ndim == 2:
             torch.matmul(q_.T, q_, out=c_)
         else:
             torch.mul(q_, q_, out=c_)
-    return state['Q_cache']
+    return Q_cache
 
 
-def scale_by_psgd(state, group, update, grad, param, cached: bool = False, prob: Optional[callable] = None):
-    if _inplace_guard_(state, "Q", lambda: _init_psgd(state, group, grad, cached)):
-        raise SkipUpdate
+@general_guard("Q", "exprs", ("Q_cache", None), ("cache_expr", None), init_fn=_init_psgd)
+@no_state_no_foreach
+def scale_by_psgd(group, update, grad, param, Q, exprs, Q_cache, cache_expr: str, cached: bool = False,
+                  prob: Optional[callable] = None):
+    Q_mat = utils.line_to_triu(Q) if group['store_triu_as_line'] else Q
+    _update_psgd_precond(group, param, update, Q_mat, Q, exprs, prob)
+    return utils.psgd_precond_grad(False, exprs[-1], update,
+                                   *_update_psgd_cache(cached, Q_cache, Q_mat))
 
-    q = utils.line_to_triu(state['Q']) if group['store_triu_as_line'] else state['Q']
-    _update_psgd_precond(state, group, param, update, q, prob)
-    return utils.psgd_precond_grad(False, state["exprs"][-1], update, *_update_psgd_cache(state, cached, q))
 
-
-def scale_by_delayed_psgd(state, group, update, grad, param, cached: bool = False, prob: Optional[callable] = None):
-    if _inplace_guard_(state, "Q", lambda: _init_psgd(state, group, grad, cached)):
-        raise SkipUpdate
-
-    q = utils.line_to_triu(state['Q']) if group['store_triu_as_line'] else state['Q']
-    precond = utils.psgd_precond_grad(False, state["exprs"][-1], update, *_update_psgd_cache(state, cached, q))
-    _update_psgd_precond(state, group, param, update, q, prob)
+@general_guard("Q", "exprs", ("Q_cache", None), ("cache_expr", None), init_fn=_init_psgd)
+@no_state_no_foreach
+def scale_by_delayed_psgd(group, update, grad, param, Q, exprs, Q_cache, cache_expr: str, cached: bool = False,
+                          prob: Optional[callable] = None):
+    Q_mat = utils.line_to_triu(Q) if group['store_triu_as_line'] else Q
+    precond = utils.psgd_precond_grad(False, exprs[-1], update,
+                                      *_update_psgd_cache(cached, Q_cache, Q_mat))
+    # TODO: Use actual cache equations
+    _update_psgd_precond(group, param, update, Q_mat, Q, exprs, prob)
     return precond
 
 
@@ -218,7 +282,7 @@ def apply_to_idx(fn, idx):
     return _fn
 
 
-def chain(state, group, grad, param, *fns):
+def chain(state: Union[callable, dict], group, grad, param, *fns):
     update = grad
     skip_update = False
     for fn in fns:
@@ -244,6 +308,13 @@ class ChainOpt(utils.StatefulOptimizer):
             group['lr'] = -group['base_lr'] * step / group['warmup_steps']
         else:
             group['lr'] = -group['base_lr']
-        for p, g in self.split_p_and_g_in_group(group, should_promote=False, beta1=utils.get_beta1(group)):
-            state = self.state_(p)
-            chain(state, group, g, p, *self.fns)
+
+        p, g = zip(*list(self.split_p_and_g_in_group(group, should_promote=False, beta1=utils.get_beta1(group))))
+
+        if not group['foreach']:
+            for param, grad in zip(p, g):
+                state = self.state_(p)
+                chain(state, group, g, p, *self.fns)
+            return
+
+        chain(self.state_, group, g, p, *self.fns)

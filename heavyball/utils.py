@@ -378,8 +378,6 @@ def get_orthogonal_matrix(mat):
 
         Q = torch.flip(Q, [1])
 
-        if not float_data:
-            Q = Q.to(original_device).type(original_type)
         final.append(Q)
 
     return final
@@ -481,35 +479,35 @@ def min_dtype(xs: List[Tensor]):
     return torch.float32
 
 
-def update_preconditioner(grad, state, max_precond_dim, precondition_1d, beta, update_precond):
+def update_preconditioner(grad, Q, GG, exp_avg_sq, max_precond_dim, precondition_1d, beta, update_precond):
     """
     Updates the preconditioner matrices and the eigenbases (L, R, Q_L, Q_R in the paper).
     """
-    compute_ggt(grad, state['GG'], max_precond_dim, precondition_1d, beta)
-    if state['Q'] is None:
-        state['Q'] = get_orthogonal_matrix(state['GG'])
+    compute_ggt(grad, GG, max_precond_dim, precondition_1d, beta)
     if update_precond:
-        get_orthogonal_matrix_QR(state['GG'], state['Q'], state['exp_avg_sq'])
+        get_orthogonal_matrix_QR(GG, Q, exp_avg_sq)
 
 
-def init_preconditioner(grad, state, max_precond_dim=10000, precondition_1d=False):
+def init_preconditioner(grad, state, beta, max_precond_dim=10000, precondition_1d=False):
     """
     Initializes the preconditioner matrices (L and R in the paper).
     """
-    state['Q'] = None  # Will hold all the eigenbases of the preconditioner.
     state['GG'] = []  # Will hold all the preconditioner matrices (L and R in the paper).
     if grad.dim() == 1:
-        if not precondition_1d or grad.shape[0] > max_precond_dim:
-            state['GG'].append([])
-            return
-        state['GG'].append(torch.zeros(grad.shape[0], grad.shape[0], device=grad.device, dtype=grad.dtype))
-        return
-
-    for sh in grad.shape:
-        if sh > max_precond_dim:
-            state['GG'].append([])
+        if precondition_1d or grad.shape[0] > max_precond_dim:
+            state['GG'].append(torch.zeros(grad.shape[0], grad.shape[0], device=grad.device, dtype=grad.dtype))
         else:
-            state['GG'].append(torch.zeros(sh, sh, device=grad.device, dtype=grad.dtype))
+            state['GG'].append([])
+
+    else:
+        for sh in grad.shape:
+            if sh > max_precond_dim:
+                state['GG'].append([])
+            else:
+                state['GG'].append(torch.zeros(sh, sh, device=grad.device, dtype=grad.dtype))
+
+    compute_ggt(grad, state['GG'], max_precond_dim, precondition_1d, beta)
+    state['Q'] = get_orthogonal_matrix(state['GG'])
 
 
 @decorator
@@ -733,7 +731,8 @@ def _compilable_adam_(exp_avg: List[Tensor], exp_avg_sq: List[Tensor], grad: Lis
 
 def adam_(exp_avg: List[Tensor], exp_avg_sq: List[Tensor], grad: List[Tensor], beta1: float, beta2: float, step: int):
     exp_avg, exp_avg_sq, grad = map(list_guard, (exp_avg, exp_avg_sq, grad))
-    beta1, beta2, step = scalar_guard(beta1, exp_avg[0]), scalar_guard(beta2, exp_avg[0]), scalar_guard(step, exp_avg[0])
+    beta1, beta2, step = scalar_guard(beta1, exp_avg[0]), scalar_guard(beta2, exp_avg[0]), scalar_guard(step,
+                                                                                                        exp_avg[0])
     return _compilable_adam_(exp_avg, exp_avg_sq, grad, beta1, beta2, step)
 
 
@@ -1180,16 +1179,16 @@ def update_triu_(q_state, materialised):
         copy_stochastic_(q, m)
 
 
-def psgd_should_update(state, group, prob: Union[float, callable], rng: Optional[random.Random] = None,
+def psgd_should_update(group, prob: Union[float, callable], rng: Optional[random.Random] = None,
                        name: str = 'cumulative_prob'):
-    state[f'{name}_prob_step'] = state.get(f'{name}_prob_step', 0) + 1
+    group[f'{name}_prob_step'] = group.get(f'{name}_prob_step', 0) + 1
     if not isinstance(prob, float):
-        prob = prob(state[f'{name}_prob_step'])
+        prob = prob(group[f'{name}_prob_step'])
     if group['stochastic_schedule']:
         return rng.random() < prob
     cumulative_prob = state.get(name, 0)
-    state[name] = cumulative_prob + prob
-    return int(state[name]) > int(cumulative_prob)
+    group[name] = cumulative_prob + prob
+    return int(group[name]) > int(cumulative_prob)
 
 
 # TODO: Figure out why this sometimes crashes

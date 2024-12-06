@@ -17,7 +17,7 @@ def get_memory():
 
 @pytest.mark.parametrize("opt", heavyball.__all__)
 @pytest.mark.parametrize("size,depth", [(256, 128)])
-def test_foreach(opt, size, depth: int, iterations: int = 5, outer_iterations: int = 3):
+def test_foreach(opt, size, depth: int, iterations: int = 4096, outer_iterations: int = 2):
     set_torch()
 
     opt = getattr(heavyball, opt)
