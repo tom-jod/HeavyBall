@@ -765,8 +765,7 @@ def _fused_compilable_adam_(y: List[Tensor], exp_avg: List[Tensor], exp_avg_sq: 
 
     copy_stochastic_list_(exp_avg, exp_avg32)
     copy_stochastic_list_(exp_avg_sq, exp_avg_sq32)
-    _compilable_update_(y, u32, decay, lambda a, b, c: [a_.add_(b_, alpha=c) for a_, b_ in zip(a, b)], lr, caution,
-                        grad)
+    _compilable_update_(y, u32, decay, lambda a, b, c: a.add_(b, alpha=c), lr, caution, g32)
 
 
 def fused_adam_(y: List[Tensor], exp_avg: List[Tensor], exp_avg_sq: List[Tensor], grad: List[Tensor], beta1: float,
