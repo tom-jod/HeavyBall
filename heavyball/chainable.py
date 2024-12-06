@@ -108,7 +108,7 @@ def exp_avg(group, update, grad, param, exp_avg):
 @zero_guard("exp_avg_sq")
 @no_state
 def scale_by_exp_avg_sq(group, update, grad, param, exp_avg_sq):
-    return utils.scale_by_exp_avg_sq_(exp_avg_sq, grad, utils.beta_debias(utils.get_beta2(group), group["step"]),
+    return utils.scale_by_exp_avg_sq_(exp_avg_sq, update, utils.beta_debias(utils.get_beta2(group), group["step"]),
                                       group['eps'])[0]
 
 
@@ -145,8 +145,10 @@ def update_by_laprop(group, update, grad, param, exp_avg, exp_avg_sq):
 @zero_guard("z")
 @no_state
 def update_by_schedule_free(group, update, grad, param, z):
-    group['weight_sum'] = utils.schedule_free_(group['lr'], group['weight_lr_power'], group.get('weight_sum', 0), utils.get_beta1(group), param, z, update,
-                              group['r'], group['step'])
+    if group['step'] == 1:
+        utils.copy_stochastic_list_(z, param)
+    group['weight_sum'] = utils.schedule_free_(abs(group['lr']), group['weight_lr_power'], group.get('weight_sum', 0),
+                                               utils.get_beta1(group), param, z, update, group['r'], group['step'])
     raise SkipUpdate
 
 
@@ -169,6 +171,23 @@ def update_by_adopt(group, update, grad, param, exp_avg, exp_avg_sq):
     raise SkipUpdate
 
 
+@zero_guard("exp_avg", "exp_avg_sq")
+@no_state
+def scale_by_adopt(group, update, grad, param, exp_avg, exp_avg_sq):
+    if group['step'] == 1:
+        utils.exp_avg_sq_(exp_avg_sq, update, 0, 1)
+        raise SkipUpdate
+
+    if group['step'] == 2:
+        update = utils.promote(update)
+        easq = utils.promote(exp_avg_sq)
+        [utils.set_(ea, u / easq.sqrt().clamp_(min=group['eps'])) for ea, u, easq in zip(exp_avg, update, exp_avg_sq)]
+        utils.exp_avg_sq_(exp_avg_sq, update, utils.beta_debias(utils.get_beta2(group), group['step']), 1)
+        raise SkipUpdate
+
+    return utils.adopt(update, exp_avg_sq, exp_avg, utils.get_beta1(group), utils.get_beta2(group), group['step'] - 2)
+
+
 def _init_soap(state, group, update, grad, param):
     utils.init_preconditioner(grad, state, utils.get_beta2(group), group['max_precond_dim'], group['precondition_1d'])
 
@@ -183,6 +202,14 @@ def _init_psgd(state, group, update, grad, param, cached: bool = False, prob: Op
         return
 
     state['Q_cache'] = [torch.empty_like(q) for q in Q]
+
+    expr = [f'{c.upper()}{c}' if q_.ndim == 2 else c for c, q_ in zip(utils.einsum_base, Q)]
+    expr = ','.join(expr)
+    grad_expr = ''.join(c for c, _ in zip(utils.einsum_base, grad.shape))
+    out_expr = ''.join(c.upper() if c.upper() in expr else c for c in grad_expr)
+    expr = f'{expr},{grad_expr}->{out_expr}'
+
+    state['cache_expr'] = expr
 
 
 def precond_schedule(group, prob: Union[callable, float, None] = None, name: str = 'cumulative_prob'):
@@ -211,7 +238,7 @@ def scale_by_soap(group, update, grad, param, exp_avg, exp_avg_sq, Q, GG):
 
     for u, q, gg, eas in zip(update, Q, GG, exp_avg_sq):
         utils.update_preconditioner(u, q, gg, eas, group['max_precond_dim'], group['precondition_1d'],
-                                    utils.beta_debias(utils.get_beta2(group), group['step']), precond_schedule(group))
+                                    utils.beta_debias(group['shampoo_beta'], group['step']), precond_schedule(group))
     return precond
 
 
@@ -243,13 +270,28 @@ def _update_psgd_cache(cached, Q_cache, q):
     return Q_cache
 
 
+def _cached_psgd_precond_grad(cached, cache_expr, exprs, update, Q_mat, Q_cache):
+    if cached:
+        return utils.precond_grad_cached_(cache_expr, update, *cache_expr)
+    return utils.psgd_precond_grad(exprs[-1], update, *Q_mat)
+
+
+def _fused_cached_psgd_precond_grad(group, grad, param, cached, cache_expr, exprs, update, Q_mat, Q_cache):
+    if cached:
+        utils.fused_precond_grad_cached_(cache_expr, update, param, group['lr'], grad, group['weight_decay'],
+                                         group['caution'], *Q_cache)
+    else:
+        utils.fused_psgd_precond_grad(exprs[-1], update, param, group['lr'], grad, group['weight_decay'],
+                                      group['caution'], *Q_mat)
+
+
 @general_guard("Q", "exprs", ("Q_cache", None), ("cache_expr", None), init_fn=_init_psgd)
 @no_state_no_foreach
 def scale_by_psgd(group, update, grad, param, Q, exprs, Q_cache, cache_expr: str, cached: bool = False,
                   prob: Optional[callable] = None):
     Q_mat = utils.line_to_triu(Q) if group['store_triu_as_line'] else Q
     _update_psgd_precond(group, param, update, Q_mat, Q, exprs, prob)
-    return utils.psgd_precond_grad(False, exprs[-1], update, *_update_psgd_cache(cached, Q_cache, Q_mat))
+    return _cached_psgd_precond_grad(False, cache_expr, exprs, update, Q_mat, Q_cache)
 
 
 @general_guard("Q", "exprs", ("Q_cache", None), ("cache_expr", None), init_fn=_init_psgd)
@@ -257,10 +299,29 @@ def scale_by_psgd(group, update, grad, param, Q, exprs, Q_cache, cache_expr: str
 def scale_by_delayed_psgd(group, update, grad, param, Q, exprs, Q_cache, cache_expr: str, cached: bool = False,
                           prob: Optional[callable] = None):
     Q_mat = utils.line_to_triu(Q) if group['store_triu_as_line'] else Q
-    precond = utils.psgd_precond_grad(False, exprs[-1], update, *_update_psgd_cache(cached, Q_cache, Q_mat))
-    # TODO: Use actual cache equations
+    precond = _cached_psgd_precond_grad(False, cache_expr, exprs, update, Q_mat, Q_cache)
     _update_psgd_precond(group, param, update, Q_mat, Q, exprs, prob)
     return precond
+
+
+@general_guard("Q", "exprs", ("Q_cache", None), ("cache_expr", None), init_fn=_init_psgd)
+@no_state_no_foreach
+def update_by_psgd(group, update, grad, param, Q, exprs, Q_cache, cache_expr: str, cached: bool = False,
+                   prob: Optional[callable] = None):
+    Q_mat = utils.line_to_triu(Q) if group['store_triu_as_line'] else Q
+    _update_psgd_precond(group, param, update, Q_mat, Q, exprs, prob)
+    _fused_cached_psgd_precond_grad(group, update, param, cached, cache_expr, exprs, update, Q_mat, Q_cache)
+    raise SkipUpdate
+
+
+@general_guard("Q", "exprs", ("Q_cache", None), ("cache_expr", None), init_fn=_init_psgd)
+@no_state_no_foreach
+def update_by_delayed_psgd(group, update, grad, param, Q, exprs, Q_cache, cache_expr: str, cached: bool = False,
+                           prob: Optional[callable] = None):
+    Q_mat = utils.line_to_triu(Q) if group['store_triu_as_line'] else Q
+    _fused_cached_psgd_precond_grad(group, update, param, cached, cache_expr, exprs, update, Q_mat, Q_cache)
+    _update_psgd_precond(group, param, update, Q_mat, Q, exprs, prob)
+    raise SkipUpdate
 
 
 def palm_beta2(state, group, update, grad, param):
@@ -318,12 +379,12 @@ class ChainOpt(utils.StatefulOptimizer):
         chain(self.state_, group, g, p, *self.fns)
 
 
-str_or_fn = Union[str, callable, None]
+use_default = object()
+str_or_fn = Union[str, callable, None, use_default]
 
 
-def _get_clip_fn(name: str_or_fn, default: str_or_fn):
-    if name is None:
-        name = default
+def _get_clip_fn(name: str_or_fn, default_val: str_or_fn):
+    name = default(name, default_val)
     if callable(name):
         return name
     elif name not in ('l2_clip_', 'rmsnorm_clip_', 'trust_region_clip_', 'a_law_compress', 'mu_law_compress'):
@@ -332,19 +393,39 @@ def _get_clip_fn(name: str_or_fn, default: str_or_fn):
 
 
 def default(a, b):
-    return b if a is None else a
+    return b if a is None or a is use_default else a
+
+
+# not supported: update_by_schedule_free, scale_by_soap, scale_by_exp_avg_sq
+_scale_to_update_map = {scale_by_delayed_psgd: update_by_delayed_psgd,  #
+                        scale_by_psgd: update_by_psgd,  #
+                        scale_by_adam: update_by_adam,  #
+                        scale_by_laprop: update_by_laprop,  #
+                        scale_by_adopt: update_by_adopt}
 
 
 class BaseOpt(ChainOpt):
     gradient_clipping: str_or_fn = None
     update_clipping: str_or_fn = None
     palm: bool = False
+    auto_fuse: bool = True
 
     def __init__(self, params, defaults, foreach: bool, gradient_clipping: str_or_fn, update_clipping: str_or_fn,
                  palm: bool = None, *fns):
-        if update_clipping is not None and any(
-                fn in (update_by_adopt, update_by_adam, update_by_laprop, update_by_schedule_free) for fn in fns):
-            raise ValueError("`update_by` functions do not support update clipping. Use `scale_by` functions instead.")
+        if default(update_clipping, self.update_clipping) is None:
+            if fns and self.auto_fuse:
+                args, kwargs = None, None
+                fn = fns[-1]
+                if isinstance(fn, functools.partial):
+                    fn, args, kwargs = fns[-1].func, fns[-1].args, fns[-1].keywords
+                if fn in _scale_to_update_map:
+                    fn = _scale_to_update_map[fn]
+                    if args is not None:
+                        fn = functools.partial(fn, *args, **kwargs)
+                    fns = tuple(fns)[:-1] + (fn,)
+        else:
+            if any(fn in (update_by_adopt, update_by_adam, update_by_laprop, update_by_schedule_free) for fn in fns):
+                raise ValueError("`update_by` functions do not support update clipping. Use `scale_by`")
         fns = tuple(fns)
 
         if default(palm, self.palm):

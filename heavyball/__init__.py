@@ -10,19 +10,33 @@ from . import utils
 class ForeachAdamW(C.BaseOpt):
     def __init__(self, params, lr=0.0025, betas=(0.9, 0.99), eps=1e-8, weight_decay=0, warmup_steps=0,
                  foreach: bool = True, storage_dtype: str = 'float32', mars: bool = False, caution: bool = False,
-                 mars_gamma: float = 0.0025, gradient_clipping: C.str_or_fn = None, update_clipping: C.str_or_fn = None,
-                 palm: bool = None, beta2_scale: float = 0.8):
+                 mars_gamma: float = 0.0025, gradient_clipping: C.str_or_fn = C.use_default,
+                 update_clipping: C.str_or_fn = C.use_default, palm: bool = C.use_default, beta2_scale: float = 0.8):
         defaults = dict(lr=lr, betas=betas, eps=eps, k=0, warmup_steps=warmup_steps, train_mode=True, weight_sum=0.0,
                         lr_max=-1.0, weight_decay=weight_decay, storage_dtype=storage_dtype, mars=mars, caution=caution,
                         mars_gamma=mars_gamma, beta2_scale=beta2_scale)
         super().__init__(params, defaults, foreach, gradient_clipping, update_clipping, palm, C.update_by_adam)
 
 
-class ForeachSFAdamW(C.ScheduleFree):
-    def __init__(self, params, lr=0.0025, betas=(0.9, 0.99), eps=1e-8, weight_decay=0, warmup_steps=0, r=0.0,
+class ForeachRMSprop(C.BaseOpt):
+    """
+    Debiased RMSprop (not torch.optim.RMSprop)
+    """
+    def __init__(self, params, lr=0.0025, betas=(0.9, 0.99), eps=1e-6, weight_decay=0, warmup_steps=0, r=0.0,
                  weight_lr_power=2.0, foreach: bool = True, storage_dtype: str = 'float32', mars: bool = False,
-                 caution: bool = False, mars_gamma: float = 0.0025, gradient_clipping: C.str_or_fn = None,
-                 update_clipping: C.str_or_fn = None, palm: bool = None, beta2_scale: float = 0.8):
+                 caution: bool = False, mars_gamma: float = 0.0025, gradient_clipping: C.str_or_fn = C.use_default,
+                 update_clipping: C.str_or_fn = C.use_default, palm: bool = C.use_default, beta2_scale: float = 0.8):
+        defaults = dict(lr=lr, betas=betas, eps=eps, warmup_steps=warmup_steps, weight_decay=weight_decay,
+                        foreach=foreach, storage_dtype=storage_dtype, mars=mars, caution=caution, mars_gamma=mars_gamma,
+                        beta2_scale=beta2_scale)
+        super().__init__(params, defaults, foreach, gradient_clipping, update_clipping, palm, C.scale_by_exp_avg_sq)
+
+
+class ForeachSFAdamW(C.ScheduleFree):
+    def __init__(self, params, lr=0.0025, betas=(0.9, 0.99), eps=1e-6, weight_decay=0, warmup_steps=0, r=0.0,
+                 weight_lr_power=2.0, foreach: bool = True, storage_dtype: str = 'float32', mars: bool = False,
+                 caution: bool = False, mars_gamma: float = 0.0025, gradient_clipping: C.str_or_fn = C.use_default,
+                 update_clipping: C.str_or_fn = C.use_default, palm: bool = C.use_default, beta2_scale: float = 0.8):
         defaults = dict(lr=lr, betas=betas, eps=eps, r=r, k=0, warmup_steps=warmup_steps, train_mode=True,
                         weight_sum=0.0, lr_max=-1.0, weight_lr_power=weight_lr_power, weight_decay=weight_decay,
                         foreach=foreach, storage_dtype=storage_dtype, mars=mars, caution=caution, mars_gamma=mars_gamma,
@@ -38,8 +52,8 @@ class PaLMForeachSFAdamW(ForeachSFAdamW):
 class ForeachADOPT(C.BaseOpt):
     def __init__(self, params, lr=0.0025, betas=(0.9, 0.99), eps=1e-8, weight_decay=0, warmup_steps=0,
                  foreach: bool = True, storage_dtype: str = 'float32', mars: bool = False, caution: bool = False,
-                 mars_gamma: float = 0.0025, gradient_clipping: C.str_or_fn = None, update_clipping: C.str_or_fn = None,
-                 palm: bool = None, beta2_scale: float = 0.8):
+                 mars_gamma: float = 0.0025, gradient_clipping: C.str_or_fn = C.use_default,
+                 update_clipping: C.str_or_fn = C.use_default, palm: bool = C.use_default, beta2_scale: float = 0.8):
         defaults = dict(lr=lr, betas=betas, eps=eps, k=0, warmup_steps=warmup_steps, train_mode=True, weight_sum=0.0,
                         lr_max=-1.0, weight_decay=weight_decay, storage_dtype=storage_dtype, mars=mars, caution=caution,
                         mars_gamma=mars_gamma, beta2_scale=beta2_scale)
@@ -49,8 +63,8 @@ class ForeachADOPT(C.BaseOpt):
 class ForeachLaProp(C.BaseOpt):
     def __init__(self, params, lr=0.0025, betas=(0.9, 0.99), eps=1e-8, weight_decay=0, warmup_steps=0,
                  foreach: bool = True, storage_dtype: str = 'float32', mars: bool = False, caution: bool = False,
-                 mars_gamma: float = 0.0025, gradient_clipping: C.str_or_fn = None, update_clipping: C.str_or_fn = None,
-                 palm: bool = None, beta2_scale: float = 0.8):
+                 mars_gamma: float = 0.0025, gradient_clipping: C.str_or_fn = C.use_default,
+                 update_clipping: C.str_or_fn = C.use_default, palm: bool = C.use_default, beta2_scale: float = 0.8):
         defaults = dict(lr=lr, betas=betas, eps=eps, k=0, warmup_steps=warmup_steps, train_mode=True, weight_sum=0.0,
                         lr_max=-1.0, weight_decay=weight_decay, storage_dtype=storage_dtype, mars=mars, caution=caution,
                         mars_gamma=mars_gamma, beta2_scale=beta2_scale)
@@ -81,11 +95,10 @@ class ForeachSOAP(C.BaseOpt):
                  merge_dims: bool = True, precondition_1d: bool = False, normalize_grads: bool = False,
                  data_format: str = "channels_first", correct_bias: bool = True, warmup_steps: int = 1,
                  split: bool = False, foreach: bool = True, mars: bool = False, caution: bool = False,
-                 mars_gamma: float = 0.0025, palm: bool = None, precond_scheduler=(1 / 3, 9), beta2_scale: float = 0.8,
-                 use_precond_schedule: bool = None, gradient_clipping: C.str_or_fn = None,
-                 update_clipping: C.str_or_fn = None):
-        if use_precond_schedule is None:
-            use_precond_schedule = self.use_precond_schedule
+                 mars_gamma: float = 0.0025, palm: bool = C.use_default, precond_scheduler=(1 / 3, 9),
+                 beta2_scale: float = 0.8, use_precond_schedule: bool = C.use_default,
+                 gradient_clipping: C.str_or_fn = C.use_default, update_clipping: C.str_or_fn = C.use_default):
+        use_precond_schedule = C.default(use_precond_schedule, self.use_precond_schedule)
 
         defaults = {"lr": lr, "betas": betas, "shampoo_beta": shampoo_beta, "eps": eps, "weight_decay": weight_decay,
                     "precondition_frequency": precondition_frequency, "max_precond_dim": max_precond_dim,
@@ -129,21 +142,17 @@ class ForeachPSGDKron(C.BaseOpt):
     def __init__(self, params, lr=0.001, beta=0.9, weight_decay=0.0, preconditioner_update_probability=None,
                  max_size_triangular=2048, min_ndim_triangular=2, memory_save_mode=None,
                  momentum_into_precond_update=True, warmup_steps: int = 1, merge_dims: bool = False,
-                 split: bool = False, clip_fn: callable = None, store_triu_as_line: bool = True, foreach: bool = True,
-                 q_dtype='float32', stochastic_schedule: bool = True, storage_dtype: str = 'float32',
-                 mars: bool = False, caution: bool = False, mars_gamma: float = 0.0025, delayed: Optional[bool] = None,
-                 cached: Optional[bool] = None, exp_avg_input: Optional[bool] = None,
-                 gradient_clipping: C.str_or_fn = None, update_clipping: C.str_or_fn = None, #
+                 split: bool = False, store_triu_as_line: bool = True, foreach: bool = True, q_dtype='float32',
+                 stochastic_schedule: bool = True, storage_dtype: str = 'float32', mars: bool = False,
+                 caution: bool = False, mars_gamma: float = 0.0025, delayed: Optional[bool] = C.use_default,
+                 cached: Optional[bool] = C.use_default, exp_avg_input: Optional[bool] = C.use_default,
+                 gradient_clipping: C.str_or_fn = C.use_default, update_clipping: C.str_or_fn = C.use_default,  #
                  # expert parameters
                  precond_init_scale=1.0, precond_lr=0.1):
-        if delayed is None:
-            delayed = self.delayed
-        if cached is None:
-            cached = self.cached
-        if update_clipping is None:
-            update_clipping = utils.trust_region_clip_
-        if exp_avg_input is None:
-            exp_avg_input = self.exp_avg_input
+        delayed = C.default(delayed, self.delayed)
+        cached = C.default(cached, self.cached)
+        exp_avg_input = C.default(exp_avg_input, self.exp_avg_input)
+        update_clipping = C.default(update_clipping, utils.trust_region_clip_)
 
         defaults = dict(lr=lr, beta=beta, weight_decay=weight_decay, max_size_triangular=max_size_triangular,
                         min_ndim_triangular=min_ndim_triangular, memory_save_mode=memory_save_mode,
@@ -153,7 +162,7 @@ class ForeachPSGDKron(C.BaseOpt):
                         storage_dtype=storage_dtype, caution=caution, mars_gamma=mars_gamma, mars=mars,
                         stochastic_schedule=stochastic_schedule)
 
-        super().__init__(params, defaults, foreach, gradient_clipping, update_clipping, False, #
+        super().__init__(params, defaults, foreach, gradient_clipping, update_clipping, False,  #
                          *(C.exp_avg,) * exp_avg_input,  #
                          functools.partial(C.scale_by_delayed_psgd if delayed else C.scale_by_psgd, cached=cached,
                                            prob=preconditioner_update_probability))

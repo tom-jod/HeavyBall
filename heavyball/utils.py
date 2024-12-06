@@ -79,19 +79,8 @@ def _compilable_schedule_free_(p: List[Tensor], z: List[Tensor], ckp1: Tensor, g
     copy_stochastic_list_(z, z32)
 
 
-def get_ckp1(lr, weight_lr_power, weight_sum, r, step):
-    weight = lr ** weight_lr_power * max(step, 1) ** r
-    weight_sum = weight_sum + weight
-
-    try:
-        ckp1 = weight / weight_sum
-    except ZeroDivisionError:
-        ckp1 = 0
-    return ckp1, weight_sum
-
-
 def schedule_free_(lr: float, weight_lr_power: float, weight_sum: float, beta1: float, parameters: List[Tensor],
-                   z: List[Tensor], grad: list[Tensor], r: float = 0.0, step: int = 0):
+                   z: List[Tensor], grad: List[Tensor], r: float = 0.0, step: int = 0):
     weight = lr ** weight_lr_power * max(step, 1) ** r
     weight_sum = weight_sum + weight
 
@@ -99,6 +88,8 @@ def schedule_free_(lr: float, weight_lr_power: float, weight_sum: float, beta1: 
         ckp1 = weight / weight_sum
     except ZeroDivisionError:
         ckp1 = 0
+
+    print("ws, w", weight_sum, weight, lr, weight_lr_power, step, r, ckp1)
 
     # These operations update y in-place,
     # without computing x explicitly.
@@ -171,10 +162,13 @@ def beta_debias(beta, step):
 @decorator_knowngood
 def _compilable_exp_avg_sq_(state: List[Tensor], grad: List[Tensor], beta2: Tensor, eps: Tensor,
                             out: List[Optional[Tensor]]):
-    torch._foreach_mul_(state, beta2)
-    [s.addcmul_(g, g, value=1 - beta2) for s, g in zip(state, grad)]
-    denom = torch._foreach_sqrt(state)
-    [denom.clamp_(min=eps) for denom in denom]
+    s32, g32 = [list(map(promote, x)) for x in (state, grad)]
+    torch._foreach_mul_(s32, beta2)
+    [s.addcmul_(g, g, value=1 - beta2) for s, g in zip(s32, g32)]
+    denom = torch._foreach_sqrt(s32)
+    [d.clamp_(min=eps) for d in denom]
+    copy_stochastic_list_(state, s32)
+
     if out[0] is None:
         return denom
 
@@ -191,17 +185,20 @@ def exp_avg_sq_(state, grad, beta2, eps, out=None):
 @decorator_knowngood
 def _compilable_scale_by_exp_avg_sq_(state: List[Tensor], grad: List[Tensor], beta2: Tensor, eps: Tensor,
                                      out: List[Optional[Tensor]]):
-    torch._foreach_mul_(state, beta2)
-    [s.addcmul_(g, g, value=1 - beta2) for s, g in zip(state, grad)]
-    denom = torch._foreach_sqrt(state)
-    [denom.clamp_(min=eps) for denom in denom]
-    return torch._foreach_div_(grad, denom)
+    s32, g32 = [list(map(promote, x)) for x in (state, grad)]
+    torch._foreach_mul_(s32, beta2)
+    [s.addcmul_(g, g, value=1 - beta2) for s, g in zip(s32, g32)]
+    denom = torch._foreach_sqrt(s32)
+    [d.clamp_(min=eps) for d in denom]
+    out = torch._foreach_div(g32, denom)
+    copy_stochastic_list_(state, s32)
+    return stochastic_round_list_(grad, out)
 
 
 def scale_by_exp_avg_sq_(grad, exp_avg_sq, beta2, eps):
     grad, exp_avg_sq = list_guard(grad), list_guard(exp_avg_sq)
     beta2, eps = scalar_guard(beta2, grad[0]), scalar_guard(eps, grad[0])
-    return _compilable_scale_by_exp_avg_sq_(exp_avg_sq, grad, beta2, eps, grad)
+    return _compilable_scale_by_exp_avg_sq_(grad, exp_avg_sq, beta2, eps, grad)
 
 
 @decorator_knowngood
@@ -806,6 +803,33 @@ def fused_adopt_(y, grad, exp_avg_sq, exp_avg, beta1, beta2, step, lr, eps, deca
     _fused_compilable_adopt_(y, grad, exp_avg_sq, exp_avg, beta1, beta2, step, lr, eps, decay, caution)
 
 
+@decorator_knowngood
+def _compilable_adopt_(grad, exp_avg_sq, exp_avg, beta1, beta2, step):
+    g32, exp_avg32, exp_avg_sq32 = [list(map(promote, x)) for x in [grad, exp_avg, exp_avg_sq]]
+    update = [e.clone() for e in exp_avg]
+
+    beta1 = beta_debias(beta1, step)
+    denom = torch._foreach_sqrt(exp_avg_sq32)
+    [denom.clamp_(min=eps) for denom in denom]
+    torch._foreach_mul_(exp_avg32, beta1)
+    [ea32.addcdiv_(g, d, value=1 - beta1) for ea32, g, d in zip(exp_avg32, g32, denom)]
+
+    beta2 = beta_debias(beta2, step + 1)
+    torch._foreach_mul_(exp_avg_sq32, beta2)
+    [eas32.addcmul_(g, g, value=1 - beta2) for eas32, g in zip(exp_avg_sq32, g32)]
+
+    copy_stochastic_list_(exp_avg, exp_avg32)
+    copy_stochastic_list_(exp_avg_sq, exp_avg_sq32)
+
+    return update
+
+
+def adopt(grad, exp_avg_sq, exp_avg, beta1, beta2, step):
+    grad, exp_avg_sq, exp_avg = list_guard(grad), list_guard(exp_avg_sq), list_guard(exp_avg)
+    beta1, beta2, step = scalar_guard(beta1, grad[0]), scalar_guard(beta2, grad[0]), scalar_guard(step, grad[0])
+    return _compilable_adopt_(grad, exp_avg_sq, exp_avg, beta1, beta2, step)
+
+
 def stochastic_round_list_(ref: List[Tensor], source: List[Tensor]):
     return [stochastic_round_(r, s) for r, s in zip(ref, source)]
 
@@ -814,6 +838,8 @@ def stochastic_round_list_(ref: List[Tensor], source: List[Tensor]):
 def stochastic_round_(ref: Tensor, source: Tensor):
     if source.dtype == torch.bfloat16 or ref.dtype == source.dtype:
         return source
+    if ref.dtype != torch.bfloat16:
+        return source.to(ref.dtype)
     result = torch.randint_like(source, dtype=torch.int32, low=0, high=(1 << 16))
     result.add_(source.view(dtype=torch.int32))
     result.bitwise_and_(-65536)  # -65536 = FFFF0000 as a signed int32
@@ -1028,17 +1054,6 @@ def psgd_update_precond(Q, exprs, G, precond_lr, oq, store_triu_as_line):
 
 
 @decorator_knowngood
-def psgd_precond_grad(inplace: bool, exprs: str, grad: Tensor, *preconds: Tensor):
-    """Precondition gradient G with preconditioner Q."""
-    md = min_dtype(preconds)
-    out = torch.einsum(exprs, *[q.conj().to(md) for q in preconds], *[q.to(md) for q in preconds], grad.to(md))
-    if inplace:
-        set_(grad, out)
-        return grad
-    return out.to(grad.dtype)
-
-
-@decorator_knowngood
 def _compilable_l2_clip_(x):
     ref = x
     x = list(map(promote, x))
@@ -1172,22 +1187,45 @@ def psgd_should_update(group, prob: Union[float, callable], rng: Optional[random
     return int(group[name]) > int(cumulative_prob)
 
 
-# TODO: Figure out why this sometimes crashes
-# @decorator_knowngood
-def _compilable_precond_grad_cached_(ea: Tensor, expr: str, param: Tensor, lr: Tensor, weight_decay: Tensor,
-                                     clip_fn: callable, caution: bool, grad: Optional[Tensor], *cached_q: Tensor):
+@decorator_knowngood
+def precond_grad_cached_(expr: str, ea: Tensor, *cached_q: Tensor, cast: bool = True):
     md = min_dtype(list(cached_q) + [ea])
     args = [q.to(md) for q in cached_q]
     args = args + [ea.to(md)]
     new = torch.einsum(expr, *args)
-    new = new.to(torch.float32)
-    _compilable_update_([param], clip_fn([new]), weight_decay, stochastic_add_, lr, caution, [grad])
+    if cast:
+        return new.to(ea.dtype)
+    return new
 
 
-def precond_grad_cached_(cached_q: List[Tensor], ea: Tensor, expr: str, param: Tensor, lr: float, weight_decay: float,
-                         clip_fn, caution, grad):
-    lr = scalar_guard(lr, param)
-    _compilable_precond_grad_cached_(ea, expr, param, lr, weight_decay, clip_fn, caution, grad, *cached_q)
+@decorator_knowngood
+def _compilable_fused_precond_grad_cached_(expr: str, ea: Tensor, param, lr, grad, decay, caution, *cached_q: Tensor):
+    precond = precond_grad_cached_(expr, ea, *cached_q, cast=False)
+    update_param_(param, precond, lr, decay, caution=caution, grad=grad)
+
+
+def fused_precond_grad_cached_(expr: str, ea: Tensor, param, lr, grad, decay, caution, *cached_q: Tensor):
+    lr = scalar_guard(lr, param[0])
+    _compilable_fused_precond_grad_cached_(expr, ea, param, lr, grad, decay, caution, *cached_q)
+
+
+@decorator_knowngood
+def psgd_precond_grad(expr: str, ea: Tensor, *preconds: Tensor):
+    md = min_dtype(list(preconds) + [ea])
+    args = [q.to(md) for q in preconds]
+    args = args + args + [ea.to(md)]
+    new = torch.einsum(expr, *args)
+    return new.to(ea.dtype)
+
+
+def _compilable_fused_psgd_precond_grad(expr: str, ea: Tensor, param, lr, grad, decay, caution, *preconds: Tensor):
+    precond = psgd_precond_grad(expr, grad, *preconds)
+    update_param_(param, precond, lr, decay, caution=caution, grad=grad)
+
+
+def fused_psgd_precond_grad(expr: str, ea: Tensor, param, lr, grad, decay, caution, *preconds: Tensor):
+    lr = scalar_guard(lr, param[0])
+    _compilable_fused_psgd_precond_grad(expr, ea, param, lr, grad, decay, caution, *preconds)
 
 
 @decorator_knowngood
