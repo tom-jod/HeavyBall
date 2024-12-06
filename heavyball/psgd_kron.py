@@ -8,8 +8,8 @@ from typing import Optional
 
 import torch
 
-from .utils import update_param_, warmup, psgd_precond_grad, init_Q_exprs, trust_region_clip_, PSGDBase, \
-    line_to_triu, triu_to_line, promote, stochastic_lerp_, beta_debias
+from .utils import update_param_, warmup, psgd_precond_grad, init_Q_exprs, trust_region_clip_, normalize_grads_, \
+    PSGDBase, line_to_triu, triu_to_line, promote, stochastic_lerp_, beta_debias
 
 
 class ForeachPSGDKron(PSGDBase):
@@ -20,6 +20,7 @@ class ForeachPSGDKron(PSGDBase):
             parameter groups.
         lr (float): Learning rate.
         b1 (float): Momentum parameter.
+        normalize_grads (bool): Whether to normalize incoming gradients to unit norm layer-wise.
         weight_decay (float): Weight decay (L2 penalty).
         preconditioner_update_probability (callable or float, optional): Probability of
             updating the preconditioner. If None, defaults to a schedule that anneals
@@ -35,11 +36,11 @@ class ForeachPSGDKron(PSGDBase):
             update instead of raw gradients.
     """
 
-    def __init__(self, params, lr=0.001, beta=0.9, weight_decay=0.0, preconditioner_update_probability=None,
-                 max_size_triangular=2048, min_ndim_triangular=2, memory_save_mode=None,
-                 momentum_into_precond_update=True, warmup_steps: int = 1, merge_dims: bool = False,
+    def __init__(self, params, lr=0.001, beta=0.9, normalize_grads=False, weight_decay=0.0,
+                 preconditioner_update_probability=None, max_size_triangular=8192, min_ndim_triangular=2,
+                 memory_save_mode=None, momentum_into_precond_update=True, warmup_steps: int = 1, merge_dims: bool = False,
                  split: bool = False, clip_fn: Optional[callable] = None, store_triu_as_line: bool = True,
-                 foreach: bool = True, q_dtype='float32', stochastic_schedule: bool = True,
+                 foreach: bool = True, q_dtype='float32', stochastic_schedule: bool = False,
                  storage_dtype: str = 'float32', mars: bool = False, caution: bool = False, mars_gamma: float = 0.0025,
                  #
                  # expert parameters
@@ -54,11 +55,11 @@ class ForeachPSGDKron(PSGDBase):
         if clip_fn is None:
             clip_fn = lambda x: trust_region_clip_(x, 0.9, 1.5)
 
-        defaults = dict(lr=lr, beta=beta, weight_decay=weight_decay, max_size_triangular=max_size_triangular,
-                        min_ndim_triangular=min_ndim_triangular, memory_save_mode=memory_save_mode,
-                        momentum_into_precond_update=momentum_into_precond_update, precond_lr=precond_lr,
-                        precond_init_scale=precond_init_scale, step=0, warmup_steps=warmup_steps, merge_dims=merge_dims,
-                        split=split, store_triu_as_line=store_triu_as_line, q_dtype=q_dtype,
+        defaults = dict(lr=lr, beta=beta, normalize_grads=normalize_grads, weight_decay=weight_decay,
+                        max_size_triangular=max_size_triangular, min_ndim_triangular=min_ndim_triangular,
+                        memory_save_mode=memory_save_mode, momentum_into_precond_update=momentum_into_precond_update,
+                        precond_lr=precond_lr, precond_init_scale=precond_init_scale, step=0, warmup_steps=warmup_steps,
+                        merge_dims=merge_dims, split=split, store_triu_as_line=store_triu_as_line, q_dtype=q_dtype,
                         storage_dtype=storage_dtype,
                         mars=mars, caution=caution, mars_gamma=mars_gamma)
         super().__init__(params, defaults, foreach, stochastic_schedule, clip_fn, preconditioner_update_probability)
@@ -74,6 +75,7 @@ class ForeachPSGDKron(PSGDBase):
         weight_decay = group['weight_decay']
         lr = group['lr']
         beta = group['beta']
+        normalize_grads = group['normalize_grads']
         store_triu_as_line = group['store_triu_as_line']
         q_dtype = getattr(torch, group['q_dtype'])
         storage_dtype = getattr(torch, group['storage_dtype'])
@@ -98,6 +100,9 @@ class ForeachPSGDKron(PSGDBase):
         del vals
 
         group["step"] += 1
+
+        if normalize_grads:
+            normalize_grads_(grad_list)
 
         beta = beta_debias(beta, group["step"])
         beta = torch.empty((), dtype=torch.float32, device=grad_list[0].device).fill_(1 - beta)
