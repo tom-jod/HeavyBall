@@ -204,10 +204,8 @@ def scale_by_exp_avg_sq_(grad, exp_avg_sq, beta2, eps):
     return _compilable_scale_by_exp_avg_sq_(exp_avg_sq, grad, beta2, eps, grad)
 
 
-def adaptive_gradient_clipping_(parameters: List[Tensor], gradients: List[Tensor], clip_val: float,
-                                minimum: float = 1e-3, eps: float = 1e-8):
-    if clip_val <= 0:
-        return
+@decorator_knowngood
+def _compilable_agc_(parameters: List[Tensor], gradients: List[Tensor], clip_val: float, minimum: float, eps: float):
     p_norm = torch._foreach_norm(parameters)
     g_norm = torch._foreach_norm(gradients)
     torch._foreach_maximum_(p_norm, minimum)
@@ -215,7 +213,16 @@ def adaptive_gradient_clipping_(parameters: List[Tensor], gradients: List[Tensor
     torch._foreach_div_(p_norm, g_norm)
     torch._foreach_mul_(p_norm, clip_val)
     torch._foreach_minimum_(p_norm, 1)
-    torch._foreach_mul_(gradients, p_norm)
+    return torch._foreach_mul(gradients, p_norm)
+
+
+def adaptive_gradient_clipping_(parameters: List[Tensor], gradients: List[Tensor], clip_val: float,
+                                minimum: float = 1e-3, eps: float = 1e-8):
+    if clip_val <= 0:
+        return gradients
+    parameters, gradients = list_guard(parameters), list_guard(gradients)
+    clip_val = scalar_guard(clip_val, parameters[0])
+    return _compilable_agc_(parameters, gradients, clip_val, minimum, eps)
 
 
 def is_compiling():
@@ -673,40 +680,6 @@ class StatefulOptimizer(torch.optim.Optimizer):
         return loss
 
 
-class ScheduleFree(StatefulOptimizer):
-    def eval(self):
-        for group in self.param_groups:
-            train_mode = group['train_mode']
-            beta1 = group['beta'] if 'beta' in group else group['betas'][0]
-            if beta1 > 0 and train_mode:
-                for p in group['params']:
-                    state = self.state_(p)
-                    if 'z' in state:
-                        # Set p.data to x
-                        z = promote(state['z'])
-                        p32 = promote(p.data)
-                        p32.lerp_(end=z, weight=1 - 1 / beta1)
-                        copy_stochastic_(p.data, p32)
-                group['train_mode'] = False
-
-    def train(self):
-        for group in self.param_groups:
-            train_mode = group['train_mode']
-            beta1 = group['beta'] if 'beta' in group else group['betas'][0]
-            if beta1 > 0 and not train_mode:
-                for p in group['params']:
-                    state = self.state_(p)
-                    if 'z' in state:
-                        z = promote(state['z'])
-                        p32 = promote(p.data)
-                        p32.lerp_(end=z, weight=1 - beta1)
-                        copy_stochastic_(p.data, p32)
-                group['train_mode'] = True
-
-    def _step(self):
-        raise NotImplementedError
-
-
 def copy_stochastic_list_(target: List[Tensor], source: List[Tensor]):
     for t, s in zip(target, source):
         copy_stochastic_(t, s)
@@ -734,19 +707,6 @@ def adam_(exp_avg: List[Tensor], exp_avg_sq: List[Tensor], grad: List[Tensor], b
     beta1, beta2, step = scalar_guard(beta1, exp_avg[0]), scalar_guard(beta2, exp_avg[0]), scalar_guard(step,
                                                                                                         exp_avg[0])
     return _compilable_adam_(exp_avg, exp_avg_sq, grad, beta1, beta2, step)
-
-
-@decorator_knowngood
-def _compilable_rmsnorm(grad):
-    g32 = list(map(promote, grad))
-    norm = torch._foreach_norm(g32)
-    norm = [n.div_(g.numel() ** 0.5).clamp_(min=1e-6) for n, g in zip(norm, grad)]
-    return torch._foreach_div(grad, norm)
-
-
-def rmsnorm(grad: List[Tensor]):
-    grad = list_guard(grad)
-    return _compilable_rmsnorm_(grad)
 
 
 @decorator_knowngood
@@ -1078,21 +1038,33 @@ def psgd_precond_grad(inplace: bool, exprs: str, grad: Tensor, *preconds: Tensor
     return out.to(grad.dtype)
 
 
-def norm_clip_(x, scale=None, eps=1e-12):
-    norm = [a.square_().mean_() for a in x]
-    torch._foreach_sqrt_(norm)
-    if scale is not None:
-        torch._foreach_div_(norm, scale)
-    torch._foreach_add_(norm, eps)
-    torch._foreach_div_(x, norm)
-    return x
-
-
-def normalize_grads_(x, eps=1e-12):
+@decorator_knowngood
+def _compilable_l2_clip_(x):
+    ref = x
+    x = list(map(promote, x))
     norm = torch._foreach_norm(x)
-    torch._foreach_add_(norm, eps)
-    torch._foreach_div_(x, norm)
-    return x
+    torch._foreach_maximum_(norm, 1e-8)
+    out = torch._foreach_div(x, norm)
+    return stochastic_round_list_(ref, out)
+
+
+def l2_clip_(x):
+    x = list_guard(x)
+    return _compilable_l2_clip_(x)
+
+
+@decorator_knowngood
+def _compilable_rmsnorm_clip_(x):
+    x = list(map(promote, x))
+    norm = torch._foreach_norm(x)
+    norm = [n.div_(x_.numel() ** 0.5) for n, x_ in zip(norm, x)]
+    torch._foreach_maximum_(norm, 1e-6)
+    return torch._foreach_div(x, norm)
+
+
+def rmsnorm_clip_(x):
+    x = list_guard(x)
+    return _compilable_rmsnorm_clip_(x)
 
 
 def mu_law_compress(x, mu=127.0):

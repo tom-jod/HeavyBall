@@ -145,11 +145,8 @@ def update_by_laprop(group, update, grad, param, exp_avg, exp_avg_sq):
 @zero_guard("z")
 @no_state
 def update_by_schedule_free(group, update, grad, param, z):
-    ws = [group.get(f'weight_sum_{id(z_)}', 0) for z_ in z]
-    ws = utils.schedule_free_(group['lr'], group['weight_lr_power'], ws, utils.get_beta1(group), param, z, update,
+    group['weight_sum'] = utils.schedule_free_(group['lr'], group['weight_lr_power'], group.get('weight_sum', 0), utils.get_beta1(group), param, z, update,
                               group['r'], group['step'])
-    for z_, w in zip(z, ws):
-        group[f'weight_sum_{id(z_)}'] = w
     raise SkipUpdate
 
 
@@ -252,8 +249,7 @@ def scale_by_psgd(group, update, grad, param, Q, exprs, Q_cache, cache_expr: str
                   prob: Optional[callable] = None):
     Q_mat = utils.line_to_triu(Q) if group['store_triu_as_line'] else Q
     _update_psgd_precond(group, param, update, Q_mat, Q, exprs, prob)
-    return utils.psgd_precond_grad(False, exprs[-1], update,
-                                   *_update_psgd_cache(cached, Q_cache, Q_mat))
+    return utils.psgd_precond_grad(False, exprs[-1], update, *_update_psgd_cache(cached, Q_cache, Q_mat))
 
 
 @general_guard("Q", "exprs", ("Q_cache", None), ("cache_expr", None), init_fn=_init_psgd)
@@ -261,8 +257,7 @@ def scale_by_psgd(group, update, grad, param, Q, exprs, Q_cache, cache_expr: str
 def scale_by_delayed_psgd(group, update, grad, param, Q, exprs, Q_cache, cache_expr: str, cached: bool = False,
                           prob: Optional[callable] = None):
     Q_mat = utils.line_to_triu(Q) if group['store_triu_as_line'] else Q
-    precond = utils.psgd_precond_grad(False, exprs[-1], update,
-                                      *_update_psgd_cache(cached, Q_cache, Q_mat))
+    precond = utils.psgd_precond_grad(False, exprs[-1], update, *_update_psgd_cache(cached, Q_cache, Q_mat))
     # TODO: Use actual cache equations
     _update_psgd_precond(group, param, update, Q_mat, Q, exprs, prob)
     return precond
@@ -291,6 +286,8 @@ def chain(state: Union[callable, dict], group, grad, param, *fns):
         except SkipUpdate:
             skip_update = True
             continue
+        if update is None:
+            break
     if not skip_update and update is not None:
         utils.update_param_(param, update, group['lr'], group['weight_decay'], caution=group['caution'], grad=grad)
 
@@ -298,7 +295,8 @@ def chain(state: Union[callable, dict], group, grad, param, *fns):
 class ChainOpt(utils.StatefulOptimizer):
     def __init__(self, params, defaults, foreach: bool, *fns):
         super().__init__(params, defaults, foreach)
-        self.fns = fns
+
+        self.fns = tuple(fns)
 
     def _step(self, group):
         if 'base_lr' not in group:
@@ -318,3 +316,73 @@ class ChainOpt(utils.StatefulOptimizer):
             return
 
         chain(self.state_, group, g, p, *self.fns)
+
+
+str_or_fn = Union[str, callable, None]
+
+
+def _get_clip_fn(name: str_or_fn, default: str_or_fn):
+    if name is None:
+        name = default
+    if callable(name):
+        return name
+    elif name not in ('l2_clip_', 'rmsnorm_clip_', 'trust_region_clip_', 'a_law_compress', 'mu_law_compress'):
+        raise ValueError(f"Clipping function {name} not found")
+    return getattr(utils, name)
+
+
+def default(a, b):
+    return b if a is None else a
+
+
+class BaseOpt(ChainOpt):
+    gradient_clipping: str_or_fn = None
+    update_clipping: str_or_fn = None
+    palm: bool = False
+
+    def __init__(self, params, defaults, foreach: bool, gradient_clipping: str_or_fn, update_clipping: str_or_fn,
+                 palm: bool = None, *fns):
+        if update_clipping is not None and any(
+                fn in (update_by_adopt, update_by_adam, update_by_laprop, update_by_schedule_free) for fn in fns):
+            raise ValueError("`update_by` functions do not support update clipping. Use `scale_by` functions instead.")
+        fns = tuple(fns)
+
+        if default(palm, self.palm):
+            fns = (palm_beta2,) + fns
+        if default(gradient_clipping, self.gradient_clipping) is not None:
+            fns = (apply_to_idx(gradient_clipping, 2),) + fns
+        if default(update_clipping, self.update_clipping) is not None:
+            fns = fns + (apply_to_idx(update_clipping, 2),)
+
+        super().__init__(params, defaults, foreach, *fns)
+
+
+class ScheduleFree(BaseOpt):
+    def eval(self):
+        for group in self.param_groups:
+            train_mode = group['train_mode']
+            beta1 = group['beta'] if 'beta' in group else group['betas'][0]
+            if beta1 > 0 and train_mode:
+                for p in group['params']:
+                    state = self.state_(p)
+                    if 'z' in state:
+                        # Set p.data to x
+                        z = utils.promote(state['z'])
+                        p32 = utils.promote(p.data)
+                        p32.lerp_(end=z, weight=1 - 1 / beta1)
+                        utils.copy_stochastic_(p.data, p32)
+                group['train_mode'] = False
+
+    def train(self):
+        for group in self.param_groups:
+            train_mode = group['train_mode']
+            beta1 = group['beta'] if 'beta' in group else group['betas'][0]
+            if beta1 > 0 and not train_mode:
+                for p in group['params']:
+                    state = self.state_(p)
+                    if 'z' in state:
+                        z = utils.promote(state['z'])
+                        p32 = utils.promote(p.data)
+                        p32.lerp_(end=z, weight=1 - beta1)
+                        utils.copy_stochastic_(p.data, p32)
+                group['train_mode'] = True

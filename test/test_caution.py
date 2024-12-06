@@ -7,7 +7,7 @@ import heavyball.utils
 import pytest
 import torch
 from benchmark.utils import get_optim
-from heavyball.utils import clean, set_torch, ScheduleFree
+from heavyball.utils import clean, set_torch
 from torch import nn
 from torch._dynamo import config
 

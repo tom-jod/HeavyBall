@@ -7,58 +7,57 @@ from . import chainable as C
 from . import utils
 
 
-class ForeachAdamW(C.ChainOpt):
+class ForeachAdamW(C.BaseOpt):
     def __init__(self, params, lr=0.0025, betas=(0.9, 0.99), eps=1e-8, weight_decay=0, warmup_steps=0,
                  foreach: bool = True, storage_dtype: str = 'float32', mars: bool = False, caution: bool = False,
-                 mars_gamma: float = 0.0025):
+                 mars_gamma: float = 0.0025, gradient_clipping: C.str_or_fn = None, update_clipping: C.str_or_fn = None,
+                 palm: bool = None, beta2_scale: float = 0.8):
         defaults = dict(lr=lr, betas=betas, eps=eps, k=0, warmup_steps=warmup_steps, train_mode=True, weight_sum=0.0,
                         lr_max=-1.0, weight_decay=weight_decay, storage_dtype=storage_dtype, mars=mars, caution=caution,
-                        mars_gamma=mars_gamma)
-        super().__init__(params, defaults, foreach, C.update_by_adam)
+                        mars_gamma=mars_gamma, beta2_scale=beta2_scale)
+        super().__init__(params, defaults, foreach, gradient_clipping, update_clipping, palm, C.update_by_adam)
 
 
-# TODO: readd SF base-class with .eval()/.train()
-class ForeachSFAdamW(C.ChainOpt):
-    palm: bool = False
+class ForeachSFAdamW(C.ScheduleFree):
     def __init__(self, params, lr=0.0025, betas=(0.9, 0.99), eps=1e-8, weight_decay=0, warmup_steps=0, r=0.0,
                  weight_lr_power=2.0, foreach: bool = True, storage_dtype: str = 'float32', mars: bool = False,
-                 caution: bool = False, mars_gamma: float = 0.0025, palm: bool = None):
-        assert not caution, "Caution not implemented for SFAdamW"
-
-        if palm is None:
-            palm = self.palm
-
+                 caution: bool = False, mars_gamma: float = 0.0025, gradient_clipping: C.str_or_fn = None,
+                 update_clipping: C.str_or_fn = None, palm: bool = None, beta2_scale: float = 0.8):
         defaults = dict(lr=lr, betas=betas, eps=eps, r=r, k=0, warmup_steps=warmup_steps, train_mode=True,
                         weight_sum=0.0, lr_max=-1.0, weight_lr_power=weight_lr_power, weight_decay=weight_decay,
-                        foreach=foreach, storage_dtype=storage_dtype, mars=mars, caution=caution, mars_gamma=mars_gamma)
-        super().__init__(params, defaults, foreach, C.scale_by_exp_avg_sq, C.update_by_schedule_free)
+                        foreach=foreach, storage_dtype=storage_dtype, mars=mars, caution=caution, mars_gamma=mars_gamma,
+                        beta2_scale=beta2_scale)
+        super().__init__(params, defaults, foreach, gradient_clipping, update_clipping, palm, C.scale_by_exp_avg_sq,
+                         C.update_by_schedule_free)
 
 
 class PaLMForeachSFAdamW(ForeachSFAdamW):
     palm: bool = True
 
 
-class ForeachADOPT(C.ChainOpt):
+class ForeachADOPT(C.BaseOpt):
     def __init__(self, params, lr=0.0025, betas=(0.9, 0.99), eps=1e-8, weight_decay=0, warmup_steps=0,
                  foreach: bool = True, storage_dtype: str = 'float32', mars: bool = False, caution: bool = False,
-                 mars_gamma: float = 0.0025):
+                 mars_gamma: float = 0.0025, gradient_clipping: C.str_or_fn = None, update_clipping: C.str_or_fn = None,
+                 palm: bool = None, beta2_scale: float = 0.8):
         defaults = dict(lr=lr, betas=betas, eps=eps, k=0, warmup_steps=warmup_steps, train_mode=True, weight_sum=0.0,
                         lr_max=-1.0, weight_decay=weight_decay, storage_dtype=storage_dtype, mars=mars, caution=caution,
-                        mars_gamma=mars_gamma)
-        super().__init__(params, defaults, foreach, C.update_by_adopt)
+                        mars_gamma=mars_gamma, beta2_scale=beta2_scale)
+        super().__init__(params, defaults, foreach, gradient_clipping, update_clipping, palm, C.update_by_adopt)
 
 
-class ForeachLaProp(C.ChainOpt):
+class ForeachLaProp(C.BaseOpt):
     def __init__(self, params, lr=0.0025, betas=(0.9, 0.99), eps=1e-8, weight_decay=0, warmup_steps=0,
                  foreach: bool = True, storage_dtype: str = 'float32', mars: bool = False, caution: bool = False,
-                 mars_gamma: float = 0.0025):
+                 mars_gamma: float = 0.0025, gradient_clipping: C.str_or_fn = None, update_clipping: C.str_or_fn = None,
+                 palm: bool = None, beta2_scale: float = 0.8):
         defaults = dict(lr=lr, betas=betas, eps=eps, k=0, warmup_steps=warmup_steps, train_mode=True, weight_sum=0.0,
                         lr_max=-1.0, weight_decay=weight_decay, storage_dtype=storage_dtype, mars=mars, caution=caution,
-                        mars_gamma=mars_gamma)
-        super().__init__(params, defaults, foreach, C.update_by_laprop)
+                        mars_gamma=mars_gamma, beta2_scale=beta2_scale)
+        super().__init__(params, defaults, foreach, gradient_clipping, update_clipping, palm, C.update_by_laprop)
 
 
-class ForeachSOAP(C.ChainOpt):
+class ForeachSOAP(C.BaseOpt):
     """
     ForeachSOAP
 
@@ -76,8 +75,6 @@ class ForeachSOAP(C.ChainOpt):
             https://github.com/facebookresearch/schedule_free
     """
     use_precond_schedule: bool = False
-    palm: bool = False
-    normalize: Optional[str] = None  # 'rmsnorm'
 
     def __init__(self, params, lr: float = 3e-3, betas=(0.9, 0.95), shampoo_beta: float = 0.95, eps: float = 1e-8,
                  weight_decay: float = 0.01, precondition_frequency: int = 2, max_precond_dim: int = 2048,  #
@@ -85,13 +82,10 @@ class ForeachSOAP(C.ChainOpt):
                  data_format: str = "channels_first", correct_bias: bool = True, warmup_steps: int = 1,
                  split: bool = False, foreach: bool = True, mars: bool = False, caution: bool = False,
                  mars_gamma: float = 0.0025, palm: bool = None, precond_scheduler=(1 / 3, 9), beta2_scale: float = 0.8,
-                 use_precond_schedule: bool = None, normalize: Optional[str] = None):
+                 use_precond_schedule: bool = None, gradient_clipping: C.str_or_fn = None,
+                 update_clipping: C.str_or_fn = None):
         if use_precond_schedule is None:
             use_precond_schedule = self.use_precond_schedule
-        if palm is None:
-            palm = self.palm
-        if normalize is None:
-            normalize = self.normalize
 
         defaults = {"lr": lr, "betas": betas, "shampoo_beta": shampoo_beta, "eps": eps, "weight_decay": weight_decay,
                     "precondition_frequency": precondition_frequency, "max_precond_dim": max_precond_dim,
@@ -103,31 +97,25 @@ class ForeachSOAP(C.ChainOpt):
             del defaults['precondition_frequency']
         else:
             del defaults['precond_scheduler']
-        super().__init__(params, defaults, foreach,  #
-                         *(C.palm_beta2,) * palm,  #
-                         *(C.apply_to_idx(getattr(utils, normalize), 2),) if normalize else (),  #
+        super().__init__(params, defaults, foreach, gradient_clipping, update_clipping, palm,  #
                          C.scale_by_soap)
 
 
 class PaLMForeachSOAP(ForeachSOAP):
     use_precond_schedule: bool = False
     palm: bool = True
-    normalize: Optional[str] = None
 
 
 class PrecondScheduleForeachSOAP(ForeachSOAP):
     use_precond_schedule: bool = True
-    palm: bool = False
-    normalize: Optional[str] = None
 
 
 class PrecondSchedulePaLMForeachSOAP(ForeachSOAP):
     use_precond_schedule: bool = True
     palm: bool = True
-    normalize: Optional[str] = None
 
 
-class ForeachPSGDKron(C.ChainOpt):
+class ForeachPSGDKron(C.BaseOpt):
     """
     Originally from Evan Walters and Omead Pooladzandi, 2024
     Modified under Creative Commons Attribution 4.0 International
@@ -137,7 +125,6 @@ class ForeachPSGDKron(C.ChainOpt):
     delayed: bool = False
     cached: bool = False
     exp_avg_input: bool = True
-    normalize: Optional[str] = None  # 'rmsnorm'
 
     def __init__(self, params, lr=0.001, beta=0.9, weight_decay=0.0, preconditioner_update_probability=None,
                  max_size_triangular=2048, min_ndim_triangular=2, memory_save_mode=None,
@@ -145,19 +132,18 @@ class ForeachPSGDKron(C.ChainOpt):
                  split: bool = False, clip_fn: callable = None, store_triu_as_line: bool = True, foreach: bool = True,
                  q_dtype='float32', stochastic_schedule: bool = True, storage_dtype: str = 'float32',
                  mars: bool = False, caution: bool = False, mars_gamma: float = 0.0025, delayed: Optional[bool] = None,
-                 cached: Optional[bool] = None, exp_avg_input: Optional[bool] = None, normalize: Optional[str] = None, #
+                 cached: Optional[bool] = None, exp_avg_input: Optional[bool] = None,
+                 gradient_clipping: C.str_or_fn = None, update_clipping: C.str_or_fn = None, #
                  # expert parameters
                  precond_init_scale=1.0, precond_lr=0.1):
         if delayed is None:
             delayed = self.delayed
         if cached is None:
             cached = self.cached
-        if clip_fn is None:
-            clip_fn = lambda x: utils.trust_region_clip_(x, 0.9, 1.5)
+        if update_clipping is None:
+            update_clipping = utils.trust_region_clip_
         if exp_avg_input is None:
             exp_avg_input = self.exp_avg_input
-        if normalize is None:
-            normalize = self.normalize
 
         defaults = dict(lr=lr, beta=beta, weight_decay=weight_decay, max_size_triangular=max_size_triangular,
                         min_ndim_triangular=min_ndim_triangular, memory_save_mode=memory_save_mode,
@@ -167,12 +153,10 @@ class ForeachPSGDKron(C.ChainOpt):
                         storage_dtype=storage_dtype, caution=caution, mars_gamma=mars_gamma, mars=mars,
                         stochastic_schedule=stochastic_schedule)
 
-        super().__init__(params, defaults, foreach,  #
+        super().__init__(params, defaults, foreach, gradient_clipping, update_clipping, False, #
                          *(C.exp_avg,) * exp_avg_input,  #
-                         *(C.apply_to_idx(getattr(utils, normalize), 2),) if normalize else (),  #
                          functools.partial(C.scale_by_delayed_psgd if delayed else C.scale_by_psgd, cached=cached,
-                                           prob=preconditioner_update_probability),  #
-                         C.apply_to_idx(clip_fn, 2))
+                                           prob=preconditioner_update_probability))
 
 
 class ForeachPurePSGD(ForeachPSGDKron):
