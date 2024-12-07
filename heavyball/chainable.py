@@ -54,6 +54,19 @@ def zero_guard(*names):
     return _outer
 
 
+def copy_guard(index, *names):
+    def _outer(fn):
+        def _fn(state, group, update, grad, param, *args, **kwargs):
+            val = [update, grad, param, *args][index]
+            vars = [[_guard_in_state(state(p), name, lambda: torch.clone(v)) for p, v in zip(param, val)]  #
+                    for name in names]
+            return fn(state, group, update, grad, param, *args, *vars, **kwargs)
+
+        return _fn
+
+    return _outer
+
+
 def general_guard(*names, init_fn):
     def _outer(fn):
         def _fn(state, group, update, grad, param, *args, **kwargs):
@@ -79,13 +92,6 @@ def no_state(fn):
     return _fn
 
 
-def use_state_no_foreach(fn):
-    def _fn(state, *args, **kwargs):
-        return fn(state(param), *args, **kwargs)
-
-    return _fn
-
-
 def no_state_no_foreach(fn):
     def _fn(state, group, *args, **kwargs):
         for a in zip(*args):
@@ -101,28 +107,31 @@ class SkipUpdate(ValueError):
 @zero_guard("exp_avg")
 @no_state
 def exp_avg(group, update, grad, param, exp_avg):
-    utils.stochastic_lerp_(exp_avg, grad, utils.beta_debias(utils.get_beta1(group), group["step"]))
+    utils.stochastic_lerp_(exp_avg, update, utils.beta_debias(utils.get_beta1(group), group["step"]))
     return exp_avg
 
 
 @zero_guard("exp_avg_sq")
 @no_state
 def scale_by_exp_avg_sq(group, update, grad, param, exp_avg_sq):
-    return utils.scale_by_exp_avg_sq_(exp_avg_sq, update, utils.beta_debias(utils.get_beta2(group), group["step"]),
-                                      group['eps'])[0]
+    out = utils.scale_by_exp_avg_sq_(exp_avg_sq, update, utils.beta_debias(utils.get_beta2(group), group["step"]),
+                                     group['eps'])
+    if group['step'] == 1:
+        raise SkipUpdate
+    return out
 
 
 @zero_guard("exp_avg", "exp_avg_sq")
 @no_state
 def scale_by_adam(group, update, grad, param, exp_avg, exp_avg_sq):
-    return utils.adam_(exp_avg, exp_avg_sq, grad, utils.get_beta1(group), utils.get_beta2(group), group['step'],  #
-                       group['eps'])[0]
+    return utils.adam_(exp_avg, exp_avg_sq, update, utils.get_beta1(group), utils.get_beta2(group), group['step'],  #
+                       group['eps'])
 
 
 @zero_guard("exp_avg", "exp_avg_sq")
 @no_state
 def update_by_adam(group, update, grad, param, exp_avg, exp_avg_sq):
-    utils.fused_adam_(param, exp_avg, exp_avg_sq, grad, utils.get_beta1(group), utils.get_beta2(group), group['step'],
+    utils.fused_adam_(param, exp_avg, exp_avg_sq, update, utils.get_beta1(group), utils.get_beta2(group), group['step'],
                       group['lr'], group['eps'], group['weight_decay'], group['caution'])
     raise SkipUpdate
 
@@ -130,25 +139,24 @@ def update_by_adam(group, update, grad, param, exp_avg, exp_avg_sq):
 @zero_guard("exp_avg", "exp_avg_sq")
 @no_state
 def scale_by_laprop(group, update, grad, param, exp_avg, exp_avg_sq):
-    return utils.laprop_(exp_avg, exp_avg_sq, grad, utils.get_beta1(group), utils.get_beta2(group), group['step'],
-                         group['eps'])[0]
+    return utils.laprop_(exp_avg, exp_avg_sq, update, utils.get_beta1(group), utils.get_beta2(group), group['step'],
+                         group['eps'])
 
 
 @zero_guard("exp_avg", "exp_avg_sq")
 @no_state
 def update_by_laprop(group, update, grad, param, exp_avg, exp_avg_sq):
-    utils.fused_laprop_(param, exp_avg, exp_avg_sq, grad, utils.get_beta1(group), utils.get_beta2(group), group['step'],
-                        group['lr'], group['weight_decay'], group['caution'])
+    utils.fused_laprop_(param, exp_avg, exp_avg_sq, update, utils.get_beta1(group), utils.get_beta2(group),
+                        group['step'], group['lr'], group['weight_decay'], group['caution'])
     raise SkipUpdate
 
 
-@zero_guard("z")
+@copy_guard(2, "z")
 @no_state
 def update_by_schedule_free(group, update, grad, param, z):
-    if group['step'] == 1:
-        utils.copy_stochastic_list_(z, param)
-    group['weight_sum'] = utils.schedule_free_(abs(group['lr']), group['weight_lr_power'], group.get('weight_sum', 0),
-                                               utils.get_beta1(group), param, z, update, group['r'], group['step'])
+    group['weight_sum'] = utils.schedule_free_(group['lr'], group['weight_lr_power'], group.get('weight_sum', 0),
+                                               utils.get_beta1(group), param, z, update, group['r'], group['step'],
+                                               group['weight_decay'])
     raise SkipUpdate
 
 
@@ -162,7 +170,7 @@ def update_by_adopt(group, update, grad, param, exp_avg, exp_avg_sq):
     if group['step'] == 2:
         update = utils.promote(update)
         easq = utils.promote(exp_avg_sq)
-        [utils.set_(ea, u / easq.sqrt().clamp_(min=group['eps'])) for ea, u, easq in zip(exp_avg, update, exp_avg_sq)]
+        [utils.set_(ea, u / easq_.sqrt().clamp_(min=group['eps'])) for ea, u, easq_ in zip(exp_avg, update, easq)]
         utils.exp_avg_sq_(exp_avg_sq, update, utils.beta_debias(utils.get_beta2(group), group['step']), 1)
         raise SkipUpdate
 
@@ -181,7 +189,7 @@ def scale_by_adopt(group, update, grad, param, exp_avg, exp_avg_sq):
     if group['step'] == 2:
         update = utils.promote(update)
         easq = utils.promote(exp_avg_sq)
-        [utils.set_(ea, u / easq.sqrt().clamp_(min=group['eps'])) for ea, u, easq in zip(exp_avg, update, exp_avg_sq)]
+        [utils.set_(ea, u / easq_.sqrt().clamp_(min=group['eps'])) for ea, u, easq_ in zip(exp_avg, update, easq)]
         utils.exp_avg_sq_(exp_avg_sq, update, utils.beta_debias(utils.get_beta2(group), group['step']), 1)
         raise SkipUpdate
 
@@ -229,7 +237,6 @@ def precond_schedule(group, prob: Union[callable, float, None] = None, name: str
 @no_state
 def scale_by_soap(group, update, grad, param, exp_avg, exp_avg_sq, Q, GG):
     update = utils.promote(update)
-    grad = utils.promote(grad)
 
     grad_projected = [utils.project(u, q, False) for u, q in zip(update, Q)]
     precond = utils.adam_(exp_avg, exp_avg_sq, grad_projected, utils.get_beta1(group), utils.get_beta2(group),
@@ -370,10 +377,9 @@ class ChainOpt(utils.StatefulOptimizer):
 
         p, g = zip(*list(self.split_p_and_g_in_group(group, should_promote=False, beta1=utils.get_beta1(group))))
 
-        if not group['foreach']:
+        if not group['foreach'] or len(p) == 1:
             for param, grad in zip(p, g):
-                state = self.state_(p)
-                chain(state, group, g, p, *self.fns)
+                chain(self.state_, group, [grad], [param], *self.fns)
             return
 
         chain(self.state_, group, g, p, *self.fns)
@@ -442,7 +448,7 @@ class ScheduleFree(BaseOpt):
     def eval(self):
         for group in self.param_groups:
             train_mode = group['train_mode']
-            beta1 = group['beta'] if 'beta' in group else group['betas'][0]
+            beta1 = utils.get_beta1(group)
             if beta1 > 0 and train_mode:
                 for p in group['params']:
                     state = self.state_(p)
@@ -457,7 +463,7 @@ class ScheduleFree(BaseOpt):
     def train(self):
         for group in self.param_groups:
             train_mode = group['train_mode']
-            beta1 = group['beta'] if 'beta' in group else group['betas'][0]
+            beta1 = utils.get_beta1(group)
             if beta1 > 0 and not train_mode:
                 for p in group['params']:
                     state = self.state_(p)

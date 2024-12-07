@@ -69,30 +69,34 @@ def warmup(lr: float, step: int, warmup_steps: int):
 
 @decorator_knowngood
 def _compilable_schedule_free_(p: List[Tensor], z: List[Tensor], ckp1: Tensor, grad: List[Tensor], lr: Tensor,
-                               beta1: Tensor):
+                               beta1: Tensor, decay: float):
+    grad = [u_.view_as(p_) for u_, p_ in zip(grad, p)]
     p32, z32, g32 = [list(map(promote, x)) for x in (p, z, grad)]
     for p_, z_, g_ in zip(p32, z32, g32):
+        if decay != 0:
+            g_.add_(p_, alpha=decay)
         p_.lerp_(z_, ckp1)
-        p_.add_(g_, alpha=lr * (beta1 * (1 - ckp1) - 1))
-        z_.add_(g_, alpha=-lr)
+        p_.add_(g_, alpha=lr - lr * (beta1 * (1 - ckp1)))
+        z_.add_(g_, alpha=lr)
     copy_stochastic_list_(p, p32)
     copy_stochastic_list_(z, z32)
 
 
 def schedule_free_(lr: float, weight_lr_power: float, weight_sum: float, beta1: float, parameters: List[Tensor],
-                   z: List[Tensor], grad: List[Tensor], r: float = 0.0, step: int = 0):
-    weight = lr ** weight_lr_power * max(step, 1) ** r
+                   z: List[Tensor], grad: List[Tensor], r: float = 0.0, step: int = 0, decay: float = 0.0):
+    weight = abs(lr) ** weight_lr_power * max(step, 1) ** r
     weight_sum = weight_sum + weight
 
     try:
         ckp1 = weight / weight_sum
     except ZeroDivisionError:
         ckp1 = 0
+    ckp1 = 0
 
     # These operations update y in-place,
     # without computing x explicitly.
-    lr, ckp1 = scalar_guard(lr, parameters[0]), scalar_guard(ckp1, parameters[0])
-    _compilable_schedule_free_(parameters, z, ckp1, grad, lr, beta1)
+    lr, ckp1, beta1 = scalar_guard(lr, parameters[0]), scalar_guard(ckp1, parameters[0]), scalar_guard(beta1, parameters[0])
+    _compilable_schedule_free_(parameters, z, ckp1, grad, lr, beta1, decay)
     return weight_sum
 
 
@@ -232,10 +236,7 @@ def set_(dst: Tensor, src: Tensor):
         return
     if src.shape != dst.shape:
         src = src.reshape_as(dst)
-    if not is_compiling() and src.is_contiguous() and dst.is_contiguous() and src.dtype == dst.dtype:
-        dst.set_(src)
-    else:
-        dst.copy_(src)
+    dst.copy_(src)
 
 
 def clean():
@@ -808,7 +809,7 @@ def _compilable_adopt_(grad, exp_avg_sq, exp_avg, beta1, beta2, step):
 
     beta1 = beta_debias(beta1, step)
     denom = torch._foreach_sqrt(exp_avg_sq32)
-    [denom.clamp_(min=eps) for denom in denom]
+    [denom.clamp_(min=1e-8) for denom in denom]
     torch._foreach_mul_(exp_avg32, beta1)
     [ea32.addcdiv_(g, d, value=1 - beta1) for ea32, g, d in zip(exp_avg32, g32, denom)]
 

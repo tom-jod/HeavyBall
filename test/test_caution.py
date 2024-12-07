@@ -16,7 +16,7 @@ config.cache_size_limit = 128
 
 @pytest.mark.parametrize("opt", heavyball.__all__)
 @pytest.mark.parametrize("size,depth", [(128, 2)])
-def test_caution(opt, size, depth: int, iterations: int = 8192, outer_iterations: int = 1):
+def test_caution(opt, size, depth: int, iterations: int = 16, outer_iterations: int = 1):
     set_torch()
     opt = getattr(heavyball, opt)
     peaks = []

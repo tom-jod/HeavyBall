@@ -37,8 +37,7 @@ def trial(model, data, loss_fn, win_condition, steps, opt, dtype, size, batch, w
         torch.manual_seed(0x1239121)
 
         m = torch.compile(copy.deepcopy(model).to(dtype).cuda(), mode='max-autotune', fullgraph=False, dynamic=False)
-        o = get_optim(opt, m.parameters(), lr=lr, weight_decay=weight_decay,
-                      precond_update_prob_schedule=heavyball.utils.precond_update_prob_schedule(flat_start=0),
+        o = get_optim(opt, m.parameters(), lr=lr, weight_decay=weight_decay, betas=(0.9, 0.99),
                       store_triu_as_line=False)
         torch.cuda.empty_cache()
         gc.collect()
@@ -58,9 +57,11 @@ def trial(model, data, loss_fn, win_condition, steps, opt, dtype, size, batch, w
                 loss_hist.append(loss.detach())
                 if loss0 is None:
                     loss0 = loss_hist[-1].item()
+            if hasattr(o, 'eval'):
+                o.eval()
             for j, loss in enumerate(loss_hist[-group:], group * i):
                 loss = loss.item()
-                if win_condition(loss):
+                if win_condition(m, loss):
                     dist = datetime.datetime.now() - start
                     print(
                         f'Took {dist} | {opt.__name__}, {dtype=}, {size=}, {length=}, {batch=}, {lr=}, {weight_decay=}, '
@@ -70,14 +71,16 @@ def trial(model, data, loss_fn, win_condition, steps, opt, dtype, size, batch, w
                     print(f'{opt.__name__} diverged at {j=}, loss={loss}, {loss0}')
                     loss = 1e6 + lr
                     break
+            if hasattr(o, 'train'):
+                o.train()
             if loss > failure_threshold * loss0 or not np.isfinite(loss):
                 break
-            print(datetime.datetime.now() - start, (i + 1) * group, sum(loss_hist[-group:]).div(group).item())
+            #print(datetime.datetime.now() - start, (i + 1) * group, sum(loss_hist[-group:]).div(group).item())
 
         lrs.append(lr)
         lrs = sorted(lrs)
         losses.insert(lrs.index(lr), loss)
-
+        print(m.param.add(1).norm().item(), loss)
         print(
             f'{opt.__name__} failed at attempt {attempt + 1} | {datetime.datetime.now() - start} | {dtype=}, {size=}, {length=}, {batch=}, {lr=}, {weight_decay=}, '
             f'{method=}')

@@ -47,7 +47,7 @@ class ModelTransformer(nn.Module):
         return out
 
 
-def win(loss):
+def win(_model, loss):
     return loss < 0.1
 
 

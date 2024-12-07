@@ -1,7 +1,5 @@
 import functools
-from typing import Optional, List, Callable, Union
-
-import torch
+from typing import Optional
 
 from . import chainable as C
 from . import utils
@@ -22,6 +20,7 @@ class ForeachRMSprop(C.BaseOpt):
     """
     Debiased RMSprop (not torch.optim.RMSprop)
     """
+
     def __init__(self, params, lr=0.0025, betas=(0.9, 0.99), eps=1e-6, weight_decay=0, warmup_steps=0, r=0.0,
                  weight_lr_power=2.0, foreach: bool = True, storage_dtype: str = 'float32', mars: bool = False,
                  caution: bool = False, mars_gamma: float = 0.0025, gradient_clipping: C.str_or_fn = C.use_default,
@@ -192,6 +191,7 @@ SOAP = ForeachSOAP
 SFAdamW = ForeachSFAdamW
 LaProp = ForeachLaProp
 ADOPT = ForeachADOPT
+RMSprop = ForeachRMSprop
 PrecondScheduleSOAP = PrecondScheduleForeachSOAP
 PrecondSchedulePaLMSOAP = PrecondSchedulePaLMForeachSOAP
 PSGDKron = ForeachPSGDKron
@@ -203,6 +203,7 @@ CachedDelayedPSGDKron = ForeachCachedDelayedPSGDKron
 
 __all__ = ["PrecondSchedulePaLMSOAP", "PSGDKron", "PurePSGD", "DelayedPSGD", "CachedPSGDKron", "CachedDelayedPSGDKron",
            "PalmForEachSoap", "PaLMSOAP", "PaLMSFAdamW", "LaProp", "ADOPT", "PrecondScheduleSOAP",
-           "PrecondSchedulePaLMSOAP",  #
+           "PrecondSchedulePaLMSOAP", 'RMSprop',  #
            "ForeachAdamW", "ForeachSFAdamW", "ForeachLaProp", "ForeachADOPT", "ForeachSOAP", "ForeachPSGDKron",
-           "ForeachPurePSGD", "ForeachDelayedPSGD", "ForeachCachedPSGDKron", "ForeachCachedDelayedPSGDKron"]
+           "ForeachPurePSGD", "ForeachDelayedPSGD", "ForeachCachedPSGDKron", "ForeachCachedDelayedPSGDKron",
+           "ForeachRMSprop"]

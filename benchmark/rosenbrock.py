@@ -38,7 +38,7 @@ def main(method: List[str] = typer.Option(['qr'], help='Eigenvector method to us
             inp = torch.zeros((), device='cuda', dtype=d)
             return inp, torch.zeros((), device='cuda', dtype=d)
 
-        def win(loss):
+        def win(_model, loss):
             return loss < 1e-5
 
         trial(model, data, torch.nn.functional.mse_loss, win, steps, o, d, 1, 1, wd, m, 1, 1)

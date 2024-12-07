@@ -35,7 +35,7 @@ class Model(nn.Module):
         return self.proj(out[:, -1])
 
 
-def win(loss):
+def win(_model, loss):
     return loss < 0.1
 
 
