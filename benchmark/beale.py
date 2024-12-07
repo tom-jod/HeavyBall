@@ -1,11 +1,12 @@
 import itertools
 from typing import List
 
-import heavyball
 import torch
 import torch.backends.opt_einsum
 import torch.nn as nn
 import typer
+
+import heavyball
 from heavyball.utils import set_torch
 from utils import trial
 
@@ -25,9 +26,8 @@ class Model(nn.Module):
 
 @app.command()
 def main(method: List[str] = typer.Option(['qr'], help='Eigenvector method to use (for SOAP)'),
-         dtype: List[str] = typer.Option(["float32"], help='Data type to use'), steps: int = 30_000,
-         weight_decay: float = 0,
-         opt: List[str] = typer.Option(['SFAdamW'], help='Optimizers to use')):
+         dtype: List[str] = typer.Option(["float32"], help='Data type to use'), steps: int = 10_000,
+         weight_decay: float = 0, opt: List[str] = typer.Option(heavyball.__all__, help='Optimizers to use')):
     dtype = [getattr(torch, d) for d in dtype]
     for args in itertools.product(method, dtype, opt, [weight_decay]):
         m, d, o, wd = args
@@ -41,8 +41,8 @@ def main(method: List[str] = typer.Option(['qr'], help='Eigenvector method to us
         def win(_model, loss):
             return loss < 1e-5
 
-        trial(model, data, torch.nn.functional.mse_loss, win, steps, o, d, 1, 1, wd, m, 1, 1, group=5_000,
-              base_lr=1e-4, trials=30)
+        trial(model, data, torch.nn.functional.mse_loss, win, steps, o, d, 1, 1, wd, m, 1, 1, group=1_000, base_lr=1e-4,
+              trials=30)
 
 
 if __name__ == '__main__':
