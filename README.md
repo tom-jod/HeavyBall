@@ -8,7 +8,7 @@ A simple package of efficient optimizers
 The goal is not to thrive for completeness, full maintenance or abstraction, but instead to provide a simple
 largely static alternative to `torch.optim` with more and better optimizers.
 
-Currently (2024-11-26, 0.22.1), the recommended stable optimizer is `PrecondSchedulePaLMSOAP` (see below). The
+Currently (2024-12-07, 1.0.0), the recommended stable optimizer is `PrecondSchedulePaLMSOAP` (see below). The
 recommended experimental optimizer is `DelayedPSGDKron` ([tuning guide](docs/psgd_efficiency.md)).
 
 ## Features
@@ -106,6 +106,6 @@ To access `heavyball.utils`, you need to explicitly `import heavyball.utils`.\
 It has several handy functions:
 
 * `set_torch()` sets pytorch optimization settings (TF32, opt_einsum, benchmark, ...)
-* `compile_mode`, a string passed as-is to `torch.compile(mode=compile_mode)` in all compiled heavyball calls
+* `compile_mode`, a string passed as-is to `torch.compile(mode=compile_mode)` in all compiled heavyball calls; `compile_mode=None` disables torch_compile
 * `zeroth_power_mode`, a string determining whether to use QR, newtonschulz{iterations}, or svd or eigh to approximate
   the eigenvectors. Eigh has the highest precision and cost
