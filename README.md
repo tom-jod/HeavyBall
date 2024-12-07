@@ -13,6 +13,7 @@ recommended experimental optimizer is `DelayedPSGDKron` ([tuning guide](docs/psg
 
 ## Features
 
+* **Optax-like API**: `C = heavyball.chainable; grokfast = C.ChainOpt(p, lr, C.exp_avg, C.scale_by_adam)`
 * **Stochastic Rounding**: [FP32 convergence with BF16 parameters](https://github.com/pytorch/pytorch/issues/120376)
 * **Inplace EMA**: Same math, but less memory, less compute and higher stability
 * **Foreach**: Fast multi-tensor application (turn it off to save memory via `foreach=False`)
