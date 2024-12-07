@@ -89,8 +89,6 @@ def schedule_free_(lr: float, weight_lr_power: float, weight_sum: float, beta1: 
     except ZeroDivisionError:
         ckp1 = 0
 
-    print("ws, w", weight_sum, weight, lr, weight_lr_power, step, r, ckp1)
-
     # These operations update y in-place,
     # without computing x explicitly.
     lr, ckp1 = scalar_guard(lr, parameters[0]), scalar_guard(ckp1, parameters[0])
