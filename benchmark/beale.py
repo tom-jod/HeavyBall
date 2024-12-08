@@ -3,6 +3,8 @@ import pathlib
 import random
 from typing import List, Union
 
+import matplotlib.pyplot as plt
+
 import heavyball
 import hyperopt
 import torch
@@ -25,8 +27,9 @@ def beale(x, y):
 
 @app.command()
 def main(method: List[str] = typer.Option(['qr'], help='Eigenvector method to use (for SOAP)'),
-         dtype: List[str] = typer.Option(["float32"], help='Data type to use'), steps: int = 1_000,
-         weight_decay: float = 0, opt: List[str] = typer.Option(heavyball.__all__, help='Optimizers to use')):
+         dtype: List[str] = typer.Option(["float32"], help='Data type to use'), steps: int = 100,
+         weight_decay: float = 0, opt: List[str] = typer.Option(heavyball.__all__, help='Optimizers to use'),
+         display_steps: int = 20):
     dtype = [getattr(torch, d) for d in dtype]
     coords = (-3.5, -3.5)
 
@@ -45,12 +48,17 @@ def main(method: List[str] = typer.Option(['qr'], help='Eigenvector method to us
         def win(_model, loss: Union[float, hyperopt.Trials]):
             if not isinstance(loss, float):
                 loss = loss.results[-1]['loss']
-            return loss < 1e-8, {}
+            return loss < 0.35, {}
 
         model = trial(model, data, torch.nn.functional.l1_loss, win, steps, o, d, 1, 1, wd, m, 1, 1, group=100,
                       base_lr=0.1, trials=50)
-        fig, _ = model.plot_path(return_fig=True)
+
+        fig, ax = model.plot_path(return_fig=True)
+        stride = max(1, steps // display_steps)
+        ax.scatter(*list(zip(*model.coords_history[::stride])), c=model.loss_history[::stride], s=128, cmap='Spectral', zorder=1, alpha=0.75, marker='x')
+
         fig.savefig(f'beale_{m}_{o}.png')
+        plt.close(fig)
 
 
 if __name__ == '__main__':
