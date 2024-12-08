@@ -1,5 +1,4 @@
 import functools
-import warnings
 from typing import Optional
 
 from . import chainable as C
@@ -165,9 +164,7 @@ class ForeachPSGDKron(C.BaseOpt):
         delayed = C.default(delayed, self.delayed)
         cached = C.default(cached, self.cached)
         exp_avg_input = C.default(exp_avg_input, self.exp_avg_input)
-        gradient_clipping = C.default(gradient_clipping, utils.rmsnorm_clip_)
-        warnings.warn("PSGD's clipping changed in heavyball==1.0.0 to improve default hyperparameters. "
-                      "You can recover the previous defaults using PSGD(gradient_clipping=None, update_clipping=utils.trust_region_clip_)")
+        update_clipping = C.default(update_clipping, utils.trust_region_clip_)
 
         defaults = dict(lr=lr, beta=beta, weight_decay=weight_decay, max_size_triangular=max_size_triangular,
                         min_ndim_triangular=min_ndim_triangular, memory_save_mode=memory_save_mode,
@@ -216,10 +213,11 @@ PurePSGD = ForeachPurePSGD
 DelayedPSGD = ForeachDelayedPSGD
 CachedPSGDKron = ForeachCachedPSGDKron
 CachedDelayedPSGDKron = ForeachCachedDelayedPSGDKron
+Muon = ForeachMuon
 
-__all__ = ["PrecondSchedulePaLMSOAP", "PSGDKron", "PurePSGD", "DelayedPSGD", "CachedPSGDKron", "CachedDelayedPSGDKron",
-           "PalmForEachSoap", "PaLMSOAP", "PaLMSFAdamW", "LaProp", "ADOPT", "PrecondScheduleSOAP",
-           "PrecondSchedulePaLMSOAP", 'RMSprop',  #
+__all__ = ["RMSprop", "PrecondSchedulePaLMSOAP", "PSGDKron", "PurePSGD", "DelayedPSGD", "CachedPSGDKron",
+           "CachedDelayedPSGDKron", "PalmForEachSoap", "PaLMSOAP", "PaLMSFAdamW", "LaProp", "ADOPT",
+           "PrecondScheduleSOAP", "PrecondSchedulePaLMSOAP", 'RMSprop', "Muon",  #
            "ForeachAdamW", "ForeachSFAdamW", "ForeachLaProp", "ForeachADOPT", "ForeachSOAP", "ForeachPSGDKron",
            "ForeachPurePSGD", "ForeachDelayedPSGD", "ForeachCachedPSGDKron", "ForeachCachedDelayedPSGDKron",
-           "ForeachRMSprop"]
+           "ForeachRMSprop", "ForeachMuon"]
