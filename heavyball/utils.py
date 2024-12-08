@@ -321,12 +321,7 @@ def get_orthogonal_matrix_QR(GG, Q, exp_avg_sq):
         if zeroth_power_mode == 'eigh':
             set_(q, torch.linalg.eigh(m)[1])
         elif zeroth_power_mode.startswith('newtonschulz'):
-            iterations = zeroth_power_mode[len('newtonschulz'):]
-            if iterations == '':
-                iterations = 10
-            else:
-                iterations = int(iterations)
-            set_(q, zeropower_via_newtonschulz5(m, o[:, sort_idx], iterations))
+            set_(q, zeropower_via_newtonschulz5(m))
         else:
             set_(q, ortho(tmp[:, sort_idx]))
 
