@@ -375,7 +375,10 @@ class ChainOpt(utils.StatefulOptimizer):
         else:
             group['lr'] = -group['base_lr']
 
-        p, g = zip(*list(self.split_p_and_g_in_group(group, should_promote=False, beta1=utils.get_beta1(group))))
+        vals = list(self.split_p_and_g_in_group(group, should_promote=False, beta1=utils.get_beta1(group)))
+        if not vals:
+            return
+        p, g = zip(*vals)
 
         if not group['foreach'] or len(p) == 1:
             for param, grad in zip(p, g):
