@@ -990,8 +990,9 @@ def psgd_balance_Q(Q_in):
 
 def psgd_calc_A_and_conjB(exprA, G, Q):
     V = torch.randn(G.shape, dtype=G.dtype, device=G.device)
-    eps = torch.tensor(torch.sqrt(torch.finfo(torch.float32).eps), dtype=G.dtype, device=G.device)
-    G += eps * torch.mean(torch.abs(G)) * V
+    eps = scalar_guard(math.sqrt(torch.finfo(torch.float32).eps), G)
+    eps *= G.norm() / G.numel()
+    G += V * eps
     md = min_dtype(Q + [G])
     A = torch.einsum(exprA, *[q.to(md) for q in Q], G.to(md)).to(G.dtype)
     order = G.dim()
