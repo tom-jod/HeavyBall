@@ -60,6 +60,19 @@ class ForeachADOPT(C.BaseOpt):
         super().__init__(params, defaults, foreach, gradient_clipping, update_clipping, palm, C.update_by_adopt)
 
 
+class ForeachMuon(C.BaseOpt):
+    def __init__(self, params, lr=0.0025, betas=(0.9, 0.99), eps=1e-8, weight_decay=0, warmup_steps=0,
+                 foreach: bool = True, storage_dtype: str = 'float32', mars: bool = False, caution: bool = False,
+                 mars_gamma: float = 0.0025, gradient_clipping: C.str_or_fn = C.use_default,
+                 update_clipping: C.str_or_fn = C.use_default, palm: bool = C.use_default, beta2_scale: float = 0.8,
+                 nesterov: bool = True):
+        defaults = dict(lr=lr, betas=betas, eps=eps, k=0, warmup_steps=warmup_steps, train_mode=True, weight_sum=0.0,
+                        lr_max=-1.0, weight_decay=weight_decay, storage_dtype=storage_dtype, mars=mars, caution=caution,
+                        mars_gamma=mars_gamma, beta2_scale=beta2_scale)
+        super().__init__(params, defaults, foreach, gradient_clipping, update_clipping, palm,
+                         C.nesterov_momentum if nesterov else C.heavyball_momentum, C.orthogonalize_update)
+
+
 class ForeachLaProp(C.BaseOpt):
     def __init__(self, params, lr=0.0025, betas=(0.9, 0.99), eps=1e-8, weight_decay=0, warmup_steps=0,
                  foreach: bool = True, storage_dtype: str = 'float32', mars: bool = False, caution: bool = False,

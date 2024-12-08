@@ -393,7 +393,7 @@ def apply_to_idx(fn, idx):
 
 
 def chain(state: Union[callable, dict], group, grad, param, *fns):
-    update = torch.clone(grad)
+    update = [torch.clone(g) for g in grad]
     skip_update = False
     for fn in fns:
         try:
