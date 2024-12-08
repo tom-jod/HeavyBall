@@ -266,7 +266,7 @@ def precond_schedule(group, prob: Union[callable, float, None] = None, name: str
 @no_state_no_foreach
 def orthogonalize_update(group, update, grad, param):
     if update.dim() == 1:
-        return
+        return update
     original_shape = update.shape
     # doing it this way, as tmp and update are not guaranteed to share memory address or layout
     tmp = update.flatten(1, -1)
