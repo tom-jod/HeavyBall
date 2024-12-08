@@ -102,6 +102,17 @@ class GeneralGuard(FunctionTransform):  # We can't guard against reuse in the ge
         return self.fn(state, group, update, grad, param, *args, *zip(*vars), **kwargs)
 
 
+class NoState(FunctionTransform):
+    def __call__(self, state, group, update, grad, param, *args, **kwargs):
+        return self.fn(group, update, grad, param, *args, **kwargs)
+
+
+class NoStateNoForeach(FunctionTransform):
+    def __call__(self, state, group, update, grad, param, *args, **kwargs):
+        for a in zip(update, grad, param, *args):
+            return self.fn(group, *a, **kwargs)
+
+
 def zero_guard(*names):
     return functools.partial(ZeroGuard, names=names)
 
@@ -115,18 +126,11 @@ def general_guard(*names, init_fn):
 
 
 def no_state(fn):
-    def _fn(state, *args, **kwargs):
-        return fn(*args, **kwargs)
-
-    return _fn
+    return NoState(fn)
 
 
 def no_state_no_foreach(fn):
-    def _fn(state, group, *args, **kwargs):
-        for a in zip(*args):
-            return fn(group, *a, **kwargs)
-
-    return _fn
+    return NoStateNoForeach(fn)
 
 
 class SkipUpdate(ValueError):
@@ -145,8 +149,6 @@ def exp_avg(group, update, grad, param, exp_avg):
 def scale_by_exp_avg_sq(group, update, grad, param, exp_avg_sq):
     out = utils.scale_by_exp_avg_sq_(exp_avg_sq, update, utils.beta_debias(utils.get_beta2(group), group["step"]),
                                      group['eps'])
-    if group['step'] == 1:
-        raise SkipUpdate
     return out
 
 
@@ -263,8 +265,13 @@ def precond_schedule(group, prob: Union[callable, float, None] = None, name: str
 
 @no_state_no_foreach
 def orthogonalize_update(group, update, grad, param):
-    utils.inplace_orthogonal_(update, utils.zeroth_power_mode, update)
-    return update
+    if update.dim() == 1:
+        return
+    original_shape = update.shape
+    # doing it this way, as tmp and update are not guaranteed to share memory address or layout
+    tmp = update.flatten(1, -1)
+    utils.inplace_orthogonal_(tmp, utils.zeroth_power_mode, tmp)
+    return tmp.reshape(original_shape)
 
 
 @zero_guard("momentum")
