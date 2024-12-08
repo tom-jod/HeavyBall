@@ -277,13 +277,13 @@ def orthogonalize_update(group, update, grad, param):
 @zero_guard("momentum")
 @no_state
 def nesterov_momentum(group, updates, grads, params, momentum):
-    utils.nesterov_momentum(momentum, updates, utils.get_beta1(group))
+    return utils.nesterov_momentum(momentum, updates, utils.get_beta1(group))
 
 
 @zero_guard("momentum")
 @no_state
 def heavyball_momentum(group, updates, grads, params, momentum):
-    utils.heavyball_momentum(momentum, updates, utils.get_beta1(group))
+    return utils.heavyball_momentum(momentum, updates, utils.get_beta1(group))
 
 
 @zero_guard("exp_avg", "exp_avg_sq")
