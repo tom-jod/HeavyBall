@@ -33,6 +33,23 @@ def _guard_in_state(state, key, template_fn):
     return state[key]
 
 
+class FunctionTransform:
+    def __init__(self, fn):
+        self.fn = fn
+        self.fn_name = self.get_fn().__name__
+
+    def __call__(self, state, group, update, grad, param, *args, **kwargs):
+        raise NotImplementedError
+
+    def get_fn(self):
+        if hasattr(self.fn, 'get_fn'):
+            return self.fn.get_fn()
+        return self.fn
+
+    def val_name(self, name):
+        return f"{self.fn_name}_{name}"
+
+
 def _zero_guard(state, key, ref, dtype):
     return _guard_in_state(state, key,
                            lambda: torch.zeros_like(ref, dtype=torch.float32, memory_format=torch.preserve_format))
@@ -43,46 +60,58 @@ def _storage_dtype(group):
     return getattr(torch, dtype)
 
 
+class ZeroGuard(FunctionTransform):
+    def __init__(self, fn, names):
+        super().__init__(fn)
+        self.names = names
+
+    def __call__(self, state, group, update, grad, param, *args, **kwargs):
+        vars = [[_zero_guard(state(p), self.val_name(name), p, _storage_dtype(group)) for p in param]  #
+                for name in self.names]
+        return self.fn(state, group, update, grad, param, *args, *vars, **kwargs)
+
+
+class CopyGuard(FunctionTransform):
+    def __init__(self, fn, index, names):
+        super().__init__(fn)
+        self.index = index
+        self.names = names
+
+    def __call__(self, state, group, update, grad, param, *args, **kwargs):
+        val = [update, grad, param, *args][self.index]
+        vars = [[_guard_in_state(state(p), self.val_name(name), lambda: torch.clone(v)) for p, v in zip(param, val)]  #
+                for name in self.names]
+        return self.fn(state, group, update, grad, param, *args, *vars, **kwargs)
+
+
+class GeneralGuard(FunctionTransform):  # We can't guard against reuse in the general case
+    def __init__(self, fn, names, init_fn):
+        super().__init__(fn)
+        self.names = names
+        self.init_fn = init_fn
+
+    def __call__(self, state, group, update, grad, param, *args, **kwargs):
+        vars = []
+        skip_update = False
+        for p, g, u in zip(param, grad, update):
+            st = state(p)
+            skip_update |= _inplace_guard_(st, self.names, lambda: self.init_fn(st, group, u, g, p, **kwargs))
+            vars.append([st[name] if isinstance(name, str) else st.get(name[0], name[1]) for name in self.names])
+        if skip_update:
+            raise SkipUpdate
+        return self.fn(state, group, update, grad, param, *args, *zip(*vars), **kwargs)
+
+
 def zero_guard(*names):
-    def _outer(fn):
-        def _fn(state, group, update, grad, param, *args, **kwargs):
-            vars = [[_zero_guard(state(p), name, p, _storage_dtype(group)) for p in param] for name in names]
-            return fn(state, group, update, grad, param, *args, *vars, **kwargs)
-
-        return _fn
-
-    return _outer
+    return functools.partial(ZeroGuard, names=names)
 
 
 def copy_guard(index, *names):
-    def _outer(fn):
-        def _fn(state, group, update, grad, param, *args, **kwargs):
-            val = [update, grad, param, *args][index]
-            vars = [[_guard_in_state(state(p), name, lambda: torch.clone(v)) for p, v in zip(param, val)]  #
-                    for name in names]
-            return fn(state, group, update, grad, param, *args, *vars, **kwargs)
-
-        return _fn
-
-    return _outer
+    return functools.partial(CopyGuard, index=index, names=names)
 
 
 def general_guard(*names, init_fn):
-    def _outer(fn):
-        def _fn(state, group, update, grad, param, *args, **kwargs):
-            vars = []
-            skip_update = False
-            for p, g, u in zip(param, grad, update):
-                st = state(p)
-                skip_update |= _inplace_guard_(st, names, lambda: init_fn(st, group, u, g, p, **kwargs))
-                vars.append([st[name] if isinstance(name, str) else st.get(name[0], name[1]) for name in names])
-            if skip_update:
-                raise SkipUpdate
-            return fn(state, group, update, grad, param, *args, *zip(*vars), **kwargs)
-
-        return _fn
-
-    return _outer
+    return functools.partial(GeneralGuard, names=names, init_fn=init_fn)
 
 
 def no_state(fn):
@@ -232,6 +261,12 @@ def precond_schedule(group, prob: Union[callable, float, None] = None, name: str
     raise ValueError("No preconditioner update schedule specified.")
 
 
+@no_state_no_foreach
+def orthogonalize_update(group, update, grad, param):
+    utils.inplace_orthogonal_(update)
+    return update
+
+
 @zero_guard("exp_avg", "exp_avg_sq")
 @general_guard("Q", "GG", init_fn=_init_soap)
 @no_state
@@ -346,7 +381,7 @@ def apply_to_idx(fn, idx):
 
 
 def chain(state: Union[callable, dict], group, grad, param, *fns):
-    update = grad
+    update = torch.clone(grad)
     skip_update = False
     for fn in fns:
         try:
@@ -375,7 +410,10 @@ class ChainOpt(utils.StatefulOptimizer):
         else:
             group['lr'] = -group['base_lr']
 
-        p, g = zip(*list(self.split_p_and_g_in_group(group, should_promote=False, beta1=utils.get_beta1(group))))
+        vals = list(self.split_p_and_g_in_group(group, should_promote=False, beta1=utils.get_beta1(group)))
+        if not vals:
+            return
+        p, g = zip(*vals)
 
         if not group['foreach'] or len(p) == 1:
             for param, grad in zip(p, g):
