@@ -91,12 +91,9 @@ def schedule_free_(lr: float, weight_lr_power: float, weight_sum: float, beta1: 
         ckp1 = weight / weight_sum
     except ZeroDivisionError:
         ckp1 = 0
-    ckp1 = 0
 
-    # These operations update y in-place,
-    # without computing x explicitly.
-    lr, ckp1, beta1 = scalar_guard(lr, parameters[0]), scalar_guard(ckp1, parameters[0]), scalar_guard(beta1,
-                                                                                                       parameters[0])
+    grad, parameters, z = list_guard(grad, parameters, z)
+    lr, ckp1, beta1 = scalar_guard(lr, ckp1, beta1, grad[0])
     _compilable_schedule_free_(parameters, z, ckp1, grad, lr, beta1, decay)
     return weight_sum
 
@@ -180,14 +177,13 @@ def _compilable_exp_avg_sq_(state: List[Tensor], grad: List[Tensor], beta2: Tens
 
 
 def exp_avg_sq_(state, grad, beta2, eps, out=None):
-    state, grad, out = list_guard(state), list_guard(grad), list_guard(out)
-    beta2, eps = scalar_guard(beta2, state[0]), scalar_guard(eps, state[0])
+    state, grad, out = list_guard(state, grad, out)
+    beta2, eps = scalar_guard(beta2, eps, state[0])
     return _compilable_exp_avg_sq_(state, grad, beta2, eps, out)
 
 
 @decorator_knowngood
-def _compilable_scale_by_exp_avg_sq_(state: List[Tensor], grad: List[Tensor], beta2: Tensor, eps: Tensor,
-                                     out: List[Optional[Tensor]]):
+def _compilable_scale_by_exp_avg_sq_(state: List[Tensor], grad: List[Tensor], beta2: Tensor, eps: Tensor):
     s32, g32 = [list(map(promote, x)) for x in (state, grad)]
     torch._foreach_mul_(s32, beta2)
     [s.addcmul_(g, g, value=1 - beta2) for s, g in zip(s32, g32)]
@@ -198,10 +194,10 @@ def _compilable_scale_by_exp_avg_sq_(state: List[Tensor], grad: List[Tensor], be
     copy_stochastic_list_(grad, out)
 
 
-def scale_by_exp_avg_sq_(grad, exp_avg_sq, beta2, eps):
-    grad, exp_avg_sq = list_guard(grad), list_guard(exp_avg_sq)
-    beta2, eps = scalar_guard(beta2, grad[0]), scalar_guard(eps, grad[0])
-    _compilable_scale_by_exp_avg_sq_(grad, exp_avg_sq, beta2, eps, grad)
+def scale_by_exp_avg_sq_(exp_avg_sq, grad, beta2, eps):
+    grad, exp_avg_sq = list_guard(grad, exp_avg_sq)
+    beta2, eps = scalar_guard(beta2, eps, grad[0])
+    _compilable_scale_by_exp_avg_sq_(exp_avg_sq, grad, beta2, eps)
     return grad
 
 
@@ -221,7 +217,7 @@ def adaptive_gradient_clipping_(parameters: List[Tensor], gradients: List[Tensor
                                 minimum: float = 1e-3, eps: float = 1e-8):
     if clip_val <= 0:
         return gradients
-    parameters, gradients = list_guard(parameters), list_guard(gradients)
+    parameters, gradients = list_guard(parameters, gradients)
     clip_val = scalar_guard(clip_val, parameters[0])
     return _compilable_agc_(parameters, gradients, clip_val, minimum, eps)
 
@@ -310,14 +306,14 @@ def _compilable_nesterov_momentum_(state, grad, beta):
 
 
 def heavyball_momentum(state, grad, beta):
-    state, grad = list_guard(state), list_guard(grad)
+    state, grad = list_guard(state, grad)
     beta = scalar_guard(beta, state[0])
     _compilable_heavyball_momentum_(state, grad, beta)
     return grad
 
 
 def nesterov_momentum(state, grad, beta):
-    state, grad = list_guard(state), list_guard(grad)
+    state, grad = list_guard(state, grad)
     beta = scalar_guard(beta, state[0])
     _compilable_nesterov_momentum_(state, grad, beta)
     return grad
@@ -451,23 +447,36 @@ def get_beta2(group):
 
 
 def stochastic_lerp_(x: List[Tensor], y: List[Tensor], a: Union[float, int, Tensor]):
-    x, y = list_guard(x), list_guard(y)
+    x, y = list_guard(x, y)
     a = scalar_guard(a, x[0])
     _compilable_stochastic_lerp_(x, y, a)
 
 
-def list_guard(x):
-    if isinstance(x, (list, tuple)):
-        return x
-    return [x]
+def list_guard(*xs):
+    out = []
+    for x in xs:
+        if isinstance(x, (list, tuple)):
+            out.append(x)
+        else:
+            out.append([x])
+    if len(xs) == 1:
+        return out[0]
+    return out
 
 
-def scalar_guard(x, ref):
-    if isinstance(x, float):
-        return torch.empty((), dtype=torch.float32, device=ref.device).fill_(x)
-    if isinstance(x, int):
-        return torch.empty((), dtype=torch.int64, device=ref.device).fill_(x)
-    return x
+def scalar_guard(*args):
+    *xs, ref = args
+    out = []
+    for x in xs:
+        if isinstance(x, float):
+            out.append(torch.empty((), dtype=torch.float32, device=ref.device).fill_(x))
+        elif isinstance(x, int):
+            out.append(torch.empty((), dtype=torch.int64, device=ref.device).fill_(x))
+        else:
+            out.append(x)
+    if len(xs) == 1:
+        return out[0]
+    return out
 
 
 @decorator_knowngood
@@ -480,7 +489,7 @@ def _compilable_stochastic_add_(x: List[Tensor], y: List[Tensor], alpha: Union[f
 
 
 def stochastic_add_(x: List[Tensor], y: List[Tensor], alpha: Union[float, int, Tensor]):
-    x, y = list_guard(x), list_guard(y)
+    x, y = list_guard(x, y)
     alpha = scalar_guard(alpha, x[0])
     _compilable_stochastic_add_(x, y, alpha)
 
@@ -734,8 +743,7 @@ def _compilable_adam_(exp_avg: List[Tensor], exp_avg_sq: List[Tensor], grad: Lis
 
 def adam_(exp_avg: List[Tensor], exp_avg_sq: List[Tensor], grad: List[Tensor], beta1: float, beta2: float, step: int):
     exp_avg, exp_avg_sq, grad = map(list_guard, (exp_avg, exp_avg_sq, grad))
-    beta1, beta2, step = scalar_guard(beta1, exp_avg[0]), scalar_guard(beta2, exp_avg[0]), scalar_guard(step,
-                                                                                                        exp_avg[0])
+    beta1, beta2, step = scalar_guard(beta1, beta2, step, exp_avg[0])
     _compilable_adam_(exp_avg, exp_avg_sq, grad, beta1, beta2, step)
     return grad
 
@@ -760,8 +768,8 @@ def _fused_compilable_adam_(y: List[Tensor], exp_avg: List[Tensor], exp_avg_sq: 
 
 def fused_adam_(y: List[Tensor], exp_avg: List[Tensor], exp_avg_sq: List[Tensor], grad: List[Tensor], beta1: float,
                 beta2: float, step: int, lr: float, eps: float, decay: float, caution: bool):
-    y, exp_avg, exp_avg_sq, grad = map(list_guard, (y, exp_avg, exp_avg_sq, grad))
-    beta1, beta2, step, lr = [scalar_guard(x, y[0]) for x in (beta1, beta2, step, lr)]
+    y, exp_avg, exp_avg_sq, grad = list_guard(y, exp_avg, exp_avg_sq, grad)
+    beta1, beta2, step, lr = scalar_guard(beta1, beta2, step, lr, y[0])
     return _fused_compilable_adam_(y, exp_avg, exp_avg_sq, grad, beta1, beta2, step, decay, lr, eps, caution)
 
 
@@ -782,8 +790,8 @@ def _compilable_laprop_(exp_avg: List[Tensor], exp_avg_sq: List[Tensor], grad: L
 
 
 def laprop_(exp_avg: List[Tensor], exp_avg_sq: List[Tensor], grad: List[Tensor], beta1: float, beta2: float, step: int):
-    exp_avg, exp_avg_sq, grad = list_guard(exp_avg), list_guard(exp_avg_sq), list_guard(grad)
-    beta1, beta, step = scalar_guard(beta1, exp_avg[0]), scalar_guard(beta2, exp_avg[0]), scalar_guard(step, exp_avg[0])
+    exp_avg, exp_avg_sq, grad = list_guard(exp_avg, exp_avg_sq, grad)
+    beta1, beta2, step = scalar_guard(beta1, beta2, step, exp_avg[0])
     _compilable_laprop_(exp_avg, exp_avg_sq, grad, beta1, beta2, step)
     return grad
 
@@ -805,11 +813,11 @@ def _fused_compilable_laprop_(y: List[Tensor], exp_avg: List[Tensor], exp_avg_sq
     copy_stochastic_list_(exp_avg_sq, exp_avg_sq32)
 
 
-def fused_laprop_(y: List[Tensor], exp_avg: List[Tensor], exp_avg_sq: List[Tensor], grad_projected: List[Tensor],
-                  beta1: float, beta2: float, step: int, lr: float, decay: float, caution: bool):
-    y, exp_avg, exp_avg_sq, grad_projected = map(list_guard, (y, exp_avg, exp_avg_sq, grad_projected))
-    beta1, beta2, step, lr = [scalar_guard(x, y[0]) for x in (beta1, beta2, step, lr)]
-    _fused_compilable_laprop_(y, exp_avg, exp_avg_sq, grad_projected, beta1, beta2, step, lr, decay, caution)
+def fused_laprop_(y: List[Tensor], exp_avg: List[Tensor], exp_avg_sq: List[Tensor], grad: List[Tensor], beta1: float,
+                  beta2: float, step: int, lr: float, decay: float, caution: bool):
+    exp_avg, exp_avg_sq, grad, y = list_guard(exp_avg, exp_avg_sq, grad, y)
+    beta1, beta2, step, lr = scalar_guard(beta1, beta2, step, lr, exp_avg[0])
+    _fused_compilable_laprop_(y, exp_avg, exp_avg_sq, grad, beta1, beta2, step, lr, decay, caution)
 
 
 @decorator_knowngood
@@ -832,8 +840,8 @@ def _fused_compilable_adopt_(y, grad, exp_avg_sq, exp_avg, beta1, beta2, step, l
 
 
 def fused_adopt_(y, grad, exp_avg_sq, exp_avg, beta1, beta2, step, lr, eps, decay, caution):
-    y, grad, exp_avg_sq, exp_avg = list_guard(y), list_guard(grad), list_guard(exp_avg_sq), list_guard(exp_avg)
-    beta1, beta2, step, lr = [scalar_guard(x, y[0]) for x in (beta1, beta2, step, lr)]
+    exp_avg, exp_avg_sq, grad, y = list_guard(exp_avg, exp_avg_sq, grad, y)
+    beta1, beta2, step, lr = scalar_guard(beta1, beta2, step, lr, exp_avg[0])
     _fused_compilable_adopt_(y, grad, exp_avg_sq, exp_avg, beta1, beta2, step, lr, eps, decay, caution)
 
 
@@ -858,8 +866,8 @@ def _compilable_adopt_(grad, exp_avg_sq, exp_avg, beta1, beta2, step):
 
 
 def adopt(grad, exp_avg_sq, exp_avg, beta1, beta2, step):
-    grad, exp_avg_sq, exp_avg = list_guard(grad), list_guard(exp_avg_sq), list_guard(exp_avg)
-    beta1, beta2, step = scalar_guard(beta1, grad[0]), scalar_guard(beta2, grad[0]), scalar_guard(step, grad[0])
+    exp_avg, exp_avg_sq, grad = list_guard(exp_avg, exp_avg_sq, grad, y)
+    beta1, beta2, step = scalar_guard(beta1, beta2, step, lr, exp_avg[0])
     _compilable_adopt_(grad, exp_avg_sq, exp_avg, beta1, beta2, step)
     return grad
 
@@ -912,7 +920,7 @@ def _compilable_update_(p: List[Tensor], u: List[Tensor], decay: Tensor, add_fn:
 
 def update_param_(param: List[Tensor], update: List[Tensor], lr: float, decay: float, add_fn: callable = None,
                   caution: bool = False, grad: List[Tensor] = None):
-    param, update, grad = list_guard(param), list_guard(update), list_guard(grad)
+    param, update, grad = list_guard(param, update, grad)
     lr = scalar_guard(lr, param[0])
     if not caution:
         grad = [None] * len(param)
@@ -1173,7 +1181,7 @@ def _compilable_trust_region_clip_(grad, lerp: float = 0.9, scale: float = 1.5):
 
 def trust_region_clip_(grad, lerp=0.9, scale=1.5):
     grad = list_guard(grad)
-    lerp, scale = scalar_guard(lerp, grad[0]), scalar_guard(scale, grad[0])
+    lerp, scale = scalar_guard(lerp, scale, grad[0])
     return _compilable_trust_region_clip_(grad, lerp, scale)
 
 
