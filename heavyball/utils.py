@@ -254,33 +254,29 @@ def set_torch():
 
 
 @decorator
-def zeropower_via_newtonschulz5(G, init, steps=2, eps=1e-7):
+def zeropower_via_newtonschulz5(G, steps=5, eps=1e-7):
     """
-    Modified from "modded-nanogpt" under the MIT license:
-    Original: https://github.com/KellerJordan/modded-nanogpt/blob/a0dcbfdd9a0617d091d5123cfc354745428e40d3/train_gpt2.py
-
     Newton-Schulz iteration to compute the zeroth power / orthogonalization of G. We opt to use a
     quintic iteration whose coefficients are selected to maximize the slope at zero. For the purpose
     of minimizing steps, it turns out to be empirically effective to keep increasing the slope at
     zero even beyond the point where the iteration no longer converges all the way to one everywhere
     on the interval. This iteration therefore does not produce UV^T but rather something like US'V^T
-    where S' is diagonal with S_{ii}' \sim Uniform(0.5, 1.5), which turns out not to hurt model
+    where S' is diagonal with S_{ii}' ~ Uniform(0.5, 1.5), which turns out not to hurt model
     performance at all relative to UV^T, where USV^T = G is the SVD.
     """
     assert len(G.shape) == 2
-    a, b, c = (3.4445, -4.7750, 2.0315)
-    X = G.float()
-    init = init / (init.norm() + eps)  # ensure top singular value <= 1
-    X = X / (X.norm() + eps)  # ensure top singular value <= 1
+    a, b, c = (3.4445, -4.7750,  2.0315)
+    X = G.bfloat16()
+    X /= (X.norm() + eps) # ensure top singular value <= 1
     if G.size(0) > G.size(1):
         X = X.T
     for _ in range(steps):
-        A = X @ X.T  # preconditioner
-        B = A @ init
-        init = X = a * init + b * B + c * A @ B
+        A = X @ X.T
+        B = b * A + c * A @ A # adapted from suggestion by @jxbz, @leloykun, and @YouJiacheng
+        X = a * X + B @ X
     if G.size(0) > G.size(1):
         X = X.T
-    return X
+    return X.to(G.dtype)
 
 
 def ortho(x):
@@ -325,12 +321,7 @@ def get_orthogonal_matrix_QR(GG, Q, exp_avg_sq):
         if zeroth_power_mode == 'eigh':
             set_(q, torch.linalg.eigh(m)[1])
         elif zeroth_power_mode.startswith('newtonschulz'):
-            iterations = zeroth_power_mode[len('newtonschulz'):]
-            if iterations == '':
-                iterations = 10
-            else:
-                iterations = int(iterations)
-            set_(q, zeropower_via_newtonschulz5(m, o[:, sort_idx], iterations))
+            set_(q, zeropower_via_newtonschulz5(m))
         else:
             set_(q, ortho(tmp[:, sort_idx]))
 
