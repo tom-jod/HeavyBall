@@ -108,5 +108,5 @@ It has several handy functions:
 
 * `set_torch()` sets pytorch optimization settings (TF32, opt_einsum, benchmark, ...)
 * `compile_mode`, a string passed as-is to `torch.compile(mode=compile_mode)` in all compiled heavyball calls; `compile_mode=None` disables torch_compile
-* `zeroth_power_mode`, a string determining whether to use QR, newtonschulz{iterations}, or svd or eigh to approximate
-  the eigenvectors. Eigh has the highest precision and cost
+* `zeroth_power_mode`, a string determining whether to use QR, newtonschulz, or svd or eigh to approximate
+  the eigenvectors.

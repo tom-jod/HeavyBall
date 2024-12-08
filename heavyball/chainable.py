@@ -263,8 +263,20 @@ def precond_schedule(group, prob: Union[callable, float, None] = None, name: str
 
 @no_state_no_foreach
 def orthogonalize_update(group, update, grad, param):
-    utils.inplace_orthogonal_(update)
+    utils.inplace_orthogonal_(update, utils.zeroth_power_mode, update)
     return update
+
+
+@zero_guard("momentum")
+@no_state
+def nesterov_momentum(group, updates, grads, params, momentum):
+    utils.nesterov_momentum(momentum, updates, utils.get_beta1(group))
+
+
+@zero_guard("momentum")
+@no_state
+def heavyball_momentum(group, updates, grads, params, momentum):
+    utils.heavyball_momentum(momentum, updates, utils.get_beta1(group))
 
 
 @zero_guard("exp_avg", "exp_avg_sq")

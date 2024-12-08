@@ -1,4 +1,5 @@
 import functools
+import warnings
 from typing import Optional
 
 from . import chainable as C
@@ -151,7 +152,9 @@ class ForeachPSGDKron(C.BaseOpt):
         delayed = C.default(delayed, self.delayed)
         cached = C.default(cached, self.cached)
         exp_avg_input = C.default(exp_avg_input, self.exp_avg_input)
-        update_clipping = C.default(update_clipping, utils.trust_region_clip_)
+        gradient_clipping = C.default(gradient_clipping, utils.rmsnorm_clip_)
+        warnings.warn("PSGD's clipping changed in heavyball==1.0.0 to improve default hyperparameters. "
+                      "You can recover the previous defaults using PSGD(gradient_clipping=None, update_clipping=utils.trust_region_clip_)")
 
         defaults = dict(lr=lr, beta=beta, weight_decay=weight_decay, max_size_triangular=max_size_triangular,
                         min_ndim_triangular=min_ndim_triangular, memory_save_mode=memory_save_mode,

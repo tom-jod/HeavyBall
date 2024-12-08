@@ -23,7 +23,7 @@ from torch.utils._pytree import tree_map
 compile_mode = "max-autotune-no-cudagraphs"
 dynamic = False
 compile_mode_recommended_to_none = None
-zeroth_power_mode = 'qr'  # 'qr' is baseline, 'newtonschulz' converges better and faster, 'eigh' is perfect but slow
+zeroth_power_mode = 'qr'  # 'qr' is baseline, 'newtonschulz' converges better and faster
 tiny_bf16 = torch.finfo(torch.bfloat16).tiny
 
 
@@ -95,7 +95,8 @@ def schedule_free_(lr: float, weight_lr_power: float, weight_sum: float, beta1: 
 
     # These operations update y in-place,
     # without computing x explicitly.
-    lr, ckp1, beta1 = scalar_guard(lr, parameters[0]), scalar_guard(ckp1, parameters[0]), scalar_guard(beta1, parameters[0])
+    lr, ckp1, beta1 = scalar_guard(lr, parameters[0]), scalar_guard(ckp1, parameters[0]), scalar_guard(beta1,
+                                                                                                       parameters[0])
     _compilable_schedule_free_(parameters, z, ckp1, grad, lr, beta1, decay)
     return weight_sum
 
@@ -266,14 +267,14 @@ def zeropower_via_newtonschulz5(G, steps=5, eps=1e-7):
     performance at all relative to UV^T, where USV^T = G is the SVD.
     """
     assert len(G.shape) == 2
-    a, b, c = (3.4445, -4.7750,  2.0315)
+    a, b, c = (3.4445, -4.7750, 2.0315)
     X = G.bfloat16()
-    X /= (X.norm() + eps) # ensure top singular value <= 1
+    X /= (X.norm() + eps)  # ensure top singular value <= 1
     if G.size(0) > G.size(1):
         X = X.T
     for _ in range(steps):
         A = X @ X.T
-        B = b * A + c * A @ A # adapted from suggestion by @jxbz, @leloykun, and @YouJiacheng
+        B = b * A + c * A @ A  # adapted from suggestion by @jxbz, @leloykun, and @YouJiacheng
         X = a * X + B @ X
     if G.size(0) > G.size(1):
         X = X.T
@@ -288,18 +289,52 @@ def ortho(x):
         return u @ v.T
     raise NotImplementedError(f"Unknown zeroth_power_mode: {zeroth_power_mode}")
 
+
 @decorator_knowngood
-def inplace_orthogonal_(x, mode):
+def _compilable_heavyball_momentum_(state, grad, beta):
+    s32, g32 = [list(map(promote, x)) for x in (state, grad)]
+    torch._foreach_mul_(s32, beta)
+    torch._foreach_add_(s32, g32)
+    copy_stochastic_list_(state, s32)
+    copy_stochastic_list_(grad, s32)
+
+
+@decorator_knowngood
+def _compilable_nesterov_momentum_(state, grad, beta):
+    s32, g32 = [list(map(promote, x)) for x in (state, grad)]
+    torch._foreach_mul_(s32, beta)
+    torch._foreach_add_(s32, g32)
+    [g.add_(s, alpha=beta) for g, s in zip(g32, s32)]
+    copy_stochastic_list_(state, s32)
+    copy_stochastic_list_(grad, g32)
+
+
+def heavyball_momentum(state, grad, beta):
+    state, grad = list_guard(state), list_guard(grad)
+    beta = scalar_guard(beta, state[0])
+    _compilable_heavyball_momentum_(state, grad, beta)
+    return grad
+
+
+def nesterov_momentum(state, grad, beta):
+    state, grad = list_guard(state), list_guard(grad)
+    beta = scalar_guard(beta, state[0])
+    _compilable_nesterov_momentum_(state, grad, beta)
+    return grad
+
+
+@decorator_knowngood
+def inplace_orthogonal_(x, mode, out):
     if mode == 'qr':
         y = torch.linalg.qr(x).Q
     elif mode == 'svd':
         u, s, v = torch.linalg.svd(x)
-        y =  u @ v.T
+        y = u @ v.T
     elif mode == 'newtonschulz':
-        y = zeropower_via_newtonschulz5(x, x, 5)
+        y = zeropower_via_newtonschulz5(x, 5)
     else:
         raise NotImplementedError(f"Unknown zeroth_power_mode: {mode}")
-    set_(x, y)
+    set_(out, y)
 
 
 def get_orthogonal_matrix_QR(GG, Q, exp_avg_sq):
@@ -332,12 +367,7 @@ def get_orthogonal_matrix_QR(GG, Q, exp_avg_sq):
         est_eig = torch.einsum('ij,ij->j', o, tmp)
         sort_idx = torch.argsort(est_eig, descending=True)
         indices.append(sort_idx)
-        if zeroth_power_mode == 'eigh':
-            set_(q, torch.linalg.eigh(m)[1])
-        elif zeroth_power_mode.startswith('newtonschulz'):
-            set_(q, zeropower_via_newtonschulz5(m))
-        else:
-            set_(q, ortho(tmp[:, sort_idx]))
+        inplace_orthogonal_(tmp[:, sort_idx], q)
 
     indices = tuple(slice(None) if ind is None else ind.view(*(1,) * i, -1, *(1,) * (exp_avg_sq.dim() - i - 1))  #
                     for i, ind in enumerate(indices))
@@ -731,7 +761,7 @@ def _fused_compilable_adam_(y: List[Tensor], exp_avg: List[Tensor], exp_avg_sq: 
 def fused_adam_(y: List[Tensor], exp_avg: List[Tensor], exp_avg_sq: List[Tensor], grad: List[Tensor], beta1: float,
                 beta2: float, step: int, lr: float, eps: float, decay: float, caution: bool):
     y, exp_avg, exp_avg_sq, grad = map(list_guard, (y, exp_avg, exp_avg_sq, grad))
-    beta1, beta2, step, lr = [scalar_guard (x, y[0]) for x in (beta1, beta2, step, lr)]
+    beta1, beta2, step, lr = [scalar_guard(x, y[0]) for x in (beta1, beta2, step, lr)]
     return _fused_compilable_adam_(y, exp_avg, exp_avg_sq, grad, beta1, beta2, step, decay, lr, eps, caution)
 
 
@@ -751,8 +781,7 @@ def _compilable_laprop_(exp_avg: List[Tensor], exp_avg_sq: List[Tensor], grad: L
     copy_stochastic_list_(grad, exp_avg)
 
 
-def laprop_(exp_avg: List[Tensor], exp_avg_sq: List[Tensor], grad: List[Tensor], beta1: float, beta2: float,
-            step: int):
+def laprop_(exp_avg: List[Tensor], exp_avg_sq: List[Tensor], grad: List[Tensor], beta1: float, beta2: float, step: int):
     exp_avg, exp_avg_sq, grad = list_guard(exp_avg), list_guard(exp_avg_sq), list_guard(grad)
     beta1, beta, step = scalar_guard(beta1, exp_avg[0]), scalar_guard(beta2, exp_avg[0]), scalar_guard(step, exp_avg[0])
     _compilable_laprop_(exp_avg, exp_avg_sq, grad, beta1, beta2, step)
@@ -779,7 +808,7 @@ def _fused_compilable_laprop_(y: List[Tensor], exp_avg: List[Tensor], exp_avg_sq
 def fused_laprop_(y: List[Tensor], exp_avg: List[Tensor], exp_avg_sq: List[Tensor], grad_projected: List[Tensor],
                   beta1: float, beta2: float, step: int, lr: float, decay: float, caution: bool):
     y, exp_avg, exp_avg_sq, grad_projected = map(list_guard, (y, exp_avg, exp_avg_sq, grad_projected))
-    beta1, beta2, step, lr = [scalar_guard (x, y[0]) for x in (beta1, beta2, step, lr)]
+    beta1, beta2, step, lr = [scalar_guard(x, y[0]) for x in (beta1, beta2, step, lr)]
     _fused_compilable_laprop_(y, exp_avg, exp_avg_sq, grad_projected, beta1, beta2, step, lr, decay, caution)
 
 
@@ -804,7 +833,7 @@ def _fused_compilable_adopt_(y, grad, exp_avg_sq, exp_avg, beta1, beta2, step, l
 
 def fused_adopt_(y, grad, exp_avg_sq, exp_avg, beta1, beta2, step, lr, eps, decay, caution):
     y, grad, exp_avg_sq, exp_avg = list_guard(y), list_guard(grad), list_guard(exp_avg_sq), list_guard(exp_avg)
-    beta1, beta2, step, lr = [scalar_guard (x, y[0]) for x in (beta1, beta2, step, lr)]
+    beta1, beta2, step, lr = [scalar_guard(x, y[0]) for x in (beta1, beta2, step, lr)]
     _fused_compilable_adopt_(y, grad, exp_avg_sq, exp_avg, beta1, beta2, step, lr, eps, decay, caution)
 
 
