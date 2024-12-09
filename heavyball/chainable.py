@@ -140,16 +140,14 @@ class SkipUpdate(ValueError):
 @zero_guard("exp_avg")
 @no_state
 def exp_avg(group, update, grad, param, exp_avg):
-    utils.stochastic_lerp_(exp_avg, update, utils.beta_debias(utils.get_beta1(group), group["step"]))
-    return exp_avg
+    return utils.scale_by_exp_avg_(exp_avg, update, utils.beta_debias(utils.get_beta1(group), group["step"]))
 
 
 @zero_guard("exp_avg_sq")
 @no_state
 def scale_by_exp_avg_sq(group, update, grad, param, exp_avg_sq):
-    out = utils.scale_by_exp_avg_sq_(exp_avg_sq, update, utils.beta_debias(utils.get_beta2(group), group["step"]),
-                                     group['eps'])
-    return out
+    return utils.scale_by_exp_avg_sq_(exp_avg_sq, update, utils.beta_debias(utils.get_beta2(group), group["step"]),
+                                      group['eps'])
 
 
 @zero_guard("exp_avg", "exp_avg_sq")
@@ -350,9 +348,12 @@ def _fused_cached_psgd_precond_grad(group, grad, param, cached, cache_expr, expr
 @no_state_no_foreach
 def scale_by_psgd(group, update, grad, param, Q, exprs, Q_cache, cache_expr: str, cached: bool = False,
                   prob: Optional[callable] = None):
+    old = update
+    update = update.to(memory_format=torch.contiguous_format)
     Q_mat = utils.line_to_triu(Q) if group['store_triu_as_line'] else Q
     _update_psgd_precond(group, param, update, Q_mat, Q, exprs, prob)
-    return _cached_psgd_precond_grad(False, cache_expr, exprs, update, Q_mat, Q_cache)
+    out = _cached_psgd_precond_grad(False, cache_expr, exprs, update, Q_mat, Q_cache)
+    return torch.as_strided(out, old.shape, old.stride())
 
 
 @general_guard("Q", "exprs", ("Q_cache", None), ("cache_expr", None), init_fn=_init_psgd)
@@ -400,7 +401,7 @@ def apply_to_idx(fn, idx):
 
 
 def chain(state: Union[callable, dict], group, grad, param, *fns):
-    update = [torch.clone(g) for g in grad]
+    update = [torch.clone(g, memory_format=torch.preserve_format) for g in grad]
     skip_update = False
     for fn in fns:
         try:

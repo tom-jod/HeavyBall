@@ -202,6 +202,21 @@ def scale_by_exp_avg_sq_(exp_avg_sq, grad, beta2, eps):
 
 
 @decorator_knowngood
+def _compilable_exp_avg_(state, grad, beta):
+    s32, g32 = [list(map(promote, x)) for x in (state, grad)]
+    [s.lerp_(g, beta) for s, g in zip(s32, g32)]
+    copy_stochastic_list_(state, s32)
+    copy_stochastic_list_(grad, s32)
+
+
+def scale_by_exp_avg_(state, grad, beta):
+    state, grad = list_guard(state, grad)
+    beta = scalar_guard(beta, state[0])
+    _compilable_exp_avg_(state, grad, beta)
+    return grad
+
+
+@decorator_knowngood
 def _compilable_agc_(parameters: List[Tensor], gradients: List[Tensor], clip_val: float, minimum: float, eps: float):
     p_norm = torch._foreach_norm(parameters)
     g_norm = torch._foreach_norm(gradients)
@@ -321,13 +336,13 @@ def nesterov_momentum(state, grad, beta):
 
 @decorator_knowngood
 def inplace_orthogonal_(x, mode, out):
-    if mode == 'qr':
+    if mode == 'newtonschulz' or x.shape[0] != x.shape[1]:
+        y = zeropower_via_newtonschulz5(x, 5)
+    elif mode == 'qr':
         y = torch.linalg.qr(x).Q
     elif mode == 'svd':
         u, s, v = torch.linalg.svd(x)
         y = u @ v.T
-    elif mode == 'newtonschulz':
-        y = zeropower_via_newtonschulz5(x, 5)
     else:
         raise NotImplementedError(f"Unknown zeroth_power_mode: {mode}")
     set_(out, y)
@@ -363,7 +378,7 @@ def get_orthogonal_matrix_QR(GG, Q, exp_avg_sq):
         est_eig = torch.einsum('ij,ij->j', o, tmp)
         sort_idx = torch.argsort(est_eig, descending=True)
         indices.append(sort_idx)
-        inplace_orthogonal_(tmp[:, sort_idx], q)
+        inplace_orthogonal_(tmp[:, sort_idx], zeroth_power_mode, q)
 
     indices = tuple(slice(None) if ind is None else ind.view(*(1,) * i, -1, *(1,) * (exp_avg_sq.dim() - i - 1))  #
                     for i, ind in enumerate(indices))

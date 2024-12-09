@@ -17,7 +17,7 @@ config.cache_size_limit = 128
 
 @pytest.mark.parametrize("opt", heavyball.__all__)
 @pytest.mark.parametrize("size,depth", [(128, 1)])
-def test_foreach(opt, size, depth: int, iterations: int = 32, outer_iterations: int = 1):
+def test_foreach(opt, size, depth: int, iterations: int = 1024, outer_iterations: int = 1):
     set_torch()
     opt = getattr(heavyball, opt)
 
@@ -34,7 +34,7 @@ def test_foreach(opt, size, depth: int, iterations: int = 32, outer_iterations: 
             if is_channels_last:
                 model.to(memory_format=torch.channels_last)
 
-            o = get_optim(opt, model.parameters(), lr=1e-3, weight_decay=1e-4, warmup_steps=16)
+            o = get_optim(opt, model.parameters(), lr=1e-5, weight_decay=1e-4, warmup_steps=16)
 
             for _ in range(iterations):
                 loss = model(torch.randn((1024, size, 4, 4), device='cuda')).square().mean()

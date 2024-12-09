@@ -215,9 +215,9 @@ CachedPSGDKron = ForeachCachedPSGDKron
 CachedDelayedPSGDKron = ForeachCachedDelayedPSGDKron
 Muon = ForeachMuon
 
-__all__ = ["RMSprop", "PrecondSchedulePaLMSOAP", "PSGDKron", "PurePSGD", "DelayedPSGD", "CachedPSGDKron",
+__all__ = ["Muon","RMSprop", "PrecondSchedulePaLMSOAP", "PSGDKron", "PurePSGD", "DelayedPSGD", "CachedPSGDKron",
            "CachedDelayedPSGDKron", "PalmForEachSoap", "PaLMSOAP", "PaLMSFAdamW", "LaProp", "ADOPT",
-           "PrecondScheduleSOAP", "PrecondSchedulePaLMSOAP", 'RMSprop', "Muon",  #
+           "PrecondScheduleSOAP", "PrecondSchedulePaLMSOAP", 'RMSprop',   #
            "ForeachAdamW", "ForeachSFAdamW", "ForeachLaProp", "ForeachADOPT", "ForeachSOAP", "ForeachPSGDKron",
            "ForeachPurePSGD", "ForeachDelayedPSGD", "ForeachCachedPSGDKron", "ForeachCachedDelayedPSGDKron",
            "ForeachRMSprop", "ForeachMuon"]
