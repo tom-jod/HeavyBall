@@ -339,9 +339,9 @@ def inplace_orthogonal_(x, mode, out):
     if mode == 'newtonschulz' or x.shape[0] != x.shape[1]:
         y = zeropower_via_newtonschulz5(x, 5)
     elif mode == 'qr':
-        y = torch.linalg.qr(x).Q
+        y = torch.linalg.qr(promote(x)).Q
     elif mode == 'svd':
-        u, s, v = torch.linalg.svd(x)
+        u, s, v = torch.linalg.svd(promote(x))
         y = u @ v.T
     else:
         raise NotImplementedError(f"Unknown zeroth_power_mode: {mode}")
@@ -521,7 +521,7 @@ def compute_ggt(grad, GG, max_precond_dim, precondition_1d, beta):
         g0 = einsum_base[:grad.dim()]
         g1 = g0.replace(b, b.upper())
         outer_product = torch.einsum(f'{g0},{g1}->{b + b.upper()}', grad, grad)
-        GG[idx].lerp_(promote(outer_product), 1 - beta)
+        GG[idx].lerp_(outer_product, 1 - beta)
 
 
 def promote(x):
@@ -586,7 +586,8 @@ def project(grad, Q, back: bool):
     preconditioners = ",".join([(g + g.upper())[::-1 if back else 1] for m, g in zip(Q, param) if len(m) > 0])
     if preconditioners:
         out = ''.join([c.upper() if c.upper() in preconditioners else c for c in param])
-        grad = torch.einsum(f'{param},{preconditioners}->{out}', grad, *[q for q in Q if len(q) > 0])
+        out = torch.einsum(f'{param},{preconditioners}->{out}', promote(grad), *[q for q in Q if len(q) > 0])
+        grad = out.to(grad.dtype)
     return grad
 
 
@@ -1243,7 +1244,7 @@ def psgd_should_update(group, prob: Union[float, callable], rng: Optional[random
         prob = prob(group[f'{name}_prob_step'])
     if group['stochastic_schedule']:
         return rng.random() < prob
-    cumulative_prob = state.get(name, 0)
+    cumulative_prob = group.get(name, 0)
     group[name] = cumulative_prob + prob
     return int(group[name]) > int(cumulative_prob)
 

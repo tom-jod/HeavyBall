@@ -2,13 +2,12 @@ import copy
 import datetime
 import gc
 import inspect
-import random
 
-import heavyball.utils
 import hyperopt
 import numpy as np
 import torch
-from pydantic.v1 import NoneStr
+
+import heavyball.utils
 
 base_args = {'betas': (0.9, 0.999), 'precondition_frequency': 1, 'merge_dims': True, 'warmup_steps': 100,
              'max_precond_dim': 2 ** 16, 'beta': 0.9, 'max_size_triangular': 2 ** 16, 'split': False}

@@ -27,7 +27,7 @@ def beale(x, y):
 
 @app.command()
 def main(method: List[str] = typer.Option(['qr'], help='Eigenvector method to use (for SOAP)'),
-         dtype: List[str] = typer.Option(["float32"], help='Data type to use'), steps: int = 100,
+         dtype: List[str] = typer.Option(["float32"], help='Data type to use'), steps: int = 300,
          weight_decay: float = 0, opt: List[str] = typer.Option(heavyball.__all__, help='Optimizers to use'),
          display_steps: int = 20):
     dtype = [getattr(torch, d) for d in dtype]
