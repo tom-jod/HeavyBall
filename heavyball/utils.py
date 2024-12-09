@@ -347,11 +347,11 @@ def inplace_orthogonal_(x: Tensor, mode: str, out: Tensor, scale_mode: str):
         y = u @ v.T
     else:
         raise NotImplementedError(f"Unknown zeroth_power_mode: {mode}")
-    if scale == "none":
+    if scale_mode == "none":
         pass
-    elif scale == "scale":
+    elif scale_mode == "scale":
         y *= max(1, x.size(0) / x.size(1)) ** 0.5
-    elif scale == "graft":
+    elif scale_mode == "graft":
         y *= x.norm() / y.norm().clamp_(min=1e-6)
     else:
         raise NotImplementedError(f"Unknown scale_mode: {scale_mode}")
