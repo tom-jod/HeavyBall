@@ -114,7 +114,7 @@ class ForeachSOAP(C.BaseOpt):
         defaults = locals()
         defaults.pop("self")
         params = defaults.pop("params")
-                     
+
         if use_precond_schedule:
             del defaults['precondition_frequency']
         else:
@@ -158,11 +158,10 @@ class ForeachPSGDKron(C.BaseOpt):
                  gradient_clipping: C.str_or_fn = C.use_default, update_clipping: C.str_or_fn = C.use_default,  #
                  # expert parameters
                  precond_init_scale=1.0, precond_lr=0.1):
-
         defaults = locals()
         defaults.pop("self")
         params = defaults.pop("params")
-                     
+
         delayed = C.default(delayed, self.delayed)
         cached = C.default(cached, self.cached)
         exp_avg_input = C.default(exp_avg_input, self.exp_avg_input)

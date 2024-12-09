@@ -78,11 +78,10 @@ def _get_objective(failure_threshold, model, opt, steps, group, data, loss_fn, w
     return objective, _get_m, _get_best
 
 
+
 def trial(model, data, loss_fn, win_condition, steps, opt, dtype, size, batch, weight_decay, method, length, depth,
           trials=10, failure_threshold=3, group=100, base_lr: float = 1e-3):
-    opt = getattr(heavyball, opt)
-    if "soap" not in opt.__name__.lower() and method != 'qr':
-        return
+    opt = ForeachAdamW
 
     heavyball.utils.zeroth_power_mode = method
 

@@ -415,9 +415,8 @@ def chain(state: Union[callable, dict], group, grad, param, *fns):
 
 
 class ChainOpt(utils.StatefulOptimizer):
-    def __init__(self, params, defaults, foreach: bool, compile_step: bool = False, *fns):
+    def __init__(self, params, defaults, foreach: bool, *fns):
         super().__init__(params, defaults, foreach)
-        self.compile_step = compile_step
         self.fns = tuple(fns)
 
     def _step(self, group):
@@ -475,7 +474,7 @@ class BaseOpt(ChainOpt):
     compile_step: bool = False
 
     def __init__(self, params, defaults, foreach: bool, gradient_clipping: str_or_fn, update_clipping: str_or_fn,
-                 palm: bool = use_default, compile_step: bool = use_default, *fns):
+                 palm: bool = use_default, *fns):
         if default(update_clipping, self.update_clipping) is None:
             if fns and self.auto_fuse:
                 args, kwargs = None, None
@@ -493,7 +492,6 @@ class BaseOpt(ChainOpt):
 
         fns = tuple(fns)
 
-        compile_step = default(compile_step, self.compile_step)
         if default(palm, self.palm):
             fns = (palm_beta2,) + fns
         if default(gradient_clipping, self.gradient_clipping) is not None:
@@ -501,7 +499,7 @@ class BaseOpt(ChainOpt):
         if default(update_clipping, self.update_clipping) is not None:
             fns = fns + (apply_to_idx(update_clipping, 2),)
 
-        super().__init__(params, defaults, foreach, compile_step, *fns)
+        super().__init__(params, defaults, foreach, *fns)
 
 
 class ScheduleFree(BaseOpt):
