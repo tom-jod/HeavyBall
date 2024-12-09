@@ -334,8 +334,10 @@ def nesterov_momentum(state, grad, beta):
     return grad
 
 
+# mode in ("newtonschulz", "qr", "svd")
+# scale_mode in ("none", "scale", "graft")
 @decorator_knowngood
-def inplace_orthogonal_(x, mode, out):
+def inplace_orthogonal_(x: Tensor, mode: str, out: Tensor, scale_mode: str):
     if mode == 'newtonschulz' or x.shape[0] != x.shape[1]:
         y = zeropower_via_newtonschulz5(x, 5)
     elif mode == 'qr':
@@ -345,6 +347,14 @@ def inplace_orthogonal_(x, mode, out):
         y = u @ v.T
     else:
         raise NotImplementedError(f"Unknown zeroth_power_mode: {mode}")
+    if scale == "none":
+        pass
+    elif scale == "scale":
+        y *= max(1, x.size(0) / x.size(1)) ** 0.5
+    elif scale == "graft":
+        y *= x.norm() / y.norm().clamp_(min=1e-6)
+    else:
+        raise NotImplementedError(f"Unknown scale_mode: {scale_mode}")
     set_(out, y)
 
 
@@ -378,7 +388,7 @@ def get_orthogonal_matrix_QR(GG, Q, exp_avg_sq):
         est_eig = torch.einsum('ij,ij->j', o, tmp)
         sort_idx = torch.argsort(est_eig, descending=True)
         indices.append(sort_idx)
-        inplace_orthogonal_(tmp[:, sort_idx], zeroth_power_mode, q)
+        inplace_orthogonal_(tmp[:, sort_idx], zeroth_power_mode, q, "none")
 
     indices = tuple(slice(None) if ind is None else ind.view(*(1,) * i, -1, *(1,) * (exp_avg_sq.dim() - i - 1))  #
                     for i, ind in enumerate(indices))

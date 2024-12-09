@@ -262,13 +262,13 @@ def precond_schedule(group, prob: Union[callable, float, None] = None, name: str
 
 
 @no_state_no_foreach
-def orthogonalize_update(group, update, grad, param):
+def orthogonalize_update(group, update, grad, param, scale_mode: str = "scale"):  # explore scale_mode="graft"
     if update.dim() == 1:
         return update
     original_shape = update.shape
     # doing it this way, as tmp and update are not guaranteed to share memory address or layout
     tmp = update.flatten(1, -1)
-    utils.inplace_orthogonal_(tmp, utils.zeroth_power_mode, tmp)
+    utils.inplace_orthogonal_(tmp, utils.zeroth_power_mode, tmp, scale_mode)
     return tmp.reshape(original_shape)
 
 
@@ -490,6 +490,7 @@ class BaseOpt(ChainOpt):
         else:
             if any(fn in (update_by_adopt, update_by_adam, update_by_laprop, update_by_schedule_free) for fn in fns):
                 raise ValueError("`update_by` functions do not support update clipping. Use `scale_by`")
+
         fns = tuple(fns)
 
         if default(palm, self.palm):
