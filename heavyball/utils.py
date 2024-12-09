@@ -775,16 +775,16 @@ def adam_(exp_avg: List[Tensor], exp_avg_sq: List[Tensor], grad: List[Tensor], b
 
 
 @decorator_knowngood
-def _fused_compilable_adam_(y: List[Tensor], exp_avg: List[Tensor], exp_avg_sq: List[Tensor], grad: List[Tensor],
-                            beta1: Tensor, beta2: Tensor, step: Tensor, decay: Tensor, lr: Tensor, eps: Tensor,
-                            caution: bool):
+def _fused_compilable_adam_(y: List[Tensor], exp_avg: List[Tensor], exp_avg_sq: List[Tensor], update: List[Tensor],
+                            grad: List[Tensor], beta1: Tensor, beta2: Tensor, step: Tensor, decay: Tensor, lr: Tensor,
+                            eps: Tensor, caution: bool):
     beta1 = beta_debias(beta1, step)
     beta2 = beta_debias(beta2, step)
 
-    g32, exp_avg_sq32, exp_avg32 = [list(map(promote, x)) for x in [grad, exp_avg_sq, exp_avg]]
+    u32, g32, exp_avg_sq32, exp_avg32 = [list(map(promote, x)) for x in [update, grad, exp_avg_sq, exp_avg]]
 
-    [ea32.lerp_(g, 1 - beta1) for ea32, g in zip(exp_avg32, g32)]
-    denom = exp_avg_sq_(exp_avg_sq32, g32, beta2, 1e-8)
+    [ea32.lerp_(g, 1 - beta1) for ea32, g in zip(exp_avg32, u32)]
+    denom = exp_avg_sq_(exp_avg_sq32, u32, beta2, 1e-8)
     u32 = torch._foreach_div(exp_avg32, denom)
 
     copy_stochastic_list_(exp_avg, exp_avg32)
@@ -792,11 +792,12 @@ def _fused_compilable_adam_(y: List[Tensor], exp_avg: List[Tensor], exp_avg_sq: 
     _compilable_update_(y, u32, decay, lambda a, b, c: a.add_(b, alpha=c), lr, caution, g32)
 
 
-def fused_adam_(y: List[Tensor], exp_avg: List[Tensor], exp_avg_sq: List[Tensor], grad: List[Tensor], beta1: float,
-                beta2: float, step: int, lr: float, eps: float, decay: float, caution: bool):
+def fused_adam_(y: List[Tensor], exp_avg: List[Tensor], exp_avg_sq: List[Tensor], update: List[Tensor],
+                grad: List[Tensor], beta1: float, beta2: float, step: int, lr: float, eps: float, decay: float,
+                caution: bool):
     y, exp_avg, exp_avg_sq, grad = list_guard(y, exp_avg, exp_avg_sq, grad)
     beta1, beta2, step, lr = scalar_guard(beta1, beta2, step, lr, y[0])
-    return _fused_compilable_adam_(y, exp_avg, exp_avg_sq, grad, beta1, beta2, step, decay, lr, eps, caution)
+    return _fused_compilable_adam_(y, exp_avg, exp_avg_sq, update, grad, beta1, beta2, step, decay, lr, eps, caution)
 
 
 @decorator_knowngood
@@ -823,52 +824,53 @@ def laprop_(exp_avg: List[Tensor], exp_avg_sq: List[Tensor], grad: List[Tensor],
 
 
 @decorator_knowngood
-def _fused_compilable_laprop_(y: List[Tensor], exp_avg: List[Tensor], exp_avg_sq: List[Tensor],
-                              grad_projected: List[Tensor], beta1: Tensor, beta2: Tensor, step: Tensor, lr: Tensor,
-                              decay: Tensor, caution: bool):
+def _fused_compilable_laprop_(y: List[Tensor], exp_avg: List[Tensor], exp_avg_sq: List[Tensor], update: List[Tensor],
+                              grad: List[Tensor], beta1: Tensor, beta2: Tensor, step: Tensor, lr: Tensor, decay: Tensor,
+                              caution: bool):
     beta1 = beta_debias(beta1, step)
     beta2 = beta_debias(beta2, step)
 
-    gp32, exp_avg_sq32 = [list(map(promote, x)) for x in [grad_projected, exp_avg_sq]]
+    u32, gp32, exp_avg_sq32, exp_avg32 = [list(map(promote, x)) for x in [update, grad, exp_avg_sq, exp_avg]]
 
-    denom = exp_avg_sq_(exp_avg_sq32, gp32, beta2, 1e-8)
-    gp32 = torch._foreach_div(gp32, denom)
-    stochastic_lerp_(exp_avg, gp32, 1 - beta1)
-    _compilable_update_(y, exp_avg, decay, stochastic_add_, lr, caution, gp32)
+    denom = exp_avg_sq_(exp_avg_sq32, u32, beta2, 1e-8)
+    u32 = torch._foreach_div_(u32, denom)
+    [ea32.lerp_(g, 1 - beta1) for ea32, g in zip(exp_avg32, u32)]
+    copy_stochastic_list_(exp_avg, exp_avg32)
+    _compilable_update_(y, exp_avg32, decay, stochastic_add_, lr, caution, gp32)
 
     copy_stochastic_list_(exp_avg_sq, exp_avg_sq32)
 
 
-def fused_laprop_(y: List[Tensor], exp_avg: List[Tensor], exp_avg_sq: List[Tensor], grad: List[Tensor], beta1: float,
-                  beta2: float, step: int, lr: float, decay: float, caution: bool):
+def fused_laprop_(y: List[Tensor], exp_avg: List[Tensor], exp_avg_sq: List[Tensor], update: List[Tensor],
+                  grad: List[Tensor], beta1: float, beta2: float, step: int, lr: float, decay: float, caution: bool):
     exp_avg, exp_avg_sq, grad, y = list_guard(exp_avg, exp_avg_sq, grad, y)
     beta1, beta2, step, lr = scalar_guard(beta1, beta2, step, lr, exp_avg[0])
-    _fused_compilable_laprop_(y, exp_avg, exp_avg_sq, grad, beta1, beta2, step, lr, decay, caution)
+    _fused_compilable_laprop_(y, exp_avg, exp_avg_sq, update, grad, beta1, beta2, step, lr, decay, caution)
 
 
 @decorator_knowngood
-def _fused_compilable_adopt_(y, grad, exp_avg_sq, exp_avg, beta1, beta2, step, lr, eps, decay, caution):
-    g32, exp_avg32, exp_avg_sq32 = [list(map(promote, x)) for x in [grad, exp_avg, exp_avg_sq]]
-    update_param_(y, exp_avg, lr, decay, caution=caution, grad=g32)
+def _fused_compilable_adopt_(y, update, grad, exp_avg_sq, exp_avg, beta1, beta2, step, lr, eps, decay, caution):
+    u32, g32, exp_avg32, exp_avg_sq32 = [list(map(promote, x)) for x in [update, grad, exp_avg, exp_avg_sq]]
+    update_param_(y, exp_avg32, lr, decay, caution=caution, grad=g32)
 
     beta1 = beta_debias(beta1, step)
     denom = torch._foreach_sqrt(exp_avg_sq32)
     [denom.clamp_(min=eps) for denom in denom]
     torch._foreach_mul_(exp_avg32, beta1)
-    [ea32.addcdiv_(g, d, value=1 - beta1) for ea32, g, d in zip(exp_avg32, g32, denom)]
+    [ea32.addcdiv_(g, d, value=1 - beta1) for ea32, g, d in zip(exp_avg32, u32, denom)]
 
     beta2 = beta_debias(beta2, step + 1)
     torch._foreach_mul_(exp_avg_sq32, beta2)
-    [eas32.addcmul_(g, g, value=1 - beta2) for eas32, g in zip(exp_avg_sq32, g32)]
+    [eas32.addcmul_(g, g, value=1 - beta2) for eas32, g in zip(exp_avg_sq32, u32)]
 
     copy_stochastic_list_(exp_avg, exp_avg32)
     copy_stochastic_list_(exp_avg_sq, exp_avg_sq32)
 
 
-def fused_adopt_(y, grad, exp_avg_sq, exp_avg, beta1, beta2, step, lr, eps, decay, caution):
+def fused_adopt_(y, update, grad, exp_avg_sq, exp_avg, beta1, beta2, step, lr, eps, decay, caution):
     exp_avg, exp_avg_sq, grad, y = list_guard(exp_avg, exp_avg_sq, grad, y)
     beta1, beta2, step, lr = scalar_guard(beta1, beta2, step, lr, exp_avg[0])
-    _fused_compilable_adopt_(y, grad, exp_avg_sq, exp_avg, beta1, beta2, step, lr, eps, decay, caution)
+    _fused_compilable_adopt_(y, update, grad, exp_avg_sq, exp_avg, beta1, beta2, step, lr, eps, decay, caution)
 
 
 @decorator_knowngood

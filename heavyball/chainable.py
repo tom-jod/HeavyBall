@@ -160,8 +160,8 @@ def scale_by_adam(group, update, grad, param, exp_avg, exp_avg_sq):
 @zero_guard("exp_avg", "exp_avg_sq")
 @no_state
 def update_by_adam(group, update, grad, param, exp_avg, exp_avg_sq):
-    utils.fused_adam_(param, exp_avg, exp_avg_sq, update, utils.get_beta1(group), utils.get_beta2(group), group['step'],
-                      group['lr'], group['eps'], group['weight_decay'], group['caution'])
+    utils.fused_adam_(param, exp_avg, exp_avg_sq, update, grad, utils.get_beta1(group), utils.get_beta2(group),
+                      group['step'], group['lr'], group['eps'], group['weight_decay'], group['caution'])
     raise SkipUpdate
 
 
@@ -174,7 +174,7 @@ def scale_by_laprop(group, update, grad, param, exp_avg, exp_avg_sq):
 @zero_guard("exp_avg", "exp_avg_sq")
 @no_state
 def update_by_laprop(group, update, grad, param, exp_avg, exp_avg_sq):
-    utils.fused_laprop_(param, exp_avg, exp_avg_sq, update, utils.get_beta1(group), utils.get_beta2(group),
+    utils.fused_laprop_(param, exp_avg, exp_avg_sq, update, grad, utils.get_beta1(group), utils.get_beta2(group),
                         group['step'], group['lr'], group['weight_decay'], group['caution'])
     raise SkipUpdate
 
@@ -202,7 +202,7 @@ def update_by_adopt(group, update, grad, param, exp_avg, exp_avg_sq):
         utils.exp_avg_sq_(exp_avg_sq, update, utils.beta_debias(utils.get_beta2(group), group['step']), 1)
         raise SkipUpdate
 
-    utils.fused_adopt_(param, update, exp_avg_sq, exp_avg, utils.get_beta1(group), utils.get_beta2(group),
+    utils.fused_adopt_(param, update, grad, exp_avg_sq, exp_avg, utils.get_beta1(group), utils.get_beta2(group),
                        group['step'] - 2, group['lr'], group['eps'], group['weight_decay'], group['caution'])
     raise SkipUpdate
 
