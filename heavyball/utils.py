@@ -832,7 +832,7 @@ def _fused_compilable_laprop_(y: List[Tensor], exp_avg: List[Tensor], exp_avg_sq
     gp32, exp_avg_sq32 = [list(map(promote, x)) for x in [grad_projected, exp_avg_sq]]
 
     denom = exp_avg_sq_(exp_avg_sq32, gp32, beta2, 1e-8)
-    update = torch._foreach_div(gp32, denom)
+    gp32 = torch._foreach_div(gp32, denom)
     stochastic_lerp_(exp_avg, gp32, 1 - beta1)
     _compilable_update_(y, exp_avg, decay, stochastic_add_, lr, caution, gp32)
 
