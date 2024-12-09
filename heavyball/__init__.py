@@ -10,9 +10,9 @@ class ForeachAdamW(C.BaseOpt):
                  foreach: bool = True, storage_dtype: str = 'float32', mars: bool = False, caution: bool = False,
                  mars_gamma: float = 0.0025, gradient_clipping: C.str_or_fn = C.use_default,
                  update_clipping: C.str_or_fn = C.use_default, palm: bool = C.use_default, beta2_scale: float = 0.8):
-        defaults = dict(lr=lr, betas=betas, eps=eps, k=0, warmup_steps=warmup_steps, train_mode=True, weight_sum=0.0,
-                        lr_max=-1.0, weight_decay=weight_decay, storage_dtype=storage_dtype, mars=mars, caution=caution,
-                        mars_gamma=mars_gamma, beta2_scale=beta2_scale)
+        defaults = locals()
+        defaults.pop("self")
+        params = defaults.pop("params")
         super().__init__(params, defaults, foreach, gradient_clipping, update_clipping, palm, C.update_by_adam)
 
 
@@ -25,9 +25,9 @@ class ForeachRMSprop(C.BaseOpt):
                  weight_lr_power=2.0, foreach: bool = True, storage_dtype: str = 'float32', mars: bool = False,
                  caution: bool = False, mars_gamma: float = 0.0025, gradient_clipping: C.str_or_fn = C.use_default,
                  update_clipping: C.str_or_fn = C.use_default, palm: bool = C.use_default, beta2_scale: float = 0.8):
-        defaults = dict(lr=lr, betas=betas, eps=eps, warmup_steps=warmup_steps, weight_decay=weight_decay,
-                        foreach=foreach, storage_dtype=storage_dtype, mars=mars, caution=caution, mars_gamma=mars_gamma,
-                        beta2_scale=beta2_scale)
+        defaults = locals()
+        defaults.pop("self")
+        params = defaults.pop("params")
         super().__init__(params, defaults, foreach, gradient_clipping, update_clipping, palm, C.scale_by_exp_avg_sq)
 
 
@@ -36,10 +36,9 @@ class ForeachSFAdamW(C.ScheduleFree):
                  weight_lr_power=2.0, foreach: bool = True, storage_dtype: str = 'float32', mars: bool = False,
                  caution: bool = False, mars_gamma: float = 0.0025, gradient_clipping: C.str_or_fn = C.use_default,
                  update_clipping: C.str_or_fn = C.use_default, palm: bool = C.use_default, beta2_scale: float = 0.8):
-        defaults = dict(lr=lr, betas=betas, eps=eps, r=r, k=0, warmup_steps=warmup_steps, train_mode=True,
-                        weight_sum=0.0, lr_max=-1.0, weight_lr_power=weight_lr_power, weight_decay=weight_decay,
-                        foreach=foreach, storage_dtype=storage_dtype, mars=mars, caution=caution, mars_gamma=mars_gamma,
-                        beta2_scale=beta2_scale)
+        defaults = locals()
+        defaults.pop("self")
+        params = defaults.pop("params")
         super().__init__(params, defaults, foreach, gradient_clipping, update_clipping, palm, C.scale_by_exp_avg_sq,
                          C.update_by_schedule_free)
 
@@ -53,9 +52,9 @@ class ForeachADOPT(C.BaseOpt):
                  foreach: bool = True, storage_dtype: str = 'float32', mars: bool = False, caution: bool = False,
                  mars_gamma: float = 0.0025, gradient_clipping: C.str_or_fn = C.use_default,
                  update_clipping: C.str_or_fn = C.use_default, palm: bool = C.use_default, beta2_scale: float = 0.8):
-        defaults = dict(lr=lr, betas=betas, eps=eps, k=0, warmup_steps=warmup_steps, train_mode=True, weight_sum=0.0,
-                        lr_max=-1.0, weight_decay=weight_decay, storage_dtype=storage_dtype, mars=mars, caution=caution,
-                        mars_gamma=mars_gamma, beta2_scale=beta2_scale)
+        defaults = locals()
+        defaults.pop("self")
+        params = defaults.pop("params")
         super().__init__(params, defaults, foreach, gradient_clipping, update_clipping, palm, C.update_by_adopt)
 
 
@@ -65,9 +64,9 @@ class ForeachMuon(C.BaseOpt):
                  mars_gamma: float = 0.0025, gradient_clipping: C.str_or_fn = C.use_default,
                  update_clipping: C.str_or_fn = C.use_default, palm: bool = C.use_default, beta2_scale: float = 0.8,
                  nesterov: bool = True):
-        defaults = dict(lr=lr, betas=betas, eps=eps, k=0, warmup_steps=warmup_steps, train_mode=True, weight_sum=0.0,
-                        lr_max=-1.0, weight_decay=weight_decay, storage_dtype=storage_dtype, mars=mars, caution=caution,
-                        mars_gamma=mars_gamma, beta2_scale=beta2_scale)
+        defaults = locals()
+        defaults.pop("self")
+        params = defaults.pop("params")
         super().__init__(params, defaults, foreach, gradient_clipping, update_clipping, palm,
                          C.nesterov_momentum if nesterov else C.heavyball_momentum, C.orthogonalize_update)
 
@@ -77,9 +76,9 @@ class ForeachLaProp(C.BaseOpt):
                  foreach: bool = True, storage_dtype: str = 'float32', mars: bool = False, caution: bool = False,
                  mars_gamma: float = 0.0025, gradient_clipping: C.str_or_fn = C.use_default,
                  update_clipping: C.str_or_fn = C.use_default, palm: bool = C.use_default, beta2_scale: float = 0.8):
-        defaults = dict(lr=lr, betas=betas, eps=eps, k=0, warmup_steps=warmup_steps, train_mode=True, weight_sum=0.0,
-                        lr_max=-1.0, weight_decay=weight_decay, storage_dtype=storage_dtype, mars=mars, caution=caution,
-                        mars_gamma=mars_gamma, beta2_scale=beta2_scale)
+        defaults = locals()
+        defaults.pop("self")
+        params = defaults.pop("params")
         super().__init__(params, defaults, foreach, gradient_clipping, update_clipping, palm, C.update_by_laprop)
 
 
@@ -112,12 +111,10 @@ class ForeachSOAP(C.BaseOpt):
                  gradient_clipping: C.str_or_fn = C.use_default, update_clipping: C.str_or_fn = C.use_default):
         use_precond_schedule = C.default(use_precond_schedule, self.use_precond_schedule)
 
-        defaults = {"lr": lr, "betas": betas, "shampoo_beta": shampoo_beta, "eps": eps, "weight_decay": weight_decay,
-                    "precondition_frequency": precondition_frequency, "max_precond_dim": max_precond_dim,
-                    "merge_dims": merge_dims, "precondition_1d": precondition_1d, "normalize_grads": normalize_grads,
-                    "correct_bias": correct_bias, 'warmup_steps': warmup_steps, 'split': split, 'mars': mars,
-                    'caution': caution, 'mars_gamma': mars_gamma, 'palm': palm, 'precond_scheduler': precond_scheduler,
-                    'beta2_scale': beta2_scale}
+        defaults = locals()
+        defaults.pop("self")
+        params = defaults.pop("params")
+                     
         if use_precond_schedule:
             del defaults['precondition_frequency']
         else:
@@ -161,18 +158,15 @@ class ForeachPSGDKron(C.BaseOpt):
                  gradient_clipping: C.str_or_fn = C.use_default, update_clipping: C.str_or_fn = C.use_default,  #
                  # expert parameters
                  precond_init_scale=1.0, precond_lr=0.1):
+
+        defaults = locals()
+        defaults.pop("self")
+        params = defaults.pop("params")
+                     
         delayed = C.default(delayed, self.delayed)
         cached = C.default(cached, self.cached)
         exp_avg_input = C.default(exp_avg_input, self.exp_avg_input)
         update_clipping = C.default(update_clipping, utils.trust_region_clip_)
-
-        defaults = dict(lr=lr, beta=beta, weight_decay=weight_decay, max_size_triangular=max_size_triangular,
-                        min_ndim_triangular=min_ndim_triangular, memory_save_mode=memory_save_mode,
-                        momentum_into_precond_update=momentum_into_precond_update, precond_lr=precond_lr,
-                        precond_init_scale=precond_init_scale, step=0, warmup_steps=warmup_steps, merge_dims=merge_dims,
-                        split=split, store_triu_as_line=store_triu_as_line, q_dtype=q_dtype,
-                        storage_dtype=storage_dtype, caution=caution, mars_gamma=mars_gamma, mars=mars,
-                        stochastic_schedule=stochastic_schedule)
 
         super().__init__(params, defaults, foreach, gradient_clipping, update_clipping, False,  #
                          *(C.exp_avg,) * exp_avg_input,  #
