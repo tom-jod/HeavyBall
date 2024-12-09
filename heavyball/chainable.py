@@ -168,8 +168,7 @@ def update_by_adam(group, update, grad, param, exp_avg, exp_avg_sq):
 @zero_guard("exp_avg", "exp_avg_sq")
 @no_state
 def scale_by_laprop(group, update, grad, param, exp_avg, exp_avg_sq):
-    return utils.laprop_(exp_avg, exp_avg_sq, update, utils.get_beta1(group), utils.get_beta2(group), group['step'],
-                         group['eps'])
+    return utils.laprop_(exp_avg, exp_avg_sq, update, utils.get_beta1(group), utils.get_beta2(group), group['step'])
 
 
 @zero_guard("exp_avg", "exp_avg_sq")
@@ -416,9 +415,9 @@ def chain(state: Union[callable, dict], group, grad, param, *fns):
 
 
 class ChainOpt(utils.StatefulOptimizer):
-    def __init__(self, params, defaults, foreach: bool, *fns):
+    def __init__(self, params, defaults, foreach: bool, compile_step: bool = False, *fns):
         super().__init__(params, defaults, foreach)
-
+        self.compile_step = compile_step
         self.fns = tuple(fns)
 
     def _step(self, group):
@@ -473,9 +472,10 @@ class BaseOpt(ChainOpt):
     update_clipping: str_or_fn = None
     palm: bool = False
     auto_fuse: bool = True
+    compile_step: bool = False
 
     def __init__(self, params, defaults, foreach: bool, gradient_clipping: str_or_fn, update_clipping: str_or_fn,
-                 palm: bool = None, *fns):
+                 palm: bool = use_default, compile_step: bool = use_default, *fns):
         if default(update_clipping, self.update_clipping) is None:
             if fns and self.auto_fuse:
                 args, kwargs = None, None
@@ -493,6 +493,7 @@ class BaseOpt(ChainOpt):
 
         fns = tuple(fns)
 
+        compile_step = default(compile_step, self.compile_step)
         if default(palm, self.palm):
             fns = (palm_beta2,) + fns
         if default(gradient_clipping, self.gradient_clipping) is not None:
@@ -500,7 +501,7 @@ class BaseOpt(ChainOpt):
         if default(update_clipping, self.update_clipping) is not None:
             fns = fns + (apply_to_idx(update_clipping, 2),)
 
-        super().__init__(params, defaults, foreach, *fns)
+        super().__init__(params, defaults, foreach, compile_step, *fns)
 
 
 class ScheduleFree(BaseOpt):
