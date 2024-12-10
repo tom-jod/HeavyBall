@@ -1,20 +1,20 @@
+import copy
 import itertools
 import pathlib
 import random
 from typing import List, Union
 
-import matplotlib.pyplot as plt
-
-import heavyball
 import hyperopt
+import matplotlib.colors
+import matplotlib.pyplot as plt
 import torch
 import torch.backends.opt_einsum
-import torch.nn as nn
 import typer
-from heavyball.utils import set_torch
-from image_descent import FunctionDescent2D
-from utils import trial
 from hyperopt import early_stop
+from image_descent import FunctionDescent2D
+
+from heavyball.utils import set_torch
+from utils import trial
 
 early_stop.no_progress_loss()
 app = typer.Typer(pretty_exceptions_enable=False)
@@ -22,24 +22,34 @@ set_torch()
 
 
 def beale(x, y):
+    x = x + 3
+    y = y + 0.5
     return torch.log((1.5 - x + x * y) ** 2 + (2.25 - x + x * y ** 2) ** 2 + (2.625 - x + x * y ** 3) ** 2)
 
 
 @app.command()
 def main(method: List[str] = typer.Option(['qr'], help='Eigenvector method to use (for SOAP)'),
          dtype: List[str] = typer.Option(["float32"], help='Data type to use'), steps: int = 300,
-         weight_decay: float = 0, opt: List[str] = typer.Option(heavyball.__all__, help='Optimizers to use'),
-         display_steps: int = 20):
+         weight_decay: float = 0, opt: List[str] = typer.Option(
+            ['Muon', 'PSGDKron', 'SOAP', 'ADOPT', 'LaProp', 'AdamW', 'SFAdamW', 'MuonLaProp'],
+            help='Optimizers to use'), display_steps: int = 20):
     dtype = [getattr(torch, d) for d in dtype]
-    coords = (-3.5, -3.5)
+    coords = (-7, -4)
 
     for path in pathlib.Path('.').glob('beale_*.png'):
         path.unlink()
 
+    img = None
+    colors = list(matplotlib.colors.TABLEAU_COLORS.values())
+    stride = max(1, steps // display_steps)
+    rng = random.Random(0x1239121)
+    rng.shuffle(colors)
+
     for args in itertools.product(method, dtype, opt, [weight_decay]):
         m, d, o, wd = args
 
-        model = FunctionDescent2D(beale, coords=coords, xlim=(-4, 4), ylim=(-4, 4), normalize=False, after_step=torch.exp)
+        model = FunctionDescent2D(beale, coords=coords, xlim=(-8, 2), ylim=(-8, 2), normalize=8,
+                                  after_step=torch.exp)
         model.double()
 
         def data():
@@ -48,18 +58,25 @@ def main(method: List[str] = typer.Option(['qr'], help='Eigenvector method to us
         def win(_model, loss: Union[float, hyperopt.Trials]):
             if not isinstance(loss, float):
                 loss = loss.results[-1]['loss']
-            return loss < 0.35, {}
+            return loss < 0, {}
 
         model = trial(model, data, torch.nn.functional.l1_loss, win, steps, o, d, 1, 1, wd, m, 1, 1, group=100,
-                      base_lr=0.1, trials=50)
+                      base_lr=1e-4, trials=2000)
 
-        fig, ax = model.plot_path(return_fig=True)
-        stride = max(1, steps // display_steps)
-        ax.scatter(*list(zip(*model.coords_history[::stride])), c=model.loss_history[::stride], s=128, cmap='Spectral', zorder=1, alpha=0.75, marker='x')
+        if img is None:
+            fig, ax = model.plot_image(cmap="gray", levels=20, return_fig=True, xlim=(-8, 2), ylim=(-8, 2))
+            ax.set_frame_on(False)
+            img = fig, ax
 
-        fig.savefig(f'beale_{m}_{o}.png')
-        plt.close(fig)
+        fig, ax = img
+        c = colors.pop(0)
+        ax.plot(*list(zip(*model.coords_history)), linewidth=2, color=c, zorder=2, label=f'{m} {o}')
+        ax.scatter(*list(zip(*model.coords_history[::stride])), s=48, zorder=1, alpha=0.75, marker='x', color=c)
 
+        f = copy.deepcopy(fig)
+        f.legend()
+        f.savefig(f'beale.png', dpi=1000)
+    plt.close(fig)
 
 if __name__ == '__main__':
     app()

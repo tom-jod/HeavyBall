@@ -82,6 +82,18 @@ class ForeachLaProp(C.BaseOpt):
         super().__init__(params, defaults, foreach, gradient_clipping, update_clipping, palm, C.update_by_laprop)
 
 
+class MuonLaProp(C.BaseOpt):
+    def __init__(self, params, lr=0.0025, betas=(0.9, 0.99), eps=1e-8, weight_decay=0, warmup_steps=0,
+                 foreach: bool = True, storage_dtype: str = 'float32', mars: bool = False, caution: bool = False,
+                 mars_gamma: float = 0.0025, gradient_clipping: C.str_or_fn = C.use_default,
+                 update_clipping: C.str_or_fn = C.use_default, palm: bool = C.use_default, beta2_scale: float = 0.8):
+        defaults = locals()
+        defaults.pop("self")
+        params = defaults.pop("params")
+        super().__init__(params, defaults, foreach, gradient_clipping, update_clipping, palm, C.scale_by_laprop,
+                         C.orthogonalize_update)
+
+
 class ForeachSOAP(C.BaseOpt):
     """
     ForeachSOAP
@@ -208,9 +220,9 @@ CachedPSGDKron = ForeachCachedPSGDKron
 CachedDelayedPSGDKron = ForeachCachedDelayedPSGDKron
 Muon = ForeachMuon
 
-__all__ = ["Muon","RMSprop", "PrecondSchedulePaLMSOAP", "PSGDKron", "PurePSGD", "DelayedPSGD", "CachedPSGDKron",
+__all__ = ["Muon", "RMSprop", "PrecondSchedulePaLMSOAP", "PSGDKron", "PurePSGD", "DelayedPSGD", "CachedPSGDKron",
            "CachedDelayedPSGDKron", "PalmForEachSoap", "PaLMSOAP", "PaLMSFAdamW", "LaProp", "ADOPT",
-           "PrecondScheduleSOAP", "PrecondSchedulePaLMSOAP", 'RMSprop',   #
+           "PrecondScheduleSOAP", "PrecondSchedulePaLMSOAP", 'RMSprop', 'MuonLaProp',  #
            "ForeachAdamW", "ForeachSFAdamW", "ForeachLaProp", "ForeachADOPT", "ForeachSOAP", "ForeachPSGDKron",
            "ForeachPurePSGD", "ForeachDelayedPSGD", "ForeachCachedPSGDKron", "ForeachCachedDelayedPSGDKron",
            "ForeachRMSprop", "ForeachMuon"]

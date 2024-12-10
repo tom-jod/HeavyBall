@@ -1,1 +1,4 @@
 git+https://github.com/qq-me/image-descent@09f19fc7c40778b21e973653acbbdcd2147ce8cf
+hyperopt
+lightgbm
+scikit-learn

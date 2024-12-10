@@ -4,7 +4,6 @@ import heavyball
 import torch
 from heavyball import ForeachPSGDKron
 from heavyball.utils import set_torch
-from numba.np.npdatetime import datetime_minus_timedelta
 from torch import nn
 from torch.nn import functional as F
 

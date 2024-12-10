@@ -330,7 +330,7 @@ def _update_psgd_cache(cached, Q_cache, q):
 
 def _cached_psgd_precond_grad(cached, cache_expr, exprs, update, Q_mat, Q_cache):
     if cached:
-        return utils.precond_grad_cached_(cache_expr, update, *cache_expr)
+        return utils.precond_grad_cached_(cache_expr, update, *Q_cache)
     return utils.psgd_precond_grad(exprs[-1], update, *Q_mat)
 
 
@@ -351,7 +351,7 @@ def scale_by_psgd(group, update, grad, param, Q, exprs, Q_cache, cache_expr: str
     update = update.to(memory_format=torch.contiguous_format)
     Q_mat = utils.line_to_triu(Q) if group['store_triu_as_line'] else Q
     _update_psgd_precond(group, param, update, Q_mat, Q, exprs, prob)
-    out = _cached_psgd_precond_grad(False, cache_expr, exprs, update, Q_mat, Q_cache)
+    out = _cached_psgd_precond_grad(cached, cache_expr, exprs, update, Q_mat, Q_cache)
     return torch.as_strided(out, old.shape, old.stride())
 
 
@@ -360,7 +360,7 @@ def scale_by_psgd(group, update, grad, param, Q, exprs, Q_cache, cache_expr: str
 def scale_by_delayed_psgd(group, update, grad, param, Q, exprs, Q_cache, cache_expr: str, cached: bool = False,
                           prob: Optional[callable] = None):
     Q_mat = utils.line_to_triu(Q) if group['store_triu_as_line'] else Q
-    precond = _cached_psgd_precond_grad(False, cache_expr, exprs, update, Q_mat, Q_cache)
+    precond = _cached_psgd_precond_grad(cached, cache_expr, exprs, update, Q_mat, Q_cache)
     _update_psgd_precond(group, param, update, Q_mat, Q, exprs, prob)
     return precond
 
@@ -505,9 +505,9 @@ class BaseOpt(ChainOpt):
 class ScheduleFree(BaseOpt):
     def eval(self):
         for group in self.param_groups:
-            train_mode = group['train_mode']
+            group['train_mode'] = train_mode = not group.get('train_mode')
             beta1 = utils.get_beta1(group)
-            if beta1 > 0 and train_mode:
+            if beta1 > 0 and not train_mode:
                 for p in group['params']:
                     state = self.state_(p)
                     if 'z' in state:
@@ -516,13 +516,12 @@ class ScheduleFree(BaseOpt):
                         p32 = utils.promote(p.data)
                         p32.lerp_(end=z, weight=1 - 1 / beta1)
                         utils.copy_stochastic_(p.data, p32)
-                group['train_mode'] = False
 
     def train(self):
         for group in self.param_groups:
-            train_mode = group['train_mode']
+            group['train_mode'] = train_mode = not group.get('train_mode')
             beta1 = utils.get_beta1(group)
-            if beta1 > 0 and not train_mode:
+            if beta1 > 0 and train_mode:
                 for p in group['params']:
                     state = self.state_(p)
                     if 'z' in state:
@@ -530,4 +529,3 @@ class ScheduleFree(BaseOpt):
                         p32 = utils.promote(p.data)
                         p32.lerp_(end=z, weight=1 - beta1)
                         utils.copy_stochastic_(p.data, p32)
-                group['train_mode'] = True
