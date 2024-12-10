@@ -24,7 +24,7 @@ set_torch()
 def beale(x, y):
     x = x + 3
     y = y + 0.5
-    return torch.log((1.5 - x + x * y) ** 2 + (2.25 - x + x * y ** 2) ** 2 + (2.625 - x + x * y ** 3) ** 2)
+    return (1.5 - x + x * y) ** 2 + (2.25 - x + x * y ** 2) ** 2 + (2.625 - x + x * y ** 3) ** 2
 
 
 @app.command()
@@ -61,7 +61,7 @@ def main(method: List[str] = typer.Option(['qr'], help='Eigenvector method to us
             return loss < 0, {}
 
         model = trial(model, data, torch.nn.functional.l1_loss, win, steps, o, d, 1, 1, wd, m, 1, 1, group=100,
-                      base_lr=1e-4, trials=2000)
+                      base_lr=1e-4, trials=200)
 
         if img is None:
             fig, ax = model.plot_image(cmap="gray", levels=20, return_fig=True, xlim=(-8, 2), ylim=(-8, 2))
@@ -70,8 +70,9 @@ def main(method: List[str] = typer.Option(['qr'], help='Eigenvector method to us
 
         fig, ax = img
         c = colors.pop(0)
-        ax.plot(*list(zip(*model.coords_history)), linewidth=2, color=c, zorder=2, label=f'{m} {o}')
-        ax.scatter(*list(zip(*model.coords_history[::stride])), s=48, zorder=1, alpha=0.75, marker='x', color=c)
+        ax.plot(*list(zip(*model.coords_history)), linewidth=1, color=c, zorder=2, label=f'{m} {o}')
+        ax.scatter(*list(zip(*model.coords_history[::stride])), s=8, zorder=1, alpha=0.75, marker='x', color=c)
+        ax.scatter(*model.coords_history[-1], s=64, zorder=3, marker='x', color=c)
 
         f = copy.deepcopy(fig)
         f.legend()

@@ -69,14 +69,13 @@ def _get_objective(failure_threshold, model, opt, steps, group, data, loss_fn, w
         return ema(loss_hist), m
 
     def _objective(params):
-        nonlocal m, loss0, attempt, avg
+        nonlocal m, loss0, attempt, avg, best_loss
         attempt += 1
-        if avg is None:
+        loss = _inner(params)[0]
+        if best_loss is None or loss < best_loss:
+            best_loss = loss
             avg = np.log(np.array(params))
-        else:
-            avg *= 1 - 1 / attempt
-            avg += np.log(np.array(params)) / attempt
-        return _inner(params)[0]
+        return loss
 
     def objective(params):
         nonlocal best_loss
