@@ -52,7 +52,7 @@ class FunctionTransform:
 
 def _zero_guard(state, key, ref, dtype):
     return _guard_in_state(state, key,
-                           lambda: torch.zeros_like(ref, dtype=torch.float32, memory_format=torch.preserve_format))
+                           lambda: torch.zeros_like(ref, dtype=dtype, memory_format=torch.preserve_format))
 
 
 def _storage_dtype(group):
