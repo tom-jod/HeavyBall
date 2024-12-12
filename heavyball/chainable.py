@@ -423,9 +423,9 @@ class ChainOpt(utils.StatefulOptimizer):
             group['base_lr'] = group['lr']
         step = group['step'] = group.get('step', 0) + 1
         if group['warmup_steps'] and step < group['warmup_steps']:
-            group['lr'] = -group['base_lr'] * step / group['warmup_steps']
+            group['lr'] = group['base_lr'] * step / group['warmup_steps']
         else:
-            group['lr'] = -group['base_lr']
+            group['lr'] = group['base_lr']
 
         vals = list(self.split_p_and_g_in_group(group, should_promote=False, beta1=utils.get_beta1(group)))
         if not vals:
@@ -454,15 +454,15 @@ def _get_clip_fn(name: str_or_fn, default_val: str_or_fn):
 
 
 def default(a, b):
-    return b if a is None or a is use_default else a
+    return b if a is use_default else a
 
 
 # not supported: update_by_schedule_free, scale_by_soap, scale_by_exp_avg_sq
-_scale_to_update_map = {scale_by_delayed_psgd: update_by_delayed_psgd,  #
-                        scale_by_psgd: update_by_psgd,  #
-                        scale_by_adam: update_by_adam,  #
-                        scale_by_laprop: update_by_laprop,  #
-                        scale_by_adopt: update_by_adopt}
+_scale_to_update_map = {scale_by_delayed_psgd.get_fn(): update_by_delayed_psgd,  #
+                        scale_by_psgd.get_fn(): update_by_psgd,  #
+                        scale_by_adam.get_fn(): update_by_adam,  #
+                        scale_by_laprop.get_fn(): update_by_laprop,  #
+                        scale_by_adopt.get_fn(): update_by_adopt}
 
 
 class BaseOpt(ChainOpt):
@@ -479,7 +479,9 @@ class BaseOpt(ChainOpt):
                 args, kwargs = None, None
                 fn = fns[-1]
                 if isinstance(fn, functools.partial):
-                    fn, args, kwargs = fns[-1].func, fns[-1].args, fns[-1].keywords
+                    fn, args, kwargs = fn.func, fn.args, fn.keywords
+                if isinstance(fn, FunctionTransform):
+                    fn = fn.get_fn()
                 if fn in _scale_to_update_map:
                     fn = _scale_to_update_map[fn]
                     if args is not None:
