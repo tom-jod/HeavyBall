@@ -1,6 +1,6 @@
 import functools
 import random
-from typing import Optional, Union
+from typing import Optional, Union, Literal
 
 import torch
 
@@ -51,8 +51,7 @@ class FunctionTransform:
 
 
 def _zero_guard(state, key, ref, dtype):
-    return _guard_in_state(state, key,
-                           lambda: torch.zeros_like(ref, dtype=dtype, memory_format=torch.preserve_format))
+    return _guard_in_state(state, key, lambda: torch.zeros_like(ref, dtype=dtype, memory_format=torch.preserve_format))
 
 
 def _storage_dtype(group):
@@ -442,7 +441,7 @@ class ChainOpt(utils.StatefulOptimizer):
 
 
 use_default = object()
-str_or_fn = Union[str, callable, None, use_default]
+str_or_fn = Union[str, callable, None, Literal[use_default]]
 
 
 def _get_clip_fn(name: str_or_fn, default_val: str_or_fn):
