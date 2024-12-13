@@ -1364,4 +1364,4 @@ def fused_hook(parameters, optimizer, *args, **kwargs):
             seen_params.clear()
 
     for p in parameters:
-        p.register_post_accumulate_grad_hook(functools.partial(_step, p=p))
+        p.register_post_accumulate_grad_hook(_step)
