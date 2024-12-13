@@ -1346,3 +1346,22 @@ def hook_optimizer_into_model(model, optimizer, *args, **kwargs):
 
     for p in model.parameters():
         p.register_post_accumulate_grad_hook(functools.partial(_step, o=optimizer([p], *args, **kwargs)))
+
+
+def fused_hook(parameters, optimizer, *args, **kwargs):
+    parameters = list(parameters)
+    param_count = len(parameters)
+    seen_params = set()
+
+    o = optimizer(parameters, *args, **kwargs)
+
+    def _step(p: Tensor):
+        seen_params.add(p)
+
+        if len(seen_params) < param_count:
+            o.step()
+            o.zero_grad()
+            seen_params.clear()
+
+    for p in parameters:
+        p.register_post_accumulate_grad_hook(functools.partial(_step, p=p))
