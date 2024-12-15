@@ -522,8 +522,6 @@ def compute_ggt(grad, GG, max_precond_dim, precondition_1d, beta):
 def promote(x):
     if isinstance(x, torch.dtype) and x in (torch.bfloat16, torch.float16):
         return torch.float32
-    if isinstance(x, Tensor):
-        x = x.clone()
     if isinstance(x, Tensor) and x.dtype in (torch.bfloat16, torch.float16):
         return x.float()
     return x
