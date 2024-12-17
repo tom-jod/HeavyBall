@@ -296,7 +296,7 @@ def scale_by_soap(group, update, grad, param, exp_avg, exp_avg_sq, Q, GG):
     grad_projected = [utils.project(u, q, False) for u, q in zip(update, Q)]
     precond = utils.adam_(exp_avg, exp_avg_sq, grad_projected, utils.get_beta1(group), utils.get_beta2(group),
                           utils.scalar_guard(group['step'], exp_avg[0]))
-    precond = [utils.project(p, q, False) for p, q in zip(precond, Q)]
+    precond = [utils.project(p, q, True) for p, q in zip(precond, Q)]
 
     for u, q, gg, eas in zip(update, Q, GG, exp_avg_sq):
         utils.update_preconditioner(u, q, gg, eas, group['max_precond_dim'], group['precondition_1d'],
@@ -355,8 +355,7 @@ def scale_by_psgd(group, update, grad, param, Q, exprs, Q_cache, cache_expr: str
     update = update.to(memory_format=torch.contiguous_format)
     Q_mat = utils.line_to_triu(Q) if group['store_triu_as_line'] else Q
     _update_psgd_precond(group, param, update, Q_mat, Q, exprs, prob)
-    out = _cached_psgd_precond_grad(cached, cache_expr, exprs, update, Q_mat, Q_cache)
-    return torch.as_strided(out, old.shape, old.stride())
+    return _cached_psgd_precond_grad(cached, cache_expr, exprs, update, Q_mat, Q_cache)
 
 
 @general_guard("Q", "exprs", ("Q_cache", None), ("cache_expr", None), init_fn=_init_psgd)
