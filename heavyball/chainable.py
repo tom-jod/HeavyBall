@@ -287,15 +287,18 @@ def heavyball_momentum(group, updates, grads, params, momentum):
     return utils.heavyball_momentum(momentum, updates, utils.get_beta1(group))
 
 
+_optim_fns = {'adam': utils.adam_, 'laprop': utils.laprop_}
+
+
 @zero_guard("exp_avg", "exp_avg_sq")
 @general_guard("Q", "GG", init_fn=_init_soap)
 @no_state
-def scale_by_soap(group, update, grad, param, exp_avg, exp_avg_sq, Q, GG):
+def scale_by_soap(group, update, grad, param, exp_avg, exp_avg_sq, Q, GG, inner: str = 'adam'):
     update = utils.promote(update)
 
     grad_projected = [utils.project(u, q, False) for u, q in zip(update, Q)]
-    precond = utils.adam_(exp_avg, exp_avg_sq, grad_projected, utils.get_beta1(group), utils.get_beta2(group),
-                          utils.scalar_guard(group['step'], exp_avg[0]))
+    fn = _optim_fns[inner]
+    precond = fn(exp_avg, exp_avg_sq, grad_projected, utils.get_beta1(group), utils.get_beta2(group), group['step'])
     precond = [utils.project(p, q, True) for p, q in zip(precond, Q)]
 
     for u, q, gg, eas in zip(update, Q, GG, exp_avg_sq):
@@ -511,7 +514,7 @@ class BaseOpt(ChainOpt):
 
         fns = tuple(fns)
 
-        self.compile_step =  default(compile_step, self.compile_step)
+        self.compile_step = default(compile_step, self.compile_step)
         if default(palm, self.palm):
             fns = (palm_beta2,) + fns
         if default(gradient_clipping, self.gradient_clipping) is not None:
