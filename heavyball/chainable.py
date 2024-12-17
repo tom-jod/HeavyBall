@@ -1,5 +1,6 @@
 import functools
 import random
+import warnings
 from typing import Optional, Union, Literal
 
 import torch
@@ -251,7 +252,11 @@ def precond_schedule(group, prob: Union[callable, float, None] = None, name: str
     step = group['step']
     if 'precondition_frequency' in group:
         return step > 0 and step % group['precondition_frequency'] == 0
-    rng = random.Random(0x172381 ^ step)
+    if isinstance(step, torch.Tensor):
+        utils.warn_once("Preconditioner schedule is not supported with torch.Tensor step.")
+        rng = random.Random(0x172381)
+    else:
+        rng = random.Random(0x172381 ^ step)
     if 'precond_scheduler' in group:
         return utils.precond_schedule(step, group['precond_scheduler'], rng)
     if prob is not None:
@@ -414,6 +419,8 @@ def chain(state: Union[callable, dict], group, grad, param, *fns):
 
 
 class ChainOpt(utils.StatefulOptimizer):
+    compile_step: bool = False
+
     def __init__(self, params, defaults, foreach: bool, *fns):
         super().__init__(params, defaults, foreach)
         self.fns = tuple(fns)
@@ -430,7 +437,9 @@ class ChainOpt(utils.StatefulOptimizer):
         for param in p:
             state = self.state_(param)
             if 'step' not in state:
-                state['step'] = utils.scalar_guard(0, param)
+                if self.compile_step:
+                    step = utils.scalar_guard(0, param)
+                state['step'] = step
             step = state['step'].add_(1)
             break
 
@@ -481,10 +490,9 @@ class BaseOpt(ChainOpt):
     update_clipping: str_or_fn = None
     palm: bool = False
     auto_fuse: bool = True
-    compile_step: bool = False
 
     def __init__(self, params, defaults, foreach: bool, gradient_clipping: str_or_fn, update_clipping: str_or_fn,
-                 palm: bool = use_default, *fns):
+                 palm: bool = use_default, compile_step: bool = use_default, *fns):
         if default(update_clipping, self.update_clipping) is None:
             if fns and self.auto_fuse:
                 args, kwargs = None, None
@@ -504,6 +512,7 @@ class BaseOpt(ChainOpt):
 
         fns = tuple(fns)
 
+        self.compile_step =  default(compile_step, self.compile_step)
         if default(palm, self.palm):
             fns = (palm_beta2,) + fns
         if default(gradient_clipping, self.gradient_clipping) is not None:

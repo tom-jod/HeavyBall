@@ -1219,6 +1219,12 @@ def update_triu_(q_state, materialised):
         assert shape0 == shape1
         copy_stochastic_(q, m)
 
+_warned = set()
+
+def warn_once(msg):
+    if msg not in _warned:
+        warnings.warn(msg)
+        _warned.add(msg)
 
 def psgd_should_update(group, prob: Union[float, callable], rng: Optional[random.Random] = None,
                        name: str = 'cumulative_prob'):
