@@ -24,7 +24,7 @@ set_torch()
 def beale(x, y):
     x = x + 3
     y = y + 0.5
-    return (1.5 - x + x * y) ** 2 + (2.25 - x + x * y ** 2) ** 2 + (2.625 - x + x * y ** 3) ** 2
+    return torch.log((1.5 - x + x * y) ** 2 + (2.25 - x + x * y ** 2) ** 2 + (2.625 - x + x * y ** 3) ** 2)
 
 
 @app.command()

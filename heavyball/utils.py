@@ -88,7 +88,7 @@ def schedule_free_(lr: float, weight_lr_power: float, weight_sum: float, beta1: 
     except ZeroDivisionError:
         ckp1 = 0
 
-    update, parameters, z = list_guard(update, parameters, z)
+    update, parameters, z, grad = list_guard(update, parameters, z, grad)
     lr, ckp1, beta1 = scalar_guard(lr, ckp1, beta1, grad[0])
     _compilable_schedule_free_(parameters, z, ckp1, update, lr, beta1, decay, grad, caution)
     return weight_sum
@@ -912,13 +912,12 @@ def copy_stochastic_(target: Tensor, source: Tensor):
 @decorator_knowngood
 def _compilable_update_(p: List[Tensor], u: List[Tensor], decay: Tensor, lr: Tensor, caution: bool,
                         g: List[Optional[Tensor]]):
-    u = [u_.view_as(p_) for u_, p_ in zip(u, p)]
-    p32, u32 = [list(map(promote, x)) for x in [p, u]]
-
-    for p32_, u32_, g_, p_ in zip(p32, u32, g, p):  # lr is data-dependent -> can't compile a foreach
+    for u_, g_, p_ in zip(u, g, p):  # lr is data-dependent -> can't compile a foreach
+        u_ = promote(u_.view_as(p_))
+        p32_ = promote(p_)
         if caution:
-            u32_ = _compilable_cautioning(promote(g_), u32_)
-        p32_ = p32_ * (1 - decay * lr) + u32_ * -lr
+            u_ = _compilable_cautioning(promote(g_), u_)
+        p32_ = p32_ * (1 - decay * lr) + u_ * -lr
         copy_stochastic_(p_, p32_)
 
 

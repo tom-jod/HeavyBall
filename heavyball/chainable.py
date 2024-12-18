@@ -438,14 +438,15 @@ class ChainOpt(utils.StatefulOptimizer):
 
         for param in p:
             state = self.state_(param)
-            if 'step' not in state:
-                if self.compile_step:
-                    step = utils.scalar_guard(0, param)
-                state['step'] = step
-            step = state['step'].add_(1)
+            if 'step' in state:
+                step = state['step']
+            elif self.compile_step:
+                step = utils.scalar_guard(0, param)
+            else:
+                step = 0
             break
 
-        group['step'] = step
+        group['step'] = state['step'] = step = step + 1
 
         if group['warmup_steps'] and step < group['warmup_steps']:
             group['lr'] = group['base_lr'] * step / group['warmup_steps']
@@ -494,7 +495,7 @@ class BaseOpt(ChainOpt):
     auto_fuse: bool = True
 
     def __init__(self, params, defaults, foreach: bool, gradient_clipping: str_or_fn, update_clipping: str_or_fn,
-                 palm: bool = use_default, compile_step: bool = use_default, *fns):
+                 palm: bool = use_default, *fns, compile_step: bool = use_default):
         if default(update_clipping, self.update_clipping) is None:
             if fns and self.auto_fuse:
                 args, kwargs = None, None
