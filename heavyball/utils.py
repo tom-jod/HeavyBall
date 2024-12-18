@@ -61,22 +61,25 @@ def warmup(lr: float, step: int, warmup_steps: int):
 
 
 @decorator_knowngood
-def _compilable_schedule_free_(p: List[Tensor], z: List[Tensor], ckp1: Tensor, grad: List[Tensor], lr: Tensor,
-                               beta1: Tensor, decay: float):
-    for op, oz, g_ in zip(p, z, grad):
-        g_ = g_.view_as(op)
-        p_, z_, g_ = map(promote, (op, oz, g_))
+def _compilable_schedule_free_(p: List[Tensor], z: List[Tensor], ckp1: Tensor, update: List[Tensor], lr: Tensor,
+                               beta1: Tensor, decay: float, grad: List[Tensor], caution):
+    for op, oz, u_, g_ in zip(p, z, update, grad):
+        u_ = u_.view_as(op)
+        p_, z_, u_ = map(promote, (op, oz, u_))
         if decay != 0:
-            g_ = g_ + p_ * decay
+            u_ = u_ + p_ * decay
+        if caution:
+            u_ = _compilable_cautioning(u_, g_)
         p_ = p_.lerp(z_, ckp1)
-        p_ = p_ + g_ * (lr * (beta1 * (1 - ckp1)) - lr)
-        z_ = z_ + g_ * -lr
+        p_ = p_ + u_ * (lr * (beta1 * (1 - ckp1)) - lr)
+        z_ = z_ + u_ * -lr
         copy_stochastic_(op, p_)
         copy_stochastic_(oz, z_)
 
 
 def schedule_free_(lr: float, weight_lr_power: float, weight_sum: float, beta1: float, parameters: List[Tensor],
-                   z: List[Tensor], grad: List[Tensor], r: float = 0.0, step: int = 0, decay: float = 0.0):
+                   z: List[Tensor], update: List[Tensor], grad: List[Tensor], caution: bool = False, r: float = 0.0,
+                   step: int = 0, decay: float = 0.0):
     weight = abs(lr) ** weight_lr_power * max(step, 1) ** r
     weight_sum = weight_sum + weight
 
@@ -85,9 +88,9 @@ def schedule_free_(lr: float, weight_lr_power: float, weight_sum: float, beta1: 
     except ZeroDivisionError:
         ckp1 = 0
 
-    grad, parameters, z = list_guard(grad, parameters, z)
+    update, parameters, z = list_guard(update, parameters, z)
     lr, ckp1, beta1 = scalar_guard(lr, ckp1, beta1, grad[0])
-    _compilable_schedule_free_(parameters, z, ckp1, grad, lr, beta1, decay)
+    _compilable_schedule_free_(parameters, z, ckp1, update, lr, beta1, decay, grad, caution)
     return weight_sum
 
 
@@ -1220,12 +1223,15 @@ def update_triu_(q_state, materialised):
         assert shape0 == shape1
         copy_stochastic_(q, m)
 
+
 _warned = set()
+
 
 def warn_once(msg):
     if msg not in _warned:
         warnings.warn(msg)
         _warned.add(msg)
+
 
 def psgd_should_update(group, prob: Union[float, callable], rng: Optional[random.Random] = None,
                        name: str = 'cumulative_prob'):
@@ -1370,3 +1376,15 @@ def fused_hook(parameters, optimizer, *args, **kwargs):
 
     for p in parameters:
         p.register_post_accumulate_grad_hook(_step)
+
+
+@decorator_knowngood
+def _compilable_caution_no_scale(g: Tensor, update: Tensor):
+    mask = g.signbit() ^ update.signbit()  # "Mask if they point in different directions"
+    update = update.masked_fill(mask, 0)
+    return update
+
+
+def disable_caution_scaling():
+    global _compilable_cautioning
+    _compilable_cautioning = _compilable_caution_no_scale

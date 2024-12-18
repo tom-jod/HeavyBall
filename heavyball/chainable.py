@@ -183,8 +183,8 @@ def update_by_laprop(group, update, grad, param, exp_avg, exp_avg_sq):
 @no_state
 def update_by_schedule_free(group, update, grad, param, z):
     group['weight_sum'] = utils.schedule_free_(group['lr'], group['weight_lr_power'], group.get('weight_sum', 0),
-                                               utils.get_beta1(group), param, z, update, group['r'], group['step'],
-                                               group['weight_decay'])
+                                               utils.get_beta1(group), param, z, update, grad, group['caution'],
+                                               group['r'], group['step'], group['weight_decay'])
     raise SkipUpdate
 
 
