@@ -422,6 +422,7 @@ def chain(state: Union[callable, dict], group, grad, param, *fns):
 
 class ChainOpt(utils.StatefulOptimizer):
     compile_step: bool = False
+    promote: bool = False
 
     def __init__(self, params, defaults, foreach: bool, *fns):
         super().__init__(params, defaults, foreach)
@@ -431,7 +432,7 @@ class ChainOpt(utils.StatefulOptimizer):
         if 'base_lr' not in group:
             group['base_lr'] = group['lr']
 
-        vals = list(self.split_p_and_g_in_group(group, should_promote=False, beta1=utils.get_beta1(group)))
+        vals = list(self.split_p_and_g_in_group(group, should_promote=self.promote, beta1=utils.get_beta1(group)))
         if not vals:
             return
         p, g = zip(*vals)
@@ -486,36 +487,72 @@ _scale_to_update_map = {scale_by_delayed_psgd.get_fn(): update_by_delayed_psgd, 
                         scale_by_adam.get_fn(): update_by_adam,  #
                         scale_by_laprop.get_fn(): update_by_laprop,  #
                         scale_by_adopt.get_fn(): update_by_adopt}
+_scale_to_update_map_inv = {update_by_delayed_psgd.get_fn(): scale_by_delayed_psgd,  #
+                            update_by_psgd.get_fn(): scale_by_psgd,  #
+                            update_by_adam.get_fn(): scale_by_adam,  #
+                            update_by_laprop.get_fn(): scale_by_laprop,  #
+                            update_by_adopt.get_fn(): scale_by_adopt}
 
 
 class BaseOpt(ChainOpt):
+    """
+    Base Optimizer
+
+    compile_step: bool = False
+    Whether to change some internals to try to make the optimizer compilable
+    This does not compile the step by itself and breaks some optimizers loudly (e.g. SOAP)
+
+    promote: bool = False
+    Whether to promote the gradients to fp32 before applying the optimizer
+    Improves update quality for low-precision parameters, but increases costs
+    Compiling the optimizer step would reduce memory and compute. Alternatively, `foreach=False` decreases memory at the cost of runtime
+
+    gradient_clipping: str_or_fn = None
+    The function to use for clipping the incoming gradients, before any other transformations.
+    This is syntactic sugar, equivalent to manually passing the function as the first element of the optimizer chain.
+
+    update_clipping: str_or_fn = None
+    The function to use for clipping the outgoing updates before applying them, after all other transformations.
+    This will turn off
+    This is syntactic sugar, equivalent to manually passing the function as the last element of the optimizer chain.
+
+    """
+
     gradient_clipping: str_or_fn = None
     update_clipping: str_or_fn = None
     palm: bool = False
     auto_fuse: bool = True
 
     def __init__(self, params, defaults, foreach: bool, gradient_clipping: str_or_fn, update_clipping: str_or_fn,
-                 palm: bool = use_default, *fns, compile_step: bool = use_default):
+                 palm: bool = use_default, *fns, compile_step: bool = use_default, promote: bool = use_default):
+        if not fns:
+            raise ValueError("No functions provided. If that's on purpose (SGD-like), use `identity`")
+
+        args, kwargs = None, None
+        fn = fns[-1]
+        if isinstance(fn, functools.partial):
+            fn, args, kwargs = fn.func, fn.args, fn.keywords
+        if isinstance(fn, FunctionTransform):
+            fn = fn.get_fn()
+
         if default(update_clipping, self.update_clipping) is None:
-            if fns and self.auto_fuse:
-                args, kwargs = None, None
-                fn = fns[-1]
-                if isinstance(fn, functools.partial):
-                    fn, args, kwargs = fn.func, fn.args, fn.keywords
-                if isinstance(fn, FunctionTransform):
-                    fn = fn.get_fn()
+            if self.auto_fuse:
                 if fn in _scale_to_update_map:
                     fn = _scale_to_update_map[fn]
                     if args is not None:
                         fn = functools.partial(fn, *args, **kwargs)
                     fns = tuple(fns)[:-1] + (fn,)
-        else:
-            if any(fn in (update_by_adopt, update_by_adam, update_by_laprop, update_by_schedule_free) for fn in fns):
-                raise ValueError("`update_by` functions do not support update clipping. Use `scale_by`")
-
-        fns = tuple(fns)
+        elif fn in _scale_to_update_map_inv:
+            if not self.auto_fuse:
+                raise ValueError("update_clipping is currently not compatible with update_by_* functions. "
+                                 "Manually select scale_by_* functions or set auto_fuse=True.")
+            fn = _scale_to_update_map_inv[fn]
+            if args is not None:
+                fn = functools.partial(fn, *args, **kwargs)
+            fns = tuple(fns)[:-1] + (fn,)
 
         self.compile_step = default(compile_step, self.compile_step)
+        self.promote = default(promote, self.promote)
         if default(palm, self.palm):
             fns = (palm_beta2,) + fns
         if default(gradient_clipping, self.gradient_clipping) is not None:

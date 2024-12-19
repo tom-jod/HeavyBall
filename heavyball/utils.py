@@ -1101,65 +1101,98 @@ def psgd_update_precond(Q, exprs, G, precond_lr, oq, store_triu_as_line):
 
 
 @decorator_knowngood
-def _compilable_l2_clip_(x):
+def _compilable_l2_clip_(x, clip_at):
     ref = x
     x = list(map(promote, x))
     norm = torch._foreach_norm(x)
-    torch._foreach_maximum_(norm, 1e-8)
+    torch._foreach_maximum_(norm, clip_at)
     out = torch._foreach_div(x, norm)
     return stochastic_round_list_(ref, out)
 
 
-def l2_clip_(x):
+def l2_normalization_(x, clip_at: float = 1e-8):
     x = list_guard(x)
-    return _compilable_l2_clip_(x)
+    return _compilable_l2_clip_(x, clip_at)
+
+
+def l2_clip_(x, clip_at: float = 1.):
+    x = list_guard(x)
+    return _compilable_l2_clip_(x, clip_at)
 
 
 @decorator_knowngood
-def _compilable_rmsnorm_clip_(x):
+def _compilable_rmsnorm_clip_(x, clip_at):
     x = list(map(promote, x))
     norm = torch._foreach_norm(x)
     norm = [n.div_(x_.numel() ** 0.5) for n, x_ in zip(norm, x)]
-    torch._foreach_maximum_(norm, 1e-6)
+    torch._foreach_maximum_(norm, clip_at)
     return torch._foreach_div(x, norm)
 
 
-def rmsnorm_clip_(x):
+def rmsnorm_clip_(x, clip_at: float = 1.0):
     x = list_guard(x)
-    return _compilable_rmsnorm_clip_(x)
+    return _compilable_rmsnorm_clip_(x, clip_at)
+
+
+def rmsnorm_normalize_(x, clip_at: float = 1e-6):
+    x = list_guard(x)
+    return _compilable_rmsnorm_clip_(x, clip_at)
+
+
+@decorator_knowngood
+def _compilable_mu_law_compress_(x, mu):
+    """
+    original at https://github.com/opooladz/modded-nanogpt-psgd/blob/dc7c78082ac15fbf326f1bacd9e0ead0a2b45908/kron_mu.py
+    """
+
+    for x_ in x:
+        xa = promote(x_.abs()) * mu
+        xa = xa.log1p()
+        xa = xa / math.log1p(mu)
+        xa = xa.copysign(x_)
+        copy_stochastic_(x_, xa)
 
 
 def mu_law_compress(x, mu=127.0):
     """
-    Foreach version of https://github.com/opooladz/modded-nanogpt-psgd/blob/dc7c78082ac15fbf326f1bacd9e0ead0a2b45908/kron_mu.py
-
     μ-law compression
     Args:
         x: Input tensor
         mu: Compression parameter (default 127.0 for behavior similar to trust_region=1.5)
     """
-    xa = torch._foreach_abs_(x)
-    torch._foreach_mul_(xa, mu)
-    torch._foreach_log1p_(xa)
-    torch._foreach_div_(xa, math.log1p(mu))
-    return [xa_.copysign_(x_) for x_, xa_ in zip(x, xa)]
+    x = list_guard(x)
+    mu = scalar_guard(mu, x[0])
+    _compilable_mu_law_compress(x, mu)
+    return x
+
+
+@decorator_knowngood
+def _compilable_a_law_compress_(x, A):
+    """
+    original at https://github.com/opooladz/modded-nanogpt-psgd/blob/dc7c78082ac15fbf326f1bacd9e0ead0a2b45908/kron_mu.py
+    """
+    for x_ in x:
+        xa = promote(x_.abs()) * A
+        xa = torch.where(xa < 1, xa, 1 + xa.log())
+        xa = xa.copysign(x_)
+        xa = xa * (1 / (1 + math.log(A)))
+        copy_stochastic_(x_, xa)
 
 
 def a_law_compress(x, A=87.6):
     """
-    Foreach version of https://github.com/opooladz/modded-nanogpt-psgd/blob/dc7c78082ac15fbf326f1bacd9e0ead0a2b45908/kron_mu.py
-
     A-law compression
     Args:
         x: Input tensor
         A: Compression parameter (default 87.6 - European PCM standard)
+    :param x:
+    :param A:
+    :return:
     """
-    xa = torch._foreach_abs(x)
-    torch._foreach_mul_(xa, A)
-    [torch.where(x_ < 1, x_, 1 + torch.log_(x_), out=x_) for x_ in xa]
-    [xa_.copysign(x_) for x_, xa_ in zip(x, xa)]
-    torch._foreach_mul_(xa, 1 / (1 + math.log(A)))
-    return xa
+    x = list_guard(x)
+    A = scalar_guard(A, x[0])
+    _compilable_a_law_compress(x, A)
+    return x
 
 
 def identity(x):
@@ -1167,24 +1200,24 @@ def identity(x):
 
 
 @decorator_knowngood
-def _compilable_trust_region_clip_(grad, lerp: float = 0.9, scale: float = 1.5):
+def _compilable_trust_region_clip_(grad, lerp, scale):
     # (sgn(x) * log(1 + |x|) * 0.1 + tanh(x) * 0.9).clamp_(min=-2, max=2)
-    g32 = list(map(promote, grad))
-    [g.mul_(1 / scale) for g in g32]
-    tanh = torch._foreach_tanh(g32)
-    torch._foreach_abs_(g32)
-    torch._foreach_log1p_(g32)
-    [g.copysign_(t).lerp_(t, lerp).mul_(scale) for t, g in zip(tanh, g32)]
-
-    torch._foreach_maximum_(g32, -2)
-    torch._foreach_minimum_(g32, 2)
-    return [stochastic_round_(grad, g32) for grad, g32 in zip(grad, g32)]
+    for x_ in grad:
+        x = promote(x_)
+        x = x / scale
+        tanh = x.tanh()
+        x = x.abs().log1p()
+        x = x.copysign(tanh) * lerp + tanh * (1 - lerp)
+        x = x * scale
+        x = x.clamp(min=-2, max=2)
+        copy_stochastic_(x_, x)
 
 
 def trust_region_clip_(grad, lerp=0.9, scale=1.5):
     grad = list_guard(grad)
     lerp, scale = scalar_guard(lerp, scale, grad[0])
-    return _compilable_trust_region_clip_(grad, lerp, scale)
+    _compilable_trust_region_clip_(grad, lerp, scale)
+    return grad
 
 
 @decorator
