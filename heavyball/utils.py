@@ -1207,7 +1207,7 @@ def _compilable_trust_region_clip_(grad, lerp, scale):
         x = x / scale
         tanh = x.tanh()
         x = x.abs().log1p()
-        x = x.copysign(tanh) * lerp + tanh * (1 - lerp)
+        x = x.copysign(tanh) * (1 - lerp) + tanh * lerp
         x = x * scale
         x = x.clamp(min=-2, max=2)
         copy_stochastic_(x_, x)
