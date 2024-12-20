@@ -307,7 +307,7 @@ def scale_by_soap(group, update, grad, param, exp_avg, exp_avg_sq, Q, GG, inner:
     return precond
 
 
-def _update_psgd_precond(group, param, grad, Q_mat, Q, exprs, prob: Optional[callable] = None):
+def _update_psgd_precond(cached, Q_cache, group, param, grad, Q_mat, Q, exprs, prob: Optional[callable] = None):
     if prob is None:
         prob = utils.precond_update_prob_schedule()
     if not precond_schedule(group, prob, name=f"cumulative_prob_{id(Q)}"):
@@ -322,6 +322,7 @@ def _update_psgd_precond(group, param, grad, Q_mat, Q, exprs, prob: Optional[cal
         else:
             utils.psgd_balance_Q(Q)
 
+    _update_psgd_cache(cached, Q_cache, Q_mat)
 
 def _update_psgd_cache(cached, Q_cache, q):
     if not cached:
@@ -357,7 +358,7 @@ def scale_by_psgd(group, update, grad, param, Q, exprs, Q_cache, cache_expr: str
     old = update
     update = update.to(memory_format=torch.contiguous_format)
     Q_mat = utils.line_to_triu(Q) if group['store_triu_as_line'] else Q
-    _update_psgd_precond(group, param, update, Q_mat, Q, exprs, prob)
+    _update_psgd_precond(cached, Q_cache, group, param, grad, Q_mat, Q, exprs, prob)
     return _cached_psgd_precond_grad(cached, cache_expr, exprs, update, Q_mat, Q_cache)
 
 
@@ -367,7 +368,7 @@ def scale_by_delayed_psgd(group, update, grad, param, Q, exprs, Q_cache, cache_e
                           prob: Optional[callable] = None):
     Q_mat = utils.line_to_triu(Q) if group['store_triu_as_line'] else Q
     precond = _cached_psgd_precond_grad(cached, cache_expr, exprs, update, Q_mat, Q_cache)
-    _update_psgd_precond(group, param, update, Q_mat, Q, exprs, prob)
+    _update_psgd_precond(cached, Q_cache, group, param, grad, Q_mat, Q, exprs, prob)
     return precond
 
 
@@ -376,7 +377,7 @@ def scale_by_delayed_psgd(group, update, grad, param, Q, exprs, Q_cache, cache_e
 def update_by_psgd(group, update, grad, param, Q, exprs, Q_cache, cache_expr: str, cached: bool = False,
                    prob: Optional[callable] = None):
     Q_mat = utils.line_to_triu(Q) if group['store_triu_as_line'] else Q
-    _update_psgd_precond(group, param, update, Q_mat, Q, exprs, prob)
+    _update_psgd_precond(cached, Q_cache, group, param, grad, Q_mat, Q, exprs, prob)
     _fused_cached_psgd_precond_grad(group, update, param, cached, cache_expr, exprs, update, Q_mat, Q_cache)
     raise SkipUpdate
 
@@ -387,7 +388,7 @@ def update_by_delayed_psgd(group, update, grad, param, Q, exprs, Q_cache, cache_
                            prob: Optional[callable] = None):
     Q_mat = utils.line_to_triu(Q) if group['store_triu_as_line'] else Q
     _fused_cached_psgd_precond_grad(group, update, param, cached, cache_expr, exprs, update, Q_mat, Q_cache)
-    _update_psgd_precond(group, param, update, Q_mat, Q, exprs, prob)
+    _update_psgd_precond(cached, Q_cache, group, param, grad, Q_mat, Q, exprs, prob)
     raise SkipUpdate
 
 
