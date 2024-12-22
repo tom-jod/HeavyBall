@@ -592,6 +592,7 @@ def project(grad, Q, back: bool):
 
 class StatefulOptimizer(torch.optim.Optimizer):
     ema_decay: float = 0.001
+    compile_step: bool = False
 
     def __init__(self, params, defaults, foreach: bool = True, use_ema: bool = False):
         super().__init__(params, {**defaults, 'foreach': foreach})
@@ -636,6 +637,10 @@ class StatefulOptimizer(torch.optim.Optimizer):
                     self.mars_correct_list(group, [p], [grad], group['mars_gamma'], beta1)
 
                 p.grad = None
+
+            if self.compile_step:
+                yield p, grad
+                continue
 
             p_views = merge_group(group, p)
             if grad is not None:

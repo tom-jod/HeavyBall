@@ -422,7 +422,6 @@ def chain(state: Union[callable, dict], group, grad, param, *fns):
 
 
 class ChainOpt(utils.StatefulOptimizer):
-    compile_step: bool = False
     promote: bool = False
 
     def __init__(self, params, defaults, foreach: bool, *fns):
