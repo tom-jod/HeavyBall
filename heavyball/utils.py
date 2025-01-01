@@ -193,12 +193,12 @@ def scale_by_exp_avg_sq_(exp_avg_sq, grad, beta2, eps):
     return grad
 
 
-# TODO: This lerp was fucked - check other lerps
 @decorator_knowngood
 def _compilable_exp_avg_(state, grad, beta):
-    s32 = [s.lerp(g, 1 - beta) for s, g in zip(promote(state), promote(grad))]
-    copy_stochastic_list_(state, s32)
-    copy_stochastic_list_(grad, s32)
+    for s, g in zip(state, grad):
+        lerped = s.lerp(g, 1 - beta)
+        copy_stochastic_(s, lerped)
+        copy_stochastic_(g, lerped)
 
 
 def scale_by_exp_avg_(state, grad, beta):
@@ -1035,7 +1035,7 @@ def psgd_calc_A_and_conjB(exprA, G, Q):
     V = torch.randn(G.shape, dtype=G.dtype, device=G.device)
     eps = scalar_guard(math.sqrt(torch.finfo(torch.float32).eps), G)
     eps *= G.norm() / G.numel()
-    G += V * eps
+    G = G + V * eps
     md = min_dtype(Q + [G])
     A = torch.einsum(exprA, *[q.to(md) for q in Q], G.to(md)).to(G.dtype)
     order = G.dim()
@@ -1083,26 +1083,20 @@ def psgd_update_precond(Q, exprs, G, precond_lr, oq, store_triu_as_line):
         term1 = promote(torch.einsum(exprG, A, A))
         term2 = promote(torch.einsum(exprG, conjB, conjB))
 
-        term2 += term1  # a + b
-        term1 *= 2  # 2a
-        if term1.dtype == term2.dtype:
-            term1 -= term2  # 2a - (a + b) == a - b
-        else:
-            term1 = term1 - term2
+        term1, term2 = term1 - term2, term1 + term2
 
         term1 *= precond_lr
         norm = term2.norm(float('inf'))
         if q.dim() < 2:
-            term1 *= q.to(term1.dtype)
-            term1 /= norm.clamp_(min=tiny_bf16)
+            term1 *= q.to(term1.dtype) / norm.clamp_(min=tiny_bf16)
         else:
             torch.triu(term1, out=term1)
-            term1 /= psgd_lb(term2, norm).clamp_(tiny_bf16)
-            torch.matmul(term1, q, out=term1)
+            term1 /= torch.where(norm > 0, psgd_lb(term2, norm), norm).clamp_(tiny_bf16)
+            term1 = torch.mm(term1, q)
         if store_triu_as_line:
             term1 = triu_to_line([term1])[0][1]
             o = o[1]
-        stochastic_add_([o], [term1], -1)
+        stochastic_add_(o, term1, -1)
 
 
 @decorator_knowngood
@@ -1167,7 +1161,7 @@ def mu_law_compress(x, mu=127.0):
     """
     x = list_guard(x)
     mu = scalar_guard(mu, x[0])
-    _compilable_mu_law_compress(x, mu)
+    _compilable_mu_law_compress_(x, mu)
     return x
 
 
@@ -1196,7 +1190,7 @@ def a_law_compress(x, A=87.6):
     """
     x = list_guard(x)
     A = scalar_guard(A, x[0])
-    _compilable_a_law_compress(x, A)
+    _compilable_a_law_compress_(x, A)
     return x
 
 
