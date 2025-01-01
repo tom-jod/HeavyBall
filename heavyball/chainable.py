@@ -1,6 +1,5 @@
 import functools
 import random
-import warnings
 from typing import Optional, Union, Literal
 
 import torch
@@ -85,10 +84,11 @@ class CopyGuard(FunctionTransform):
 
 
 class GeneralGuard(FunctionTransform):  # We can't guard against reuse in the general case
-    def __init__(self, fn, names, init_fn):
+    def __init__(self, fn, names, init_fn, skip_first: bool = True):
         super().__init__(fn)
         self.names = names
         self.init_fn = init_fn
+        self.skip_first = skip_first
 
     def __call__(self, state, group, update, grad, param, *args, **kwargs):
         vars = []
@@ -97,7 +97,7 @@ class GeneralGuard(FunctionTransform):  # We can't guard against reuse in the ge
             st = state(p)
             skip_update |= _inplace_guard_(st, self.names, lambda: self.init_fn(st, group, u, g, p, **kwargs))
             vars.append([st[name] if isinstance(name, str) else st.get(name[0], name[1]) for name in self.names])
-        if skip_update:
+        if skip_update and self.skip_first:
             raise SkipUpdate
         return self.fn(state, group, update, grad, param, *args, *zip(*vars), **kwargs)
 
@@ -109,8 +109,17 @@ class NoState(FunctionTransform):
 
 class NoStateNoForeach(FunctionTransform):
     def __call__(self, state, group, update, grad, param, *args, **kwargs):
+        updates = []
+        skip_update = False
         for a in zip(update, grad, param, *args):
-            return self.fn(group, *a, **kwargs)
+            try:
+                updates.append(self.fn(group, *a, **kwargs))
+            except SkipUpdate:
+                skip_update = True
+                pass
+        if skip_update:
+            raise SkipUpdate
+        return updates
 
 
 def zero_guard(*names):
@@ -118,11 +127,11 @@ def zero_guard(*names):
 
 
 def copy_guard(index, *names):
-    return functools.partial(CopyGuard, index=index, names=names)
+    return functools.partial(CopyGuard, index=index, names=names,)
 
 
-def general_guard(*names, init_fn):
-    return functools.partial(GeneralGuard, names=names, init_fn=init_fn)
+def general_guard(*names, init_fn, skip_first: bool = True):
+    return functools.partial(GeneralGuard, names=names, init_fn=init_fn, skip_first=skip_first)
 
 
 def no_state(fn):
@@ -311,18 +320,18 @@ def _update_psgd_precond(cached, Q_cache, group, param, grad, Q_mat, Q, exprs, p
     if prob is None:
         prob = utils.precond_update_prob_schedule()
     if not precond_schedule(group, prob, name=f"cumulative_prob_{id(Q)}"):
-        return
+        return Q_mat
 
-    Q = [utils.promote(q_) for q_ in Q]
     utils.psgd_update_precond(Q_mat, exprs, grad, group['precond_lr'], Q, group['store_triu_as_line'])
 
-    if grad.dim() > 1 and precond_schedule(group, balance_probability, "balance_prob"):
+    if grad.dim() > 1 and precond_schedule(group, balance_probability, f"balance_prob_{id(Q)}"):
         if group['store_triu_as_line']:
             utils.psgd_balance_Q([q_ for _, q_ in Q])
         else:
             utils.psgd_balance_Q(Q)
 
-    _update_psgd_cache(cached, Q_cache, Q_mat)
+    return _update_psgd_cache(cached, Q_cache, Q_mat)
+
 
 def _update_psgd_cache(cached, Q_cache, q):
     if not cached:
@@ -351,44 +360,47 @@ def _fused_cached_psgd_precond_grad(group, grad, param, cached, cache_expr, expr
                                       group['caution'], *Q_mat)
 
 
-@general_guard("Q", "exprs", ("Q_cache", None), ("cache_expr", None), init_fn=_init_psgd)
+@general_guard("Q", "exprs", ("Q_cache", None), ("cache_expr", None), init_fn=_init_psgd, skip_first=False)
 @no_state_no_foreach
 def scale_by_psgd(group, update, grad, param, Q, exprs, Q_cache, cache_expr: str, cached: bool = False,
                   prob: Optional[callable] = None):
-    old = update
     update = update.to(memory_format=torch.contiguous_format)
     Q_mat = utils.line_to_triu(Q) if group['store_triu_as_line'] else Q
-    _update_psgd_precond(cached, Q_cache, group, param, grad, Q_mat, Q, exprs, prob)
+    Q_mat = _update_psgd_precond(cached, Q_cache, group, param,
+                                 update if group['momentum_into_precond_update'] else grad, Q_mat, Q, exprs, prob)
     return _cached_psgd_precond_grad(cached, cache_expr, exprs, update, Q_mat, Q_cache)
 
 
-@general_guard("Q", "exprs", ("Q_cache", None), ("cache_expr", None), init_fn=_init_psgd)
+@general_guard("Q", "exprs", ("Q_cache", None), ("cache_expr", None), init_fn=_init_psgd, skip_first=False)
 @no_state_no_foreach
 def scale_by_delayed_psgd(group, update, grad, param, Q, exprs, Q_cache, cache_expr: str, cached: bool = False,
                           prob: Optional[callable] = None):
     Q_mat = utils.line_to_triu(Q) if group['store_triu_as_line'] else Q
     precond = _cached_psgd_precond_grad(cached, cache_expr, exprs, update, Q_mat, Q_cache)
-    _update_psgd_precond(cached, Q_cache, group, param, grad, Q_mat, Q, exprs, prob)
+    _update_psgd_precond(cached, Q_cache, group, param, update if group['momentum_into_precond_update'] else grad,
+                         Q_mat, Q, exprs, prob)
     return precond
 
 
-@general_guard("Q", "exprs", ("Q_cache", None), ("cache_expr", None), init_fn=_init_psgd)
+@general_guard("Q", "exprs", ("Q_cache", None), ("cache_expr", None), init_fn=_init_psgd, skip_first=False)
 @no_state_no_foreach
 def update_by_psgd(group, update, grad, param, Q, exprs, Q_cache, cache_expr: str, cached: bool = False,
                    prob: Optional[callable] = None):
     Q_mat = utils.line_to_triu(Q) if group['store_triu_as_line'] else Q
-    _update_psgd_precond(cached, Q_cache, group, param, grad, Q_mat, Q, exprs, prob)
+    Q_mat = _update_psgd_precond(cached, Q_cache, group, param,
+                                 update if group['momentum_into_precond_update'] else grad, Q_mat, Q, exprs, prob)
     _fused_cached_psgd_precond_grad(group, update, param, cached, cache_expr, exprs, update, Q_mat, Q_cache)
     raise SkipUpdate
 
 
-@general_guard("Q", "exprs", ("Q_cache", None), ("cache_expr", None), init_fn=_init_psgd)
+@general_guard("Q", "exprs", ("Q_cache", None), ("cache_expr", None), init_fn=_init_psgd, skip_first=False)
 @no_state_no_foreach
 def update_by_delayed_psgd(group, update, grad, param, Q, exprs, Q_cache, cache_expr: str, cached: bool = False,
                            prob: Optional[callable] = None):
     Q_mat = utils.line_to_triu(Q) if group['store_triu_as_line'] else Q
     _fused_cached_psgd_precond_grad(group, update, param, cached, cache_expr, exprs, update, Q_mat, Q_cache)
-    _update_psgd_precond(cached, Q_cache, group, param, grad, Q_mat, Q, exprs, prob)
+    _update_psgd_precond(cached, Q_cache, group, param, update if group['momentum_into_precond_update'] else grad,
+                         Q_mat, Q, exprs, prob)
     raise SkipUpdate
 
 
@@ -431,6 +443,10 @@ class ChainOpt(utils.StatefulOptimizer):
     def _step(self, group):
         if 'base_lr' not in group:
             group['base_lr'] = group['lr']
+        if 'prev_lr' in group and group['prev_lr'] != group['lr']:
+            utils.warn_once(f'Learning rate changed between steps. This is an experimental feature and '
+                            f'only supported with foreach=True (currently foreach={group["foreach"]}).')
+            group['base_lr'] = group['lr']
 
         vals = list(self.split_p_and_g_in_group(group, should_promote=self.promote, beta1=utils.get_beta1(group)))
         if not vals:
@@ -450,9 +466,10 @@ class ChainOpt(utils.StatefulOptimizer):
         group['step'] = state['step'] = step = step + 1
 
         if group['warmup_steps'] and step < group['warmup_steps']:
-            group['lr'] = group['base_lr'] * step / group['warmup_steps']
+            group['prev_lr'] = group['lr'] = group['base_lr'] * step / group['warmup_steps']
+
         else:
-            group['lr'] = group['base_lr']
+            group['prev_lr'] = group['lr'] = group['base_lr']
 
         if not group['foreach'] or len(p) == 1:
             for param, grad in zip(p, g):

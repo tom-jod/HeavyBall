@@ -1294,6 +1294,7 @@ def _compilable_fused_precond_grad_cached_(expr: str, ea: Tensor, param, lr, gra
 
 
 def fused_precond_grad_cached_(expr: str, ea: Tensor, param, lr, grad, decay, caution, *cached_q: Tensor):
+
     lr = scalar_guard(lr, param[0])
     _compilable_fused_precond_grad_cached_(expr, ea, param, lr, grad, decay, caution, *cached_q)
 
@@ -1309,7 +1310,7 @@ def psgd_precond_grad(expr: str, ea: Tensor, *preconds: Tensor):
 
 @decorator_knowngood
 def _compilable_fused_psgd_precond_grad(expr: str, ea: Tensor, param, lr, grad, decay, caution, *preconds: Tensor):
-    precond = psgd_precond_grad(expr, grad, *preconds)
+    precond = psgd_precond_grad(expr, ea, *preconds)
     update_param_(param, precond, lr, decay, caution=caution, grad=grad)
 
 
