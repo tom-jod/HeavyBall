@@ -1032,15 +1032,13 @@ def psgd_balance_Q(Q_in):
 
 
 def psgd_calc_A_and_conjB(exprA, G, Q):
-    V = torch.randn(G.shape, dtype=G.dtype, device=G.device)
     eps = scalar_guard(math.sqrt(torch.finfo(torch.float32).eps), G)
     eps *= G.norm() / G.numel()
-    G = G + V * eps
+    G = G + torch.randn_like(G) * eps
     md = min_dtype(Q + [G])
     A = torch.einsum(exprA, *[q.to(md) for q in Q], G.to(md)).to(G.dtype)
     order = G.dim()
-    p = list(range(order))
-    conjB = torch.permute(V, p[1:] + p[:1]).to(promote(G.dtype))
+    conjB = torch.randn(G.shape[1:] + G.shape[:1], dtype=promote(G.dtype), device=G.device)
     Q = [promote(q) for q in Q]
     for i, q in enumerate(Q):
         if q.dim() <= 1:
