@@ -1047,6 +1047,7 @@ def psgd_calc_A_and_conjB(exprA, G, Q):
             unsqueeze = conjB.dim() <= 1
             if unsqueeze:
                 conjB = conjB.unsqueeze(0)
+            print(q.shape, q.stride(), conjB.shape, conjB.stride())
             conjB = torch.linalg.solve_triangular(q, conjB, upper=True, left=False)
             if unsqueeze:
                 conjB = conjB.squeeze(0)
