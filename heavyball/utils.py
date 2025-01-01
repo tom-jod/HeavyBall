@@ -1044,7 +1044,6 @@ def psgd_calc_A_and_conjB(exprA, G, Q):
         if q.dim() <= 1:
             conjB /= q
         else:
-            print(q.shape, q.stride(), conjB.shape, conjB.stride())
             conjB = torch.linalg.solve_triangular(q, conjB.reshape(-1, q.size(0)), upper=True, left=False).reshape_as(conjB)
         if i < order - 1:
             conjB = torch.transpose(conjB, i, order - 1)
