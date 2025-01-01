@@ -477,7 +477,7 @@ class ChainOpt(utils.StatefulOptimizer):
         else:
             chain(self.state_, group, g, p, *self.fns)
 
-        group['lr'] = None
+        group['lr'] = group['prev_lr']
         group['step'] = None
 
 
