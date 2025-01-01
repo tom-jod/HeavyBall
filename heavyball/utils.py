@@ -1092,7 +1092,7 @@ def psgd_update_precond(Q, exprs, G, precond_lr, oq, store_triu_as_line):
         else:
             torch.triu(term1, out=term1)
             term1 /= torch.where(norm > 0, psgd_lb(term2, norm), norm).clamp_(tiny_bf16)
-            term1 = torch.mm(term1, q)
+            term1 = torch.mm(term1, q.to(term1.dtype))
         if store_triu_as_line:
             term1 = triu_to_line([term1])[0][1]
             o = o[1]
