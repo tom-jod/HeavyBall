@@ -13,7 +13,7 @@
     - [Creating New Transformations](#Creating-New-Transformations)
 
 * [Optimizer Recommendations](#Optimizer-Recommendations)
-  - [Choosing the Right Optimizer](#Choosing-the-Right-Optimizer)
+    - [Choosing the Right Optimizer](#Choosing-the-Right-Optimizer)
 
 ---
 
@@ -60,8 +60,8 @@ learning rates based on the first and second moments of the gradients.
 * **`mars_gamma`**: Mars correction coefficient.
 * **`gradient_clipping`**: Gradient clipping function or method. See `heavyball.utils` for available options.
 * **`update_clipping`**: Update clipping function or method. See `heavyball.utils` for available options.
-* **`palm`**: Enables/disables PaLM-specific modifications.
-* **`beta2_scale`**: Scaling factor for the beta2 parameter, controlling its dependence on the current step.
+* **`palm`**: Enables/disables PaLM's beta2 schedule.
+* **`beta2_scale`**: if we're using the PaLM schedule, `beta2 = step ** -beta2_scale`
 
 #### `ForeachRMSprop`
 
@@ -94,8 +94,8 @@ adaptive learning rates based on the second moment of the gradients.
 * **`mars_gamma`**: Mars correction coefficient.
 * **`gradient_clipping`**: Gradient clipping function or method. See `heavyball.utils` for available options.
 * **`update_clipping`**: Update clipping function or method. See `heavyball.utils` for available options.
-* **`palm`**: Enables/disables PaLM-specific modifications.
-* **`beta2_scale`**: Scaling factor for the beta2 parameter, controlling its dependence on the current step.
+* **`palm`**: Enables/disables PaLM's beta2 schedule.
+* **`beta2_scale`**: if we're using the PaLM schedule, `beta2 = step ** -beta2_scale`
 
 #### `ForeachSFAdamW`
 
@@ -128,8 +128,8 @@ approach, which dynamically adjusts the learning rate based on the current state
 * **`mars_gamma`**: Mars correction coefficient.
 * **`gradient_clipping`**: Gradient clipping function or method. See `heavyball.utils` for available options.
 * **`update_clipping`**: Update clipping function or method. See `heavyball.utils` for available options.
-* **`palm`**: Enables/disables PaLM-specific modifications.
-* **`beta2_scale`**: Scaling factor for the beta2 parameter, controlling its dependence on the current step.
+* **`palm`**: Enables/disables PaLM's beta2 schedule.
+* **`beta2_scale`**: if we're using the PaLM schedule, `beta2 = step ** -beta2_scale`
 
 #### `PaLMForeachSFAdamW`
 
@@ -138,7 +138,7 @@ class PaLMForeachSFAdamW(ForeachSFAdamW):
     palm: bool = True
 ```
 
-A specialized version of `ForeachSFAdamW` with PaLM-specific modifications enabled by default.
+A specialized version of `ForeachSFAdamW` with PaLM's beta2 schedule enabled by default.
 
 #### `ForeachADOPT`
 
@@ -168,8 +168,8 @@ A foreach implementation of the ADOPT optimizer, which uses a debiased estimate 
 * **`mars_gamma`**: Mars correction coefficient.
 * **`gradient_clipping`**: Gradient clipping function or method. See `heavyball.utils` for available options.
 * **`update_clipping`**: Update clipping function or method. See `heavyball.utils` for available options.
-* **`palm`**: Enables/disables PaLM-specific modifications.
-* **`beta2_scale`**: Scaling factor for the beta2 parameter, controlling its dependence on the current step.
+* **`palm`**: Enables/disables PaLM's beta2 schedule.
+* **`beta2_scale`**: if we're using the PaLM schedule, `beta2 = step ** -beta2_scale`
 
 #### `ForeachMuon`
 
@@ -201,8 +201,8 @@ transformation.
 * **`mars_gamma`**: Mars correction coefficient.
 * **`gradient_clipping`**: Gradient clipping function or method. See `heavyball.utils` for available options.
 * **`update_clipping`**: Update clipping function or method. See `heavyball.utils` for available options.
-* **`palm`**: Enables/disables PaLM-specific modifications.
-* **`beta2_scale`**: Scaling factor for the beta2 parameter, controlling its dependence on the current step.
+* **`palm`**: Enables/disables PaLM's beta2 schedule.
+* **`beta2_scale`**: if we're using the PaLM schedule, `beta2 = step ** -beta2_scale`
 * **`nesterov`**: Enables/disables Nesterov momentum.
 
 #### `ForeachLaProp`
@@ -233,8 +233,8 @@ A foreach implementation of the LaProp optimizer.
 * **`mars_gamma`**: Mars correction coefficient.
 * **`gradient_clipping`**: Gradient clipping function or method. See `heavyball.utils` for available options.
 * **`update_clipping`**: Update clipping function or method. See `heavyball.utils` for available options.
-* **`palm`**: Enables/disables PaLM-specific modifications.
-* **`beta2_scale`**: Scaling factor for the beta2 parameter, controlling its dependence on the current step.
+* **`palm`**: Enables/disables PaLM's beta2 schedule.
+* **`beta2_scale`**: if we're using the PaLM schedule, `beta2 = step ** -beta2_scale`
 
 #### `MuonLaProp`
 
@@ -264,8 +264,8 @@ A variant of LaProp that incorporates orthogonal updates via the `orthogonalize_
 * **`mars_gamma`**: Mars correction coefficient.
 * **`gradient_clipping`**: Gradient clipping function or method. See `heavyball.utils` for available options.
 * **`update_clipping`**: Update clipping function or method. See `heavyball.utils` for available options.
-* **`palm`**: Enables/disables PaLM-specific modifications.
-* **`beta2_scale`**: Scaling factor for the beta2 parameter, controlling its dependence on the current step.
+* **`palm`**: Enables/disables PaLM's beta2 schedule.
+* **`beta2_scale`**: if we're using the PaLM schedule, `beta2 = step ** -beta2_scale`
 
 #### `ForeachSOAP`
 
@@ -309,10 +309,10 @@ the second-order statistics of the gradients to accelerate convergence.
 * **`caution`**: Enables/disables the use of a cautious update rule, avoiding updates that point in the opposite
   direction to the gradients.
 * **`mars_gamma`**: Mars correction coefficient.
-* **`palm`**: Enables/disables PaLM-specific modifications.
+* **`palm`**: Enables/disables PaLM's beta2 schedule.
 * **`precond_scheduler`**: A tuple `(power, log_base)` specifying the preconditioner update schedule, where the update
   probability is `1 / (step ** power * log_base)`. This parameter is only used if `use_precond_schedule` is `True`.
-* **`beta2_scale`**: Scaling factor for the beta2 parameter, controlling its dependence on the current step.
+* **`beta2_scale`**: if we're using the PaLM schedule, `beta2 = step ** -beta2_scale`
 * **`use_precond_schedule`**: Whether to use a dynamic preconditioner update schedule instead of a fixed frequency.
 * **`gradient_clipping`**: Gradient clipping function or method. See `heavyball.utils` for available options.
 * **`update_clipping`**: Update clipping function or method. See `heavyball.utils` for available options.
@@ -325,7 +325,7 @@ class PaLMForeachSOAP(ForeachSOAP):
     palm: bool = True
 ```
 
-A specialized version of `ForeachSOAP` with PaLM-specific modifications enabled by default.
+A specialized version of `ForeachSOAP` with PaLM's beta2 schedule enabled by default.
 
 #### `PrecondScheduleForeachSOAP`
 
@@ -714,7 +714,7 @@ class ChainOpt(utils.StatefulOptimizer):
 ### BaseOpt
 
 The `BaseOpt` class extends `ChainOpt` and provides additional features like gradient clipping, update clipping, and
-optional PaLM modifications.
+optional PaLM beta2 schedule.
 
 ```python
 class BaseOpt(ChainOpt):
@@ -816,28 +816,27 @@ tasks. However, the best choice always depends on your specific model, dataset, 
     - **When to use:**
         - **Complex models and datasets:** Where optimization is challenging.
         - **When training stability is crucial.**
-        - **When you want potentially the best performance regardless of computational cost.**
+        - **When you can't retune hyperparameters.**
     - **Variants:**
-        - `PaLMForeachSOAP`: Optimized for PaLM models.
+        - `PaLMForeachSOAP`: Enables PaLM's beta2 schedule by default.
         - `PrecondScheduleForeachSOAP`: Uses a dynamic schedule for preconditioner updates.
-        - `PrecondSchedulePaLMForeachSOAP`: Combines PaLM modifications with a dynamic schedule.
+        - `PrecondSchedulePaLMForeachSOAP`: Combines the PaLM schedule with a dynamic preconditioner schedule.
 
 - **`ForeachPSGDKron`** (and its variants: `ForeachPurePSGD`, `ForeachCachedDelayedPSGDKron`, `ForeachCachedPSGDKron`,
   `ForeachDelayedPSGD`):
     - **Strengths:**
         - **Preconditioning:** Uses Kronecker-factored approximations to capture curvature information, providing many
           of the benefits of second-order methods at a lower cost than full curvature methods.
-        - **Efficiency:** Relatively efficient in terms of computation and memory compared to full second-order methods
-          and `ForeachSOAP`.
+        - **Efficiency:** Relatively efficient in terms of computation.
         - **Tunability:** Offers many options for customization.
+        - **Convergence:** Tends to converge faster than SOAP.
     - **Weaknesses:**
-        - **Performance:** May not always match the performance of `ForeachSOAP`, but it is often close and sometimes
-          better.
+        - **No baseline:** SOAP can copy Adam's hyperparameters - PSGD requires more tuning.
         - **Complexity:** Has many hyperparameters to tune.
     - **When to use:**
         - **Large models:** Where memory is a constraint.
         - **When `ForeachSOAP` is too computationally expensive.**
-        - **When you want a good balance between performance and efficiency.**
+        - **When you want potentially the best performance regardless of computational cost.**
     - **Variants:**
         - `ForeachPurePSGD`: Disables exponential averaging of the input when calculating the preconditioner.
         - `ForeachCachedDelayedPSGDKron`: Caches preconditioner-related computations and uses delayed preconditioner
@@ -847,41 +846,32 @@ tasks. However, the best choice always depends on your specific model, dataset, 
 
 **2. Muon:**
 
-- **`ForeachMuon`**:
+- **`ForeachMuon`** (and `MuonLaProp`):
     - **Strengths:**
-        - **Momentum with Orthogonal Updates:** Combines momentum with a mechanism to orthogonalize updates, which can
+        - **Momentum with Orthogonal Updates:** Combines momentum with orthogonalized updates, which can
           improve stability and exploration.
         - **Good Generalization:** Often leads to better generalization performance compared to Adam.
     - **Weaknesses:**
         - **Performance:** Generally outperformed by SOAP and PSGD.
+        - **Computational Cost:** Higher overheads than SOAP and PSGD.
     - **When to use:**
-        - **When you want to try an alternative to Adam that incorporates momentum and orthogonal updates.**
         - **When generalization is a primary concern.**
-        - **When you want an optimizer less prone to finding sharp minimizers.**
+        - **When you want an optimizer less prone to finding sharp minima.**
 
-**3. LaProp:**
+**3. Adam-Based Optimizers:**
 
-- **`ForeachLaProp`** (and `MuonLaProp`):
+- **`ForeachLaProp`**:
     - **Strengths:**
-        - **Simplicity:** Relatively simple to implement and understand.
-        - **Adaptive Learning Rates:** Adapts learning rates based on the magnitude of the gradients.
+        - **Backward Compatibility:** Can use Adam's hyperparameters, but allows a larger range of betas.
+        - **Stability:** More stable than Adam.
     - **Weaknesses:**
         - **Performance:** Generally outperformed by SOAP, PSGD, and Muon.
     - **When to use:**
-        - **When you want a simple adaptive optimizer that is less computationally expensive than second-order methods.
-          **
-        - **As a baseline for comparison with more advanced optimizers.**
-    - **Variants:**
-        - `MuonLaProp`: Combines LaProp with orthogonal updates.
-
-**4. Adam-Based Optimizers:**
+        - **When you want less risk or better losses than Adam, but can't run advanced methods.**
 
 - **`ForeachAdamW`** (and `ForeachSFAdamW`, `PaLMForeachSFAdamW`):
     - **Strengths:**
         - **Widely Used:** A popular and well-established optimizer.
-        - **Adaptive Learning Rates:** Adapts learning rates based on the first and second moments of the gradients.
-        - **Weight Decay:** `ForeachAdamW` incorporates weight decay directly into the update rule, which can improve
-          generalization.
     - **Weaknesses:**
         - **Performance:** Often outperformed by preconditioned optimizers (SOAP, PSGD) and Muon.
         - **Sensitivity to Hyperparameters:** Can be sensitive to the choice of learning rate and beta parameters.
@@ -891,26 +881,7 @@ tasks. However, the best choice always depends on your specific model, dataset, 
         - **When computational cost is a major concern (compared to second-order methods).**
     - **Variants:**
         - `ForeachSFAdamW`: A Schedule-Free version of AdamW that dynamically adjusts the learning rate.
-        - `PaLMForeachSFAdamW`: Optimized for PaLM models.
-
-- **`ForeachRMSprop`:**
-    - **Strengths:**
-        - Adaptive learning rate.
-        - Can be a good alternative to AdamW.
-    - **Weaknesses:**
-        - Often outperformed by other optimizers in the hierarchy.
-    - **When to use:**
-        - As a secondary baseline.
-        - When experimenting with adaptive optimizers.
-
-- **`ForeachADOPT`:**
-    - **Strengths:**
-        - **Debiased second moment estimation:** Uses a debiased estimate of the second moment of the gradients.
-    - **Weaknesses:**
-        - Often outperformed by other optimizers in the hierarchy.
-    - **When to use:**
-        - As a secondary baseline.
-        - When experimenting with debiased adaptive optimizers.
+        - `PaLMForeachSFAdamW`: A PaLM version of Schedule-Free AdamW.
 
 ## Choosing the Right Optimizer
 
