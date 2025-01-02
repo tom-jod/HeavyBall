@@ -195,10 +195,8 @@ def scale_by_exp_avg_sq_(exp_avg_sq, grad, beta2, eps):
 
 @decorator_knowngood
 def _compilable_exp_avg_(state, grad, beta):
-    for s, g in zip(state, grad):
-        lerped = s.lerp(g, 1 - beta)
-        copy_stochastic_(s, lerped)
-        copy_stochastic_(g, lerped)
+    lerped = _lerp32(state, grad, beta)
+    copy_stochastic_list_(grad, lerped)
 
 
 def scale_by_exp_avg_(state, grad, beta):
@@ -746,6 +744,7 @@ def copy_stochastic_list_(target: List[Tensor], source: List[Tensor]):
 def _lerp32(state: List[Tensor], grad: List[Tensor], beta):
     ea32 = list(map(promote, state))
     grad = list(map(promote, grad))
+    beta = promote(beta)
 
     ea32 = [e.lerp(g, 1 - beta) for e, g in zip(ea32, grad)]
     copy_stochastic_list_(state, ea32)
