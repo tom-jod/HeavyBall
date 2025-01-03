@@ -3,12 +3,11 @@ import gc
 import inspect
 import random
 import warnings
-
+from datetime import datetime
+import heavyball.utils
 import hyperopt
 import numpy as np
 import torch
-
-import heavyball.utils
 
 np.warnings = warnings
 
@@ -48,6 +47,8 @@ def _get_objective(failure_threshold, model, opt, steps, group, data, loss_fn, w
             for _ in range(group):
                 inp, tgt = data()
                 loss = m() if inp is None else m(inp)
+                if loss_fn is not None:
+                    loss = loss_fn(loss, tgt)
                 loss.backward()
                 o.step()
                 o.zero_grad()
@@ -85,14 +86,16 @@ def _get_objective(failure_threshold, model, opt, steps, group, data, loss_fn, w
         return m
 
     def _get_best():
-        print(np.exp(avg))
         return _inner(np.exp(avg))[1]
 
-    return objective, _get_m, _get_best
+    def _get_attempts():
+        return attempt
+
+    return objective, _get_m, _get_best, _get_attempts
 
 
 def trial(model, data, loss_fn, win_condition, steps, opt, dtype, size, batch, weight_decay, method, length, depth,
-          trials=10, failure_threshold=3, group=100, base_lr: float = 1e-3):
+          trials=10, failure_threshold=3, group=1000, base_lr: float = 1e-3):
     opt = getattr(heavyball, opt)
     if "soap" not in opt.__name__.lower() and method != 'qr':
         return
@@ -107,14 +110,17 @@ def trial(model, data, loss_fn, win_condition, steps, opt, dtype, size, batch, w
         np.random.seed(0x1239122)
         random.seed(0x1239123)
 
-        obj, get_m, get_best = _get_objective(failure_threshold, model, opt, steps, group, data, loss_fn, win_condition,
-                                              weight_decay)
+        obj, get_m, get_best, get_attempt = _get_objective(failure_threshold, model, opt, steps, group, data, loss_fn,
+                                                       win_condition, weight_decay)
+        start_time = datetime.now()
         out = hyperopt.fmin(obj, (hyperopt.hp.loguniform('lr', np.log(1e-6), np.log(0.1)),  #
                                   hyperopt.hp.loguniform('1mbeta1', np.log(1e-3), np.log(1)),  #
                                   hyperopt.hp.loguniform('1mbeta2', np.log(1e-5), np.log(1)),  #
                                   hyperopt.hp.loguniform('1mshampoo_beta', np.log(1e-3), np.log(1))),  #
                             max_evals=trials, algo=hyperopt.atpe.suggest,
-                            early_stop_fn=lambda x: win_condition(get_m(), x), return_argmin=True)
-        print(
-            f"{opt.__name__}(lr={out['lr']:.5f}, betas=({1 - out['1mbeta1']:.3f}, {1 - out['1mbeta2']:.4f}), shampoo_beta={1 - out['1mshampoo_beta']:.3f})")
+                            early_stop_fn=lambda x: win_condition(get_m(), x), return_argmin=True,
+                            show_progressbar=False)
+        torch.cuda.synchronize()
+        end_time = datetime.now()
+        print(f"Took: {end_time - start_time} | Attempt: {get_attempt()} | {opt.__name__}(lr={out['lr']:.5f}, betas=({1 - out['1mbeta1']:.3f}, {1 - out['1mbeta2']:.4f}), shampoo_beta={1 - out['1mshampoo_beta']:.3f})")
         return get_best()

@@ -60,7 +60,7 @@ def main(method: List[str] = typer.Option(['qr'], help='Eigenvector method to us
                 loss = loss.results[-1]['loss']
             return loss < 0, {}
 
-        model = trial(model, data, torch.nn.functional.l1_loss, win, steps, o, d, 1, 1, wd, m, 1, 1, group=100,
+        model = trial(model, data, None, win, steps, o, d, 1, 1, wd, m, 1, 1, group=100,
                       base_lr=1e-4, trials=200)
 
         if img is None:
