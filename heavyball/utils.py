@@ -1338,25 +1338,20 @@ def caution(g, update):
     return _compilable_cautioning(g, update)
 
 
-def precond_update_prob_schedule(max_prob=1.0, min_prob=0.03, decay=0.001, flat_start=500):
+def precond_update_prob_schedule(max_prob=1.0, min_prob=0.03, decay=0.999, flat_start=1000):
     """Anneal preconditioner update probability during beginning of training.
 
     PSGD benefits from more preconditioner updates at the beginning of training,
     but once the preconditioner is learned the update probability can drop low.
 
     This schedule is an exponential anneal with a flat start. Default settings keep
-    update probability at 1.0 for 200 steps then exponentially anneal down to
-    `min_prob` by 4000 steps. Default settings work very well for most models and
+    update probability at `max_prob` for 1000 steps then exponentially anneal down to
+    `min_prob` by ~4000 steps. Default settings work very well for most models and
     training regimes.
     """
 
     def _schedule(n):
-        if n < flat_start:  # higher numerical stability
-            return max_prob
-
-        n -= flat_start
-        prob = max_prob * math.exp(-decay * (n - flat_start))
-        return max(min_prob, min(max_prob, prob))
+        return max(min_prob, max_prob * decay ** max(n - flat_start, 0))
 
     return _schedule
 
