@@ -482,7 +482,7 @@ def scalar_guard(*args):
     out = []
     for x in xs:
         if isinstance(x, float):
-            out.append(torch.empty((), dtype=torch.float32, device=ref.device).fill_(x))
+            out.append(torch.empty((), dtype=promote(ref.dtype), device=ref.device).fill_(x))
         elif isinstance(x, int):
             out.append(torch.empty((), dtype=torch.int64, device=ref.device).fill_(x))
         else:
@@ -1043,7 +1043,8 @@ def psgd_calc_A_and_conjB(exprA, G, Q):
         if q.dim() <= 1:
             conjB /= q
         else:
-            conjB = torch.linalg.solve_triangular(q, conjB.reshape(-1, q.size(0)), upper=True, left=False).reshape_as(conjB)
+            conjB = torch.linalg.solve_triangular(q, conjB.reshape(-1, q.size(0)), upper=True, left=False).reshape_as(
+                conjB)
         if i < order - 1:
             conjB = torch.transpose(conjB, i, order - 1)
     return A, conjB
@@ -1286,7 +1287,6 @@ def _compilable_fused_precond_grad_cached_(expr: str, ea: Tensor, param, lr, gra
 
 
 def fused_precond_grad_cached_(expr: str, ea: Tensor, param, lr, grad, decay, caution, *cached_q: Tensor):
-
     lr = scalar_guard(lr, param[0])
     _compilable_fused_precond_grad_cached_(expr, ea, param, lr, grad, decay, caution, *cached_q)
 
@@ -1370,12 +1370,18 @@ def merge_group(group, *tensors):
 
 
 def hook_optimizer_into_model(model, optimizer, *args, **kwargs):
-    def _step(p: Tensor, o: torch.optim.Optimizer):
+    optimizers = {}
+
+    def _step(p: Tensor):
+        o = optimizers[p]
         o.step()
         o.zero_grad()
 
     for p in model.parameters():
-        p.register_post_accumulate_grad_hook(functools.partial(_step, o=optimizer([p], *args, **kwargs)))
+        optimizers[p] = optimizer([p], *args, **kwargs)
+        p.register_post_accumulate_grad_hook(_step)
+
+    return optimizers
 
 
 def fused_hook(parameters, optimizer, *args, **kwargs):
@@ -1395,6 +1401,8 @@ def fused_hook(parameters, optimizer, *args, **kwargs):
 
     for p in parameters:
         p.register_post_accumulate_grad_hook(_step)
+
+    return o
 
 
 @decorator_knowngood
