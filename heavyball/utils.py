@@ -1390,12 +1390,15 @@ def fused_hook(parameters, optimizer, *args, **kwargs):
     seen_params = set()
 
     o = optimizer(parameters, *args, **kwargs)
+    step_fn = o.step
+    o.step = functools.partial(warn_once,
+                               msg="You're trying to call `step` on a fused optimizer. This will not do anything.")
 
     def _step(p: Tensor):
         seen_params.add(p)
 
         if len(seen_params) < param_count:
-            o.step()
+            step_fn()
             o.zero_grad()
             seen_params.clear()
 
