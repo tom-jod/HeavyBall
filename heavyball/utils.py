@@ -54,12 +54,6 @@ def decorator_knowngood(func: Callable):
 einsum_base = string.ascii_lowercase + string.ascii_uppercase
 
 
-def warmup(lr: float, step: int, warmup_steps: int):
-    if step >= warmup_steps:  # if instead of min to guard against 0 div
-        return lr
-    return lr * step / warmup_steps
-
-
 @decorator_knowngood
 def _compilable_schedule_free_(p: List[Tensor], z: List[Tensor], ckp1: Tensor, update: List[Tensor], lr: Tensor,
                                beta1: Tensor, decay: float, grad: List[Tensor], caution):

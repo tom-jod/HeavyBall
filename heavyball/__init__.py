@@ -116,7 +116,7 @@ class ForeachSOAP(C.BaseOpt):
     def __init__(self, params, lr: float = 3e-3, betas=(0.9, 0.95), shampoo_beta: float = 0.95, eps: float = 1e-8,
                  weight_decay: float = 0.01, precondition_frequency: int = 2, max_precond_dim: int = 2048,  #
                  merge_dims: bool = True, precondition_1d: bool = False, normalize_grads: bool = False,
-                 data_format: str = "channels_first", correct_bias: bool = True, warmup_steps: int = 1,
+                 data_format: str = "channels_first", correct_bias: bool = True, warmup_steps: int = 0,
                  split: bool = False, foreach: bool = True, mars: bool = False, caution: bool = False,
                  mars_gamma: float = 0.0025, palm: bool = C.use_default, precond_scheduler=(1 / 3, 9),
                  beta2_scale: float = 0.8, use_precond_schedule: bool = C.use_default,
@@ -162,7 +162,7 @@ class ForeachPSGDKron(C.BaseOpt):
 
     def __init__(self, params, lr=0.001, beta=0.9, weight_decay=0.0, preconditioner_update_probability=None,
                  max_size_triangular=2048, min_ndim_triangular=2, memory_save_mode=None,
-                 momentum_into_precond_update=True, warmup_steps: int = 1, merge_dims: bool = False,
+                 momentum_into_precond_update=True, warmup_steps: int = 0, merge_dims: bool = False,
                  split: bool = False, store_triu_as_line: bool = True, foreach: bool = True, q_dtype='float32',
                  stochastic_schedule: bool = True, storage_dtype: str = 'float32', mars: bool = False,
                  caution: bool = False, mars_gamma: float = 0.0025, delayed: Optional[bool] = C.use_default,

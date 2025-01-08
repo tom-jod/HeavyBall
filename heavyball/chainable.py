@@ -479,12 +479,7 @@ class ChainOpt(utils.StatefulOptimizer):
             break
 
         group['step'] = state['step'] = step = step + 1
-
-        if group['warmup_steps'] and step < group['warmup_steps']:
-            group['prev_lr'] = group['lr'] = group['base_lr'] * step / group['warmup_steps']
-
-        else:
-            group['prev_lr'] = group['lr'] = group['base_lr']
+        group['prev_lr'] = group['lr'] = group['base_lr'] * step / max(step, group['warmup_steps'] + 1)
 
         if not group['foreach'] or len(p) == 1:
             for param, grad in zip(p, g):
