@@ -167,7 +167,7 @@ class ForeachPSGDKron(C.BaseOpt):
                  stochastic_schedule: bool = True, storage_dtype: str = 'float32', mars: bool = False,
                  caution: bool = False, mars_gamma: float = 0.0025, delayed: Optional[bool] = C.use_default,
                  cached: Optional[bool] = C.use_default, exp_avg_input: Optional[bool] = C.use_default,
-                 gradient_clipping: C.str_or_fn = C.use_default, update_clipping: C.str_or_fn = C.use_default,  #
+                 gradient_clipping: C.str_or_fn = C.use_default, update_clipping: C.str_or_fn = C.use_default,#
                  # expert parameters
                  precond_init_scale=1.0, precond_lr=0.1):
         defaults = locals()
@@ -202,6 +202,9 @@ class ForeachDelayedPSGD(ForeachPSGDKron):
     delayed: bool = True
 
 
+class ForeachCachedNewtonPSGD(ForeachCachedPSGDKron):
+    hessian_approx = True
+
 PalmForEachSoap = PaLMForeachSOAP
 PaLMSOAP = PaLMForeachSOAP
 PaLMSFAdamW = PaLMForeachSFAdamW
@@ -225,4 +228,4 @@ __all__ = ["Muon", "RMSprop", "PrecondSchedulePaLMSOAP", "PSGDKron", "PurePSGD",
            "PrecondScheduleSOAP", "PrecondSchedulePaLMSOAP", 'RMSprop', 'MuonLaProp',  #
            "ForeachAdamW", "ForeachSFAdamW", "ForeachLaProp", "ForeachADOPT", "ForeachSOAP", "ForeachPSGDKron",
            "ForeachPurePSGD", "ForeachDelayedPSGD", "ForeachCachedPSGDKron", "ForeachCachedDelayedPSGDKron",
-           "ForeachRMSprop", "ForeachMuon"]
+           "ForeachRMSprop", "ForeachMuon", 'ForeachCachedNewtonPSGD']

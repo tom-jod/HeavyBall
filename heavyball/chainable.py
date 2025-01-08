@@ -323,7 +323,11 @@ def _update_psgd_precond(cached, Q_cache, group, param, grad, Q_mat, Q, exprs, p
     if not precond_schedule(group, prob, name=f"cumulative_prob_{id(Q)}"):
         return Q_mat
 
-    utils.psgd_update_precond(Q_mat, exprs, grad, group['precond_lr'], Q, group['store_triu_as_line'])
+    utils.psgd_update_precond(Q_mat, exprs, getattr(param, 'hessian_vector', grad), group['precond_lr'], Q,
+                              group['store_triu_as_line'], getattr(param, 'vector', None))
+    if hasattr(param, 'vector'):
+        del param.vector
+        del param.hessian_vector
 
     if grad.dim() > 1 and precond_schedule(group, balance_probability, f"balance_prob_{id(Q)}"):
         if group['store_triu_as_line']:
@@ -335,11 +339,11 @@ def _update_psgd_precond(cached, Q_cache, group, param, grad, Q_mat, Q, exprs, p
         float_prob = prob
     else:
         float_prob = prob(group.get(f'cumulative_prob_{id(Q)}_prob_step', 1))
-    should_use_cache = cached and float_prob < 0.5
+    group['is_cached'] = should_use_cache = cached and float_prob < 0.5
 
     if should_use_cache:  # caching adds extra ops and is not worth the overhead when we precondition at every step
-        return _update_psgd_cache(cached, Q_cache, Q_mat), should_use_cache
-    return Q_mat, should_use_cache
+        return _update_psgd_cache(cached, Q_cache, Q_mat)
+    return Q_mat
 
 
 def _update_psgd_cache(cached, Q_cache, q):
@@ -354,14 +358,14 @@ def _update_psgd_cache(cached, Q_cache, q):
     return Q_cache
 
 
-def _cached_psgd_precond_grad(cached, cache_expr, exprs, update, Q_mat, Q_cache):
-    if cached:
+def _cached_psgd_precond_grad(group, cache_expr, exprs, update, Q_mat, Q_cache):
+    if group.get('is_cached', False):
         return utils.precond_grad_cached_(cache_expr, update, *Q_cache)
     return utils.psgd_precond_grad(exprs[-1], update, *Q_mat)
 
 
-def _fused_cached_psgd_precond_grad(group, grad, param, cached, cache_expr, exprs, update, Q_mat, Q_cache):
-    if cached:
+def _fused_cached_psgd_precond_grad(group, grad, param, cache_expr, exprs, update, Q_mat, Q_cache):
+    if group.get('is_cached', False):
         utils.fused_precond_grad_cached_(cache_expr, update, param, group['lr'], grad, group['weight_decay'],
                                          group['caution'], *Q_cache)
     else:
@@ -375,10 +379,9 @@ def scale_by_psgd(group, update, grad, param, Q, exprs, Q_cache, cache_expr: str
                   prob: Optional[callable] = None):
     update = update.to(memory_format=torch.contiguous_format)
     Q_mat = utils.line_to_triu(Q) if group['store_triu_as_line'] else Q
-    Q_mat, cached = _update_psgd_precond(cached, Q_cache, group, param,
-                                         update if group['momentum_into_precond_update'] else grad, Q_mat, Q, exprs,
-                                         prob)
-    return _cached_psgd_precond_grad(cached, cache_expr, exprs, update, Q_mat, Q_cache)
+    Q_mat = _update_psgd_precond(cached, Q_cache, group, param,
+                                 update if group['momentum_into_precond_update'] else grad, Q_mat, Q, exprs, prob)
+    return _cached_psgd_precond_grad(group, cache_expr, exprs, update, Q_mat, Q_cache)
 
 
 @general_guard("Q", "exprs", ("Q_cache", None), ("cache_expr", None), init_fn=_init_psgd, skip_first=False)
@@ -386,11 +389,9 @@ def scale_by_psgd(group, update, grad, param, Q, exprs, Q_cache, cache_expr: str
 def scale_by_delayed_psgd(group, update, grad, param, Q, exprs, Q_cache, cache_expr: str, cached: bool = False,
                           prob: Optional[callable] = None):
     Q_mat = utils.line_to_triu(Q) if group['store_triu_as_line'] else Q
-    precond = _cached_psgd_precond_grad(cached and group.get('is_cached', False), cache_expr, exprs, update, Q_mat,
-                                        Q_cache)
-    _, group['is_cached'] = _update_psgd_precond(cached, Q_cache, group, param,
-                                                 update if group['momentum_into_precond_update'] else grad, Q_mat, Q,
-                                                 exprs, prob)
+    precond = _cached_psgd_precond_grad(group, cache_expr, exprs, update, Q_mat, Q_cache)
+    _ = _update_psgd_precond(cached, Q_cache, group, param, update if group['momentum_into_precond_update'] else grad,
+                             Q_mat, Q, exprs, prob)
     return precond
 
 
@@ -399,10 +400,9 @@ def scale_by_delayed_psgd(group, update, grad, param, Q, exprs, Q_cache, cache_e
 def update_by_psgd(group, update, grad, param, Q, exprs, Q_cache, cache_expr: str, cached: bool = False,
                    prob: Optional[callable] = None):
     Q_mat = utils.line_to_triu(Q) if group['store_triu_as_line'] else Q
-    Q_mat, cached = _update_psgd_precond(cached, Q_cache, group, param,
-                                         update if group['momentum_into_precond_update'] else grad, Q_mat, Q, exprs,
-                                         prob)
-    _fused_cached_psgd_precond_grad(group, update, param, cached, cache_expr, exprs, update, Q_mat, Q_cache)
+    Q_mat = _update_psgd_precond(cached, Q_cache, group, param,
+                                 update if group['momentum_into_precond_update'] else grad, Q_mat, Q, exprs, prob)
+    _fused_cached_psgd_precond_grad(group, update, param, cache_expr, exprs, update, Q_mat, Q_cache)
     raise SkipUpdate
 
 
@@ -411,11 +411,9 @@ def update_by_psgd(group, update, grad, param, Q, exprs, Q_cache, cache_expr: st
 def update_by_delayed_psgd(group, update, grad, param, Q, exprs, Q_cache, cache_expr: str, cached: bool = False,
                            prob: Optional[callable] = None):
     Q_mat = utils.line_to_triu(Q) if group['store_triu_as_line'] else Q
-    _fused_cached_psgd_precond_grad(group, update, param, cached and group.get('is_cached', False), cache_expr, exprs,
-                                    update, Q_mat, Q_cache)
-    _, group['is_cached'] = _update_psgd_precond(cached, Q_cache, group, param,
-                                                 update if group['momentum_into_precond_update'] else grad, Q_mat, Q,
-                                                 exprs, prob)
+    _fused_cached_psgd_precond_grad(group, update, param, cache_expr, exprs, update, Q_mat, Q_cache)
+    _ = _update_psgd_precond(cached, Q_cache, group, param, update if group['momentum_into_precond_update'] else grad,
+                             Q_mat, Q, exprs, prob)
     raise SkipUpdate
 
 
@@ -464,6 +462,7 @@ class ChainOpt(utils.StatefulOptimizer):
             group['base_lr'] = group['lr']
 
         vals = list(self.split_p_and_g_in_group(group, should_promote=self.promote, beta1=utils.get_beta1(group)))
+
         if not vals:
             return
         p, g = zip(*vals)

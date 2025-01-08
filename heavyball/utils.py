@@ -494,7 +494,7 @@ def _compilable_stochastic_add_(x: List[Tensor], y: List[Tensor], alpha: Union[f
         copy_stochastic_(x_, x32 + y32 * alpha)
 
 
-def stochastic_add_(x: List[Tensor], y: List[Tensor], alpha: Union[float, int, Tensor]):
+def stochastic_add_(x: List[Tensor], y: List[Tensor], alpha: Union[float, int, Tensor] = 1):
     x, y = list_guard(x, y)
     alpha = scalar_guard(alpha, x[0])
     _compilable_stochastic_add_(x, y, alpha)
@@ -585,12 +585,16 @@ def project(grad, Q, back: bool):
 class StatefulOptimizer(torch.optim.Optimizer):
     ema_decay: float = 0.001
     compile_step: bool = False
+    hessian_approx: bool = False
 
     def __init__(self, params, defaults, foreach: bool = True, use_ema: bool = False):
         super().__init__(params, {**defaults, 'foreach': foreach})
         self.fake_groups = {}
         self.use_ema = use_ema
         self.mapping = {}
+
+        if self.hessian_approx and self.compile_step:
+            raise ValueError("Hessian approximation can't be used with compile_step.")
 
     def get_groups(self, group):
         if group['foreach']:
@@ -603,7 +607,7 @@ class StatefulOptimizer(torch.optim.Optimizer):
         return [self.fake_groups[p] for p in group['params']]
 
     def state_(self, arg: Tensor):
-        return self.state[self.mapping.get(arg, arg)]
+        return self.state[arg]
 
     def mars_correct_list(self, group, p_list, g_list, mars_gamma, beta):
         for p, g in zip(p_list, g_list):
@@ -616,36 +620,27 @@ class StatefulOptimizer(torch.optim.Optimizer):
     def split_p_and_g_in_group(self, group: dict, skip_none: bool = True, should_promote: bool = True,
                                beta1: float = -1.0):
         for p in group["params"]:
-            if p.grad is None:
-                if skip_none:
-                    continue
-                grad = None
+            if p in self.mapping:
+                p_views = self.mapping[p]
             else:
-                if should_promote:
-                    grad = promote(p.grad)
-                else:
-                    grad = p.grad
-                if beta1 >= 0 and group.get('mars', False):
-                    self.mars_correct_list(group, [p], [grad], group['mars_gamma'], beta1)
+                self.mapping[p] = p_views = merge_group(group, p)
 
-                p.grad = None
+            grad = getattr(p, 'grad', None)
+            p.grad = None
 
-            if self.compile_step:
-                yield p, grad
-                continue
-
-            p_views = merge_group(group, p)
-            if grad is not None:
-                grad = merge_group(group, grad)
-            for i, pv in enumerate(p_views):
-                self.mapping[pv] = (p, i)
-            if isinstance(p_views, Tensor):
-                yield p_views, grad
-                continue
             if grad is None:
-                yield from zip(p_views, [None] * len(p_views))
-                continue
-            yield from zip(p_views, grad)
+                grad = [getattr(pv, 'grad', None) for pv in p_views]
+            else:
+                grad = merge_group(group, grad)
+
+            for pv, g in zip(p_views, grad):
+                if skip_none and g is None:
+                    continue
+                if should_promote:
+                    g = promote(g)
+                if beta1 >= 0 and group.get('mars', False):
+                    self.mars_correct_list(group, [pv], [g], group['mars_gamma'], beta1)
+                yield pv, g
 
     def state_size(self) -> int:
         total_bytes = 0
@@ -713,17 +708,39 @@ class StatefulOptimizer(torch.optim.Optimizer):
 
     def step(self, closure: Optional[Callable] = None):
         if closure is None:
+            if self.hessian_approx:
+                raise ValueError("Hessian approximation requires a closure.")
             loss = None
         else:
             with torch.enable_grad():
                 loss = closure()
+            if self.hessian_approx:
+                grads = []
+                for top_group in self.param_groups:
+                    for group in self.get_groups(top_group):
+                        for p, g in self.split_p_and_g_in_group(group, skip_none=True, should_promote=False):
+                            grads.append(g)
+                            p.vector = torch.randn_like(p)
+                            p.orig = p.data.clone()
+                            stochastic_add_(p.data, p.vector, tiny_bf16)
+
+                with torch.enable_grad():
+                    closure()
+
+                for top_group in self.param_groups:
+                    for group in self.get_groups(top_group):
+                        for p, g in self.split_p_and_g_in_group(group, skip_none=True, should_promote=False):
+                            p.grad = grads.pop(0)
+                            stochastic_add_(g, p.grad, -1)
+                            p.hessian_vector = g
+                            p.data.copy_(p.orig)
+                            del p.orig
 
         # we assume that parameters are constant and that there are no excessive recompiles
         with torch.no_grad(), torch._dynamo.utils.disable_cache_limit():
             for top_group in self.param_groups:
                 for group in self.get_groups(top_group):
                     self._step(group)
-                    self.mapping.clear()
                     if self.use_ema:
                         self.ema_update(group)
 
@@ -1024,14 +1041,17 @@ def psgd_balance_Q(Q_in):
     torch._foreach_mul_(Q_in, list(norms))
 
 
-def psgd_calc_A_and_conjB(exprA, G, Q):
+def psgd_calc_A_and_conjB(exprA, G, Q, V=None):
     eps = scalar_guard(math.sqrt(torch.finfo(torch.float32).eps), G)
     eps *= G.norm() / G.numel()
     G = G + torch.randn_like(G) * eps
     md = min_dtype(Q + [G])
     A = torch.einsum(exprA, *[q.to(md) for q in Q], G.to(md)).to(G.dtype)
     order = G.dim()
-    conjB = torch.randn(G.shape[1:] + G.shape[:1], dtype=promote(G.dtype), device=G.device)
+    if V is None:
+        conjB = torch.randn(G.shape[1:] + G.shape[:1], dtype=promote(G.dtype), device=G.device)
+    else:
+        conjB = V.permute(*range(1, order), 0).to(promote(G.dtype))
     Q = [promote(q) for q in Q]
     for i, q in enumerate(Q):
         if q.dim() <= 1:
@@ -1060,11 +1080,11 @@ def psgd_lb(A, max_abs):
 
 
 @decorator
-def psgd_update_precond(Q, exprs, G, precond_lr, oq, store_triu_as_line):
+def psgd_update_precond(Q, exprs, G, precond_lr, oq, store_triu_as_line, V):
     """Update Kronecker product preconditioner Q with pair (V, G)."""
     exprA, exprGs, _ = exprs
 
-    A, conjB = psgd_calc_A_and_conjB(exprA, G, Q)
+    A, conjB = psgd_calc_A_and_conjB(exprA, G, Q, V)
 
     for q, exprG, o in zip(Q, exprGs, oq):
         term1 = promote(torch.einsum(exprG, A, A))

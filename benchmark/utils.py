@@ -43,14 +43,20 @@ def _get_objective(failure_threshold, model, opt, steps, group, data, loss_fn, w
         o = get_optim(opt, m.parameters(), **params, weight_decay=weight_decay, **kwargs)
         loss_hist = []
 
+
+
         for i in range(steps // group):
             for _ in range(group):
                 inp, tgt = data()
-                loss = m() if inp is None else m(inp)
-                if loss_fn is not None:
-                    loss = loss_fn(loss, tgt)
-                loss.backward()
-                o.step()
+
+                def _closure():
+                    loss = m() if inp is None else m(inp)
+                    if loss_fn is not None:
+                        loss = loss_fn(loss, tgt)
+                    loss.backward()
+                    return loss
+
+                loss = o.step(_closure)
                 o.zero_grad()
                 loss_hist.append(loss.detach())
                 if loss0 is None:
