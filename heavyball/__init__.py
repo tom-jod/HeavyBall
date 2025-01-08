@@ -129,8 +129,10 @@ class ForeachSOAP(C.BaseOpt):
 
         if use_precond_schedule:
             del defaults['precondition_frequency']
+            self.precond_schedule = defaults.pop("precond_scheduler")
         else:
             del defaults['precond_scheduler']
+            self.precond_schedule = defaults.pop("precondition_frequency")
         super().__init__(params, defaults, foreach, gradient_clipping, update_clipping, palm,  #
                          C.scale_by_soap)
 
@@ -172,6 +174,7 @@ class ForeachPSGDKron(C.BaseOpt):
                  precond_init_scale=1.0, precond_lr=0.1):
         defaults = locals()
         defaults.pop("self")
+        self.precond_schedule = defaults.pop("preconditioner_update_probability")
         params = defaults.pop("params")
 
         delayed = C.default(delayed, self.delayed)
@@ -181,8 +184,7 @@ class ForeachPSGDKron(C.BaseOpt):
 
         super().__init__(params, defaults, foreach, gradient_clipping, update_clipping, False,  #
                          *(C.exp_avg,) * exp_avg_input,  #
-                         functools.partial(C.scale_by_delayed_psgd if delayed else C.scale_by_psgd, cached=cached,
-                                           prob=preconditioner_update_probability))
+                         functools.partial(C.scale_by_delayed_psgd if delayed else C.scale_by_psgd, cached=cached))
 
 
 class ForeachPurePSGD(ForeachPSGDKron):

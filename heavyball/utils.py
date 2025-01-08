@@ -586,25 +586,22 @@ class StatefulOptimizer(torch.optim.Optimizer):
     ema_decay: float = 0.001
     compile_step: bool = False
     hessian_approx: bool = False
+    precond_schedule: Union[Callable, float, None] = None
+    stochastic_schedule: bool = False
 
     def __init__(self, params, defaults, foreach: bool = True, use_ema: bool = False):
         super().__init__(params, {**defaults, 'foreach': foreach})
-        self.fake_groups = {}
         self.use_ema = use_ema
         self.mapping = {}
+        self._inner_group = {}
+        self._precond_rng = random.Random(0x12312)
+        self._is_preconditioning = None
 
         if self.hessian_approx and self.compile_step:
             raise ValueError("Hessian approximation can't be used with compile_step.")
 
     def get_groups(self, group):
-        if group['foreach']:
-            return [group]
-
-        for p in group['params']:
-            if p not in self.fake_groups:
-                self.fake_groups[p] = {**group, 'params': [p]}
-
-        return [self.fake_groups[p] for p in group['params']]
+        return [group]
 
     def state_(self, arg: Tensor):
         return self.state[arg]
@@ -660,89 +657,89 @@ class StatefulOptimizer(torch.optim.Optimizer):
 
     def ema_update(self):
         with torch.no_grad():
-            for top_group in self.param_groups:
-                for group in self.get_groups(top_group):
-                    active_p = [p for p in group['params']]
+            for group in self.param_groups:
+                active_p = [p for p in group['params']]
 
-                    if not active_p:
-                        return
+                if not active_p:
+                    return
 
-                    k = group['ema_step'] = group.get('ema_step', -1) + 1
+                k = group['ema_step'] = group.get('ema_step', -1) + 1
 
-                    for p in active_p:
-                        if 'param_ema' not in self.state_(p):
-                            self.state_(p)['param_ema'] = torch.zeros_like(p.data, memory_format=torch.preserve_format)
+                for p in active_p:
+                    if 'param_ema' not in self.state_(p):
+                        self.state_(p)['param_ema'] = torch.zeros_like(p.data, memory_format=torch.preserve_format)
 
-                    y, param_ema = zip(*[(p.data, self.state_(p)['param_ema']) for p in active_p])
-                    torch._foreach_lerp_(param_ema, y, weight=beta_debias(1 - self.ema_decay, k + 1))
+                y, param_ema = zip(*[(p.data, self.state_(p)['param_ema']) for p in active_p])
+                torch._foreach_lerp_(param_ema, y, weight=beta_debias(1 - self.ema_decay, k + 1))
 
     def copy_emas_to_params(self):
         with torch.no_grad():
-            for top_group in self.param_groups:
-                for group in self.get_groups(top_group):
-                    active_p = [p for p in group['params']]
+            for group in self.param_groups:
+                active_p = [p for p in group['params']]
 
-                    if not active_p:
-                        return
+                if not active_p:
+                    return
 
-                    for p in active_p:
-                        if 'param_ema' in self.state_(p):
-                            p_clone = p.data.clone()
-                            set_(p.data, self.state_(p)['param_ema'])
-                            set_(self.state_(p)['param_ema'], p_clone)
+                for p in active_p:
+                    if 'param_ema' in self.state_(p):
+                        p_clone = p.data.clone()
+                        set_(p.data, self.state_(p)['param_ema'])
+                        set_(self.state_(p)['param_ema'], p_clone)
 
     def copy_params_to_emas(self):
         with torch.no_grad():
-            for top_group in self.param_groups:
-                for group in self.get_groups(top_group):
-                    active_p = [p for p in group['params']]
+            for group in self.param_groups:
+                active_p = [p for p in group['params']]
 
-                    if not active_p:
-                        return
+                if not active_p:
+                    return
 
-                    for p in active_p:
-                        if 'param_ema' in self.state_(p):
-                            ema_clone = self.state_(p)['param_ema'].data.clone()
-                            set_(self.state_(p)['param_ema'], p.data)
-                            set_(p.data, ema_clone)
+                for p in active_p:
+                    if 'param_ema' in self.state_(p):
+                        ema_clone = self.state_(p)['param_ema'].data.clone()
+                        set_(self.state_(p)['param_ema'], p.data)
+                        set_(p.data, ema_clone)
 
     def step(self, closure: Optional[Callable] = None):
+        if self.precond_schedule is None:
+            self._is_preconditioning = False
+        else:
+            self._is_preconditioning = psgd_should_update(self._inner_group, self.precond_schedule, self._precond_rng)
+        hessian_approx = self.hessian_approx and self._is_preconditioning
         if closure is None:
-            if self.hessian_approx:
+            if hessian_approx:
                 raise ValueError("Hessian approximation requires a closure.")
             loss = None
         else:
             with torch.enable_grad():
                 loss = closure()
-            if self.hessian_approx:
+            if hessian_approx:
                 grads = []
-                for top_group in self.param_groups:
-                    for group in self.get_groups(top_group):
-                        for p, g in self.split_p_and_g_in_group(group, skip_none=True, should_promote=False):
-                            grads.append(g)
-                            p.vector = torch.randn_like(p)
-                            p.orig = p.data.clone()
-                            stochastic_add_(p.data, p.vector, tiny_bf16)
+                for group in self.param_groups:
+                    for p, g in self.split_p_and_g_in_group(group, skip_none=True, should_promote=False):
+                        grads.append(g)
+                        p.vector = torch.randn_like(p)
+                        p.orig = p.data.clone()
+                        stochastic_add_(p.data, p.vector, tiny_bf16)
 
                 with torch.enable_grad():
                     closure()
 
-                for top_group in self.param_groups:
-                    for group in self.get_groups(top_group):
-                        for p, g in self.split_p_and_g_in_group(group, skip_none=True, should_promote=False):
-                            p.grad = grads.pop(0)
-                            stochastic_add_(g, p.grad, -1)
-                            p.hessian_vector = g
-                            p.data.copy_(p.orig)
-                            del p.orig
+                for group in self.param_groups:
+                    for p, g in self.split_p_and_g_in_group(group, skip_none=True, should_promote=False):
+                        p.grad = grads.pop(0)
+                        stochastic_add_(g, p.grad, -1)
+                        p.hessian_vector = g
+                        p.data.copy_(p.orig)
+                        del p.orig
 
         # we assume that parameters are constant and that there are no excessive recompiles
         with torch.no_grad(), torch._dynamo.utils.disable_cache_limit():
-            for top_group in self.param_groups:
-                for group in self.get_groups(top_group):
-                    self._step(group)
-                    if self.use_ema:
-                        self.ema_update(group)
+            for group in self.param_groups:
+                group['is_preconditioning'] = self._is_preconditioning
+                self._step(group)
+                if self.use_ema:
+                    self.ema_update(group)
 
         return loss
 

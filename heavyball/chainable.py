@@ -312,7 +312,7 @@ def scale_by_soap(group, update, grad, param, exp_avg, exp_avg_sq, Q, GG, inner:
 
     for u, q, gg, eas in zip(update, Q, GG, exp_avg_sq):
         utils.update_preconditioner(u, q, gg, eas, group['max_precond_dim'], group['precondition_1d'],
-                                    utils.beta_debias(group['shampoo_beta'], group['step']), precond_schedule(group))
+                                    utils.beta_debias(group['shampoo_beta'], group['step']),  group['is_preconditioning'])
     return precond
 
 
@@ -320,7 +320,7 @@ def _update_psgd_precond(cached, Q_cache, group, param, grad, Q_mat, Q, exprs, p
     if prob is None:
         prob = utils.precond_update_prob_schedule()
 
-    if not precond_schedule(group, prob, name=f"cumulative_prob_{id(Q)}"):
+    if not group['is_preconditioning']:
         return Q_mat
 
     utils.psgd_update_precond(Q_mat, exprs, getattr(param, 'hessian_vector', grad), group['precond_lr'], Q,
