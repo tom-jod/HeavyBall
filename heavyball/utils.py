@@ -953,14 +953,12 @@ def precond_schedule(step, precond_scheduler, rng):
 
 def get_soap_precond_schedule(precond_scheduler):
     rng = random.Random(0x12312)
-    step = 0
 
-    def _inner():
-        nonlocal step
-        step += 1
+    def _inner(step):
         return precond_schedule(step, precond_scheduler, rng)
 
     return _inner
+
 
 def init_Q_exprs(t, scale, max_size, min_ndim_triangular, memory_save_mode, dtype=None):
     """For a scalar or tensor t, we initialize its preconditioner Q and
