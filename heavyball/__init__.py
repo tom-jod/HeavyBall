@@ -129,10 +129,10 @@ class ForeachSOAP(C.BaseOpt):
 
         if use_precond_schedule:
             del defaults['precondition_frequency']
-            self.precond_schedule = defaults.pop("precond_scheduler")
+            self.precond_schedule = utils.get_soap_precond_schedule(defaults.pop("precond_scheduler"))
         else:
             del defaults['precond_scheduler']
-            self.precond_schedule = defaults.pop("precondition_frequency")
+            self.precond_schedule = 1 / defaults.pop("precondition_frequency")
         super().__init__(params, defaults, foreach, gradient_clipping, update_clipping, palm,  #
                          C.scale_by_soap)
 
@@ -174,7 +174,7 @@ class ForeachPSGDKron(C.BaseOpt):
                  precond_init_scale=1.0, precond_lr=0.1):
         defaults = locals()
         defaults.pop("self")
-        self.precond_schedule = defaults.pop("preconditioner_update_probability")
+        self.precond_schedule = defaults.pop("preconditioner_update_probability") or utils.precond_update_prob_schedule()
         params = defaults.pop("params")
 
         delayed = C.default(delayed, self.delayed)
