@@ -593,7 +593,7 @@ class StatefulOptimizer(torch.optim.Optimizer):
         super().__init__(params, {**defaults, 'foreach': foreach})
         self.use_ema = use_ema
         self.mapping = {}
-        self._inner_group = {}
+        self._inner_group = {'stochastic_schedule': self.stochastic_schedule}
         self._precond_rng = random.Random(0x12312)
         self._is_preconditioning = None
 
