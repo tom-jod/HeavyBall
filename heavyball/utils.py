@@ -341,6 +341,11 @@ def inplace_orthogonal_(x: Tensor, mode: str, out: Tensor, scale_mode: str):
     set_(out, y)
 
 
+@decorator_knowngood
+def _compilable_scatter_set(target, source, index):
+    target[:] = source.contiguous()[index].reshape_as(target)
+
+
 def get_orthogonal_matrix_QR(GG, Q, exp_avg_sq):
     """
     Computes the eigenbases of the preconditioner using one round of power iteration
@@ -375,7 +380,7 @@ def get_orthogonal_matrix_QR(GG, Q, exp_avg_sq):
 
     indices = tuple(slice(None) if ind is None else ind.view(*(1,) * i, -1, *(1,) * (exp_avg_sq.dim() - i - 1))  #
                     for i, ind in enumerate(indices))
-    set_(exp_avg_sq, exp_avg_sq[indices])
+    _compilable_scatter_set(exp_avg_sq, exp_avg_sq, indices)
 
 
 def get_orthogonal_matrix(mat):
