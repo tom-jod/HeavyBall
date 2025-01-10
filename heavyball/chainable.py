@@ -188,6 +188,11 @@ def update_by_laprop(group, update, grad, param, exp_avg, exp_avg_sq):
     raise SkipUpdate
 
 
+@no_state
+def orthogonalize_grad_to_param(group, update, grad, param):
+    return utils.orthogonalize_grad_to_param(param, update, group['eps'])
+
+
 @copy_guard(2, "z")
 @no_state
 def update_by_schedule_free(group, update, grad, param, z):
@@ -312,7 +317,8 @@ def scale_by_soap(group, update, grad, param, exp_avg, exp_avg_sq, Q, GG, inner:
 
     for u, q, gg, eas in zip(update, Q, GG, exp_avg_sq):
         utils.update_preconditioner(u, q, gg, eas, group['max_precond_dim'], group['precondition_1d'],
-                                    utils.beta_debias(group['shampoo_beta'], group['step']),  group['is_preconditioning'])
+                                    utils.beta_debias(group['shampoo_beta'], group['step']),
+                                    group['is_preconditioning'])
     return precond
 
 

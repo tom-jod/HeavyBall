@@ -28,9 +28,9 @@ def beale(x, y):
 
 @app.command()
 def main(method: List[str] = typer.Option(['qr'], help='Eigenvector method to use (for SOAP)'),
-         dtype: List[str] = typer.Option(["float32"], help='Data type to use'), steps: int = 100,
+         dtype: List[str] = typer.Option(["float32"], help='Data type to use'), steps: int = 200,
          weight_decay: float = 0,
-         opt: List[str] = typer.Option(['AdamW', 'LaProp', 'ForeachPSGDKron', 'ForeachCachedNewtonPSGD'], help='Optimizers to use'),
+         opt: List[str] = typer.Option(['OrthoLaProp', 'LaProp'], help='Optimizers to use'),
          display_steps: int = 20):
     dtype = [getattr(torch, d) for d in dtype]
     coords = (-7, -4)
@@ -58,7 +58,7 @@ def main(method: List[str] = typer.Option(['qr'], help='Eigenvector method to us
                 loss = loss.results[-1]['loss']
             return loss < 0, {}
 
-        model = trial(model, data, None, win, steps, o, d, 1, 1, wd, m, 1, 1, group=100, base_lr=1e-4, trials=1000)
+        model = trial(model, data, None, win, steps, o, d, 1, 1, wd, m, 1, 1, group=100, base_lr=1e-4, trials=300)
 
         if img is None:
             fig, ax = model.plot_image(cmap="gray", levels=20, return_fig=True, xlim=(-8, 2), ylim=(-8, 2))

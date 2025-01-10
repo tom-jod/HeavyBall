@@ -317,6 +317,10 @@ def nesterov_momentum(state, grad, beta):
     return grad
 
 
+def _compilable_grafting(magnitude, direction):
+    return direction * (magnitude.norm() / direction.norm().clamp(min=1e-6))
+
+
 # mode in ("newtonschulz", "qr", "svd")
 # scale_mode in ("none", "scale", "graft")
 @decorator_knowngood
@@ -335,7 +339,7 @@ def inplace_orthogonal_(x: Tensor, mode: str, out: Tensor, scale_mode: str):
     elif scale_mode == "scale":
         y *= max(1, x.size(0) / x.size(1)) ** 0.5
     elif scale_mode == "graft":
-        y *= x.norm() / y.norm().clamp(min=1e-6)
+        y = _compilable_grafting(x, y)
     else:
         raise NotImplementedError(f"Unknown scale_mode: {scale_mode}")
     set_(out, y)
@@ -1348,6 +1352,29 @@ def mars_correction(g, old_g, beta1, gamma):
     g, old_g = list_guard(g), list_guard(old_g)
     a = scalar_guard(a, g[0])
     _compilable_mars_correction_(g, old_g, a)
+
+
+@decorator_knowngood
+def _compilable_orthogonalization(weight: List[Tensor], grad: List[Tensor], eps: Tensor, graft: bool = True):
+    """
+    Implements OrthoGrad from "Grokking at the Edge of Numerical Stability" (https://arxiv.org/abs/2501.04697)
+    """
+
+    for w, g in zip(weight, grad):
+        proj = promote((w * g).sum()) / promote((w * w).sum()).add(eps)
+        out = promote(g) - proj * promote(w)  # promote in this funky way to keep traffic minimal
+
+        if graft:
+            out = _compilable_grafting(g, out)
+
+        copy_stochastic_(g, out)
+
+
+def orthogonalize_grad_to_param(weight, grad, eps, graft=True):
+    weight, grad = list_guard(weight, grad)
+    eps = scalar_guard(eps, weight[0])
+    _compilable_orthogonalization(weight, grad, eps, graft)
+    return grad
 
 
 @decorator_knowngood
