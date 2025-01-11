@@ -43,8 +43,6 @@ def _get_objective(failure_threshold, model, opt, steps, group, data, loss_fn, w
         o = get_optim(opt, m.parameters(), **params, weight_decay=weight_decay, **kwargs)
         loss_hist = []
 
-
-
         for i in range(steps // group):
             for _ in range(group):
                 inp, tgt = data()
@@ -92,6 +90,8 @@ def _get_objective(failure_threshold, model, opt, steps, group, data, loss_fn, w
         return m
 
     def _get_best():
+        nonlocal group
+        group = 1
         return _inner(np.exp(avg))[1]
 
     def _get_attempts():
@@ -125,7 +125,7 @@ def trial(model, data, loss_fn, win_condition, steps, opt, dtype, size, batch, w
                                   hyperopt.hp.loguniform('1mshampoo_beta', np.log(1e-3), np.log(1))),  #
                             max_evals=trials, algo=hyperopt.atpe.suggest,
                             early_stop_fn=lambda x: win_condition(get_m(), x), return_argmin=True,
-                            show_progressbar=False)
+                            show_progressbar=True)
         torch.cuda.synchronize()
         end_time = datetime.now()
         print(f"Took: {end_time - start_time} | Attempt: {get_attempt()} | {opt.__name__}(lr={out['lr']:.5f}, betas=({1 - out['1mbeta1']:.3f}, {1 - out['1mbeta2']:.4f}), shampoo_beta={1 - out['1mshampoo_beta']:.3f})")
