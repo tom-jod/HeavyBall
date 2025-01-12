@@ -770,22 +770,23 @@ def _lerp32(state: List[Tensor], grad: List[Tensor], beta):
 
 @decorator_knowngood
 def _compilable_adam_(exp_avg: List[Tensor], exp_avg_sq: List[Tensor], grad: List[Tensor], beta1: Tensor, beta2: Tensor,
-                      step: Tensor):
+                      step: Tensor, eps: Tensor):
     beta1 = beta_debias(beta1, step)
     beta2 = beta_debias(beta2, step)
 
     g32 = list(map(promote, grad))
 
     exp_avg32 = _lerp32(exp_avg, g32, beta1)
-    denom = exp_avg_sq_(exp_avg_sq, g32, beta2, 1e-8)
+    denom = exp_avg_sq_(exp_avg_sq, g32, beta2, eps)
     u32 = torch._foreach_div(exp_avg32, denom)
     copy_stochastic_list_(grad, u32)
 
 
-def adam_(exp_avg: List[Tensor], exp_avg_sq: List[Tensor], grad: List[Tensor], beta1: float, beta2: float, step: int):
+def adam_(exp_avg: List[Tensor], exp_avg_sq: List[Tensor], grad: List[Tensor], beta1: float, beta2: float, step: int,
+          eps: float):
     exp_avg, exp_avg_sq, grad = map(list_guard, (exp_avg, exp_avg_sq, grad))
-    beta1, beta2, step = scalar_guard(beta1, beta2, step, exp_avg[0])
-    _compilable_adam_(exp_avg, exp_avg_sq, grad, beta1, beta2, step)
+    beta1, beta2, step, eps = scalar_guard(beta1, beta2, step, eps, exp_avg[0])
+    _compilable_adam_(exp_avg, exp_avg_sq, grad, beta1, beta2, step, eps)
     return grad
 
 
