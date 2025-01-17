@@ -364,10 +364,12 @@ def _update_psgd_cache(cached, Q_cache, q):
     return Q_cache
 
 
-def _cached_psgd_precond_grad(group, cache_expr, exprs, update, Q_mat, Q_cache):
+def _cached_psgd_precond_grad(group, cache_expr, exprs, update, Q_mat, Q_cache, grad):
     if group.get('is_cached', False):
-        return utils.precond_grad_cached_(cache_expr, update, *Q_cache)
-    return utils.psgd_precond_grad(exprs[-1], update, *Q_mat)
+        out = utils.precond_grad_cached_(cache_expr, update, *Q_cache, caution=group['caution'], grad=grad)
+    out = utils.psgd_precond_grad(exprs[-1], update, *Q_mat, caution=group['caution'], grad=grad)
+    group['caution'] = False  # we already cautioned here - shouldn't do it again
+    return out
 
 
 def _fused_cached_psgd_precond_grad(group, grad, param, cache_expr, exprs, update, Q_mat, Q_cache):
@@ -387,7 +389,7 @@ def scale_by_psgd(group, update, grad, param, Q, exprs, Q_cache, cache_expr: str
     Q_mat = utils.line_to_triu(Q) if group['store_triu_as_line'] else Q
     Q_mat = _update_psgd_precond(cached, Q_cache, group, param,
                                  update if group['momentum_into_precond_update'] else grad, Q_mat, Q, exprs, prob)
-    return _cached_psgd_precond_grad(group, cache_expr, exprs, update, Q_mat, Q_cache)
+    return _cached_psgd_precond_grad(group, cache_expr, exprs, update, Q_mat, Q_cache, grad)
 
 
 @general_guard("Q", "exprs", ("Q_cache", None), ("cache_expr", None), init_fn=_init_psgd, skip_first=False)
@@ -395,7 +397,7 @@ def scale_by_psgd(group, update, grad, param, Q, exprs, Q_cache, cache_expr: str
 def scale_by_delayed_psgd(group, update, grad, param, Q, exprs, Q_cache, cache_expr: str, cached: bool = False,
                           prob: Optional[callable] = None):
     Q_mat = utils.line_to_triu(Q) if group['store_triu_as_line'] else Q
-    precond = _cached_psgd_precond_grad(group, cache_expr, exprs, update, Q_mat, Q_cache)
+    precond = _cached_psgd_precond_grad(group, cache_expr, exprs, update, Q_mat, Q_cache, grad)
     _ = _update_psgd_precond(cached, Q_cache, group, param, update if group['momentum_into_precond_update'] else grad,
                              Q_mat, Q, exprs, prob)
     return precond
@@ -467,6 +469,8 @@ class ChainOpt(utils.StatefulOptimizer):
                             f'only supported with foreach=True (currently foreach={group["foreach"]}).')
             group['base_lr'] = group['lr']
 
+        caution = group['caution']
+
         vals = list(self.split_p_and_g_in_group(group, should_promote=self.promote, beta1=utils.get_beta1(group)))
 
         if not vals:
@@ -492,6 +496,7 @@ class ChainOpt(utils.StatefulOptimizer):
         else:
             chain(self.state_, group, g, p, *self.fns)
 
+        group['caution'] = caution
         group['lr'] = group['prev_lr']
         group['step'] = None
 

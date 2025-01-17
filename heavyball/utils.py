@@ -1300,7 +1300,10 @@ def psgd_should_update(group, prob: Union[float, callable], rng: Optional[random
 
 
 @decorator_knowngood
-def precond_grad_cached_(expr: str, ea: Tensor, *cached_q: Tensor, cast: bool = True):
+def precond_grad_cached_(expr: str, ea: Tensor, *cached_q: Tensor, caution: bool = False, grad: Optional[Tensor] = None,
+                         cast: bool = True):
+    if caution:
+        ea = _compilable_cautioning(grad, ea)
     md = min_dtype(list(cached_q) + [ea])
     args = [q.to(md) for q in cached_q]
     args = args + [ea.to(md)]
@@ -1312,8 +1315,8 @@ def precond_grad_cached_(expr: str, ea: Tensor, *cached_q: Tensor, cast: bool = 
 
 @decorator_knowngood
 def _compilable_fused_precond_grad_cached_(expr: str, ea: Tensor, param, lr, grad, decay, caution, *cached_q: Tensor):
-    precond = precond_grad_cached_(expr, ea, *cached_q, cast=False)
-    update_param_(param, precond, lr, decay, caution=caution, grad=grad)
+    precond = precond_grad_cached_(expr, ea, *cached_q, caution=caution, grad=grad, cast=False)
+    update_param_(param, precond, lr, decay, caution=False)
 
 
 def fused_precond_grad_cached_(expr: str, ea: Tensor, param, lr, grad, decay, caution, *cached_q: Tensor):
@@ -1322,7 +1325,9 @@ def fused_precond_grad_cached_(expr: str, ea: Tensor, param, lr, grad, decay, ca
 
 
 @decorator_knowngood
-def psgd_precond_grad(expr: str, ea: Tensor, *preconds: Tensor):
+def psgd_precond_grad(expr: str, ea: Tensor, *preconds: Tensor, caution: bool = False, grad: Optional[Tensor] = None):
+    if caution:
+        ea = _compilable_cautioning(grad, ea)
     md = min_dtype(list(preconds) + [ea])
     args = [q.to(md) for q in preconds]
     args = args + args + [ea.to(md)]
@@ -1332,8 +1337,8 @@ def psgd_precond_grad(expr: str, ea: Tensor, *preconds: Tensor):
 
 @decorator_knowngood
 def _compilable_fused_psgd_precond_grad(expr: str, ea: Tensor, param, lr, grad, decay, caution, *preconds: Tensor):
-    precond = psgd_precond_grad(expr, ea, *preconds)
-    update_param_(param, precond, lr, decay, caution=caution, grad=grad)
+    precond = psgd_precond_grad(expr, ea, *preconds, caution=caution, grad=grad)
+    update_param_(param, precond, lr, decay, caution=False, grad=grad)
 
 
 def fused_psgd_precond_grad(expr: str, ea: Tensor, param, lr, grad, decay, caution, *preconds: Tensor):
