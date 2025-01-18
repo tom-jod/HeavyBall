@@ -414,6 +414,11 @@ def update_by_psgd(group, update, grad, param, Q, exprs, Q_cache, cache_expr: st
     raise SkipUpdate
 
 
+@no_state
+def sign(group, update, grad, param, graft: bool = True):
+    return utils.sign_(update, graft)
+
+
 @general_guard("Q", "exprs", ("Q_cache", None), ("cache_expr", None), init_fn=_init_psgd, skip_first=False)
 @no_state_no_foreach
 def update_by_delayed_psgd(group, update, grad, param, Q, exprs, Q_cache, cache_expr: str, cached: bool = False,
@@ -439,8 +444,7 @@ def apply_to_idx(fn, idx):
     return _fn
 
 
-def chain(state: Union[callable, dict], group, grad, param, *fns):
-    update = [torch.clone(g, memory_format=torch.preserve_format) for g in grad]
+def _inner_chain(state, group, update, grad, param, *fns):
     skip_update = False
     for fn in fns:
         try:
@@ -450,8 +454,28 @@ def chain(state: Union[callable, dict], group, grad, param, *fns):
             continue
         if update is None:
             break
+    return update, skip_update
+
+
+def chain(state: Union[callable, dict], group, grad, param, *fns):
+    update = [torch.clone(g, memory_format=torch.preserve_format) for g in grad]
+    update, skip_update = _inner_chain(state, group, update, grad, param, *fns)
     if not skip_update and update is not None:
         utils.update_param_(param, update, group['lr'], group['weight_decay'], caution=group['caution'], grad=grad)
+
+
+def create_branch(branches: List[List[callable]], merge_fn: callable):
+    def _branch(state, group, update, grad, param):
+        outputs = []
+        for branch in branches:
+            branch_update = [torch.clone(g, memory_format=torch.preserve_format) for u in update]
+            branch_update, skip_update = _inner_chain(state, group, branch_update, grad, param, *branch)
+            if skip_update:
+                raise ValueError("Branches should not skip updates")
+            outputs.append(branch_update)
+        return merge_fn(outputs)
+
+    return _branch
 
 
 class ChainOpt(utils.StatefulOptimizer):

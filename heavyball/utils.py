@@ -1222,6 +1222,21 @@ def identity(x):
 
 
 @decorator_knowngood
+def _compilable_sign_(grad: List[Tensor], graft: boool):
+    for g_ in grad:
+        gs = x.sign()
+        if graft:
+            gs = _compilable_grafting(g_, gs)
+        copy_stochastic_(x_, gs)
+
+
+def sign_(grad: List[Tensor], graft: bool = True):
+    grad = list_guard(grad)
+    _compilable_sign_(grad, graft)
+    return grad
+
+
+@decorator_knowngood
 def _compilable_trust_region_clip_(grad, lerp, scale):
     # (sgn(x) * log(1 + |x|) * 0.1 + tanh(x) * 0.9).clamp_(min=-2, max=2)
     for x_ in grad:
