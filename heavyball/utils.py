@@ -1229,7 +1229,7 @@ def identity(x):
 
 
 @decorator_knowngood
-def _compilable_sign_(grad: List[Tensor], graft: boool):
+def _compilable_sign_(grad: List[Tensor], graft: bool):
     for g_ in grad:
         gs = x.sign()
         if graft:
