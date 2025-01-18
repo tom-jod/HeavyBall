@@ -970,6 +970,10 @@ def get_soap_precond_schedule(precond_scheduler):
     return _inner
 
 
+def _max_idx(x: List[int]):
+    return len(x) - 1 - np.argmax(x[::-1])  # we want to start counting from the back, as torch is fan-out/fan-in
+
+
 def init_Q_exprs(t, scale, max_size, min_ndim_triangular, memory_save_mode, dtype=None):
     """For a scalar or tensor t, we initialize its preconditioner Q and
     reusable einsum expressions for updating Q and preconditioning gradient.
@@ -992,17 +996,23 @@ def init_Q_exprs(t, scale, max_size, min_ndim_triangular, memory_save_mode, dtyp
 
     scale = scale ** (1 / len(shape))
 
+    dim_diag = [False for _ in shape]
     if memory_save_mode is None:
-        dim_diag = [False for _ in shape]
+        pass
     elif memory_save_mode == "one_diag":
-        rev_sorted_dims = np.argsort(shape)[::-1]
-        dim_diag = [False for _ in shape]
-        dim_diag[rev_sorted_dims[0]] = True
+        dim_diag[_max_idx(shape)] = True
+    elif memory_save_mode == "smart_one_diag":
+        if len(shape) < 2:
+            pass
+        else:
+            sorted_shape = sorted(shape)
+            if sorted_shape[-1] > sorted_shape[-2]:
+                dim_diag[_max_idx(shape)] = True
     elif memory_save_mode == "all_diag":
         dim_diag = [True for _ in shape]
     else:
         raise ValueError(f"Invalid memory_save_mode: {memory_save_mode}, must be one of "
-                         "[None, 'one_diag', 'all_diag']")
+                         "[None, 'one_diag', 'all_diag', 'smart_one_diag']")
 
     Q = []
     piece1A, piece2A, piece3A = ([], "", "")
