@@ -1002,12 +1002,9 @@ def init_Q_exprs(t, scale, max_size, min_ndim_triangular, memory_save_mode, dtyp
     elif memory_save_mode == "one_diag":
         dim_diag[_max_idx(shape)] = True
     elif memory_save_mode == "smart_one_diag":
-        if len(shape) < 2:
-            pass
-        else:
-            sorted_shape = sorted(shape)
-            if sorted_shape[-1] > sorted_shape[-2]:
-                dim_diag[_max_idx(shape)] = True
+        sorted_shape = sorted(shape)
+        if len(shape) >= 2 and sorted_shape[-1] > sorted_shape[-2]:
+            dim_diag[_max_idx(shape)] = True
     elif memory_save_mode == "all_diag":
         dim_diag = [True for _ in shape]
     else:
