@@ -1231,10 +1231,10 @@ def identity(x):
 @decorator_knowngood
 def _compilable_sign_(grad: List[Tensor], graft: bool):
     for g_ in grad:
-        gs = x.sign()
+        gs = g_.sign()
         if graft:
             gs = _compilable_grafting(g_, gs)
-        copy_stochastic_(x_, gs)
+        copy_stochastic_(g_, gs)
 
 
 def sign_(grad: List[Tensor], graft: bool = True):
