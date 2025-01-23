@@ -1231,7 +1231,7 @@ def identity(x):
 @decorator_knowngood
 def _compilable_weight_decay_to_ema_(p, ema, ema_decay, weight_decay):
     ema32 = _lerp32(ema, p, ema_decay)
-    _lerp32(p, ema32, weight_decay)
+    _lerp32(p, ema32, 1 - weight_decay)
 
 
 def weight_decay_to_ema_(p, ema, ema_decay, weight_decay):

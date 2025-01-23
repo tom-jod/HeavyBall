@@ -155,15 +155,17 @@ def exp_avg(group, update, grad, param, exp_avg):
 @zero_guard('exp_avg')
 @no_state
 def weight_decay_to_ema(group, update, grad, param, exp_avg):
-    return utils.weight_decay_to_ema_(exp_avg, update, 1 - utils.beta_debias(group['ema_beta'], group['step']),
-                                      group['weight_decay_to_ema'] * group['lr'])
+    utils.weight_decay_to_ema_(exp_avg, update, utils.beta_debias(group['ema_beta'], group['step']),
+                               group['weight_decay_to_ema'] * group['lr'])
+    return update
 
 
 @zero_guard('exp_avg')
 @no_state
 def l1_weight_decay_to_ema(group, update, grad, param, exp_avg):
-    return utils.l1_weight_decay_to_ema_(exp_avg, update, 1 - utils.beta_debias(group['ema_beta'], group['step']),
-                                         group['weight_decay_to_ema'] * group['lr'])
+    utils.l1_weight_decay_to_ema_(exp_avg, update, utils.beta_debias(group['ema_beta'], group['step']),
+                                  group['weight_decay_to_ema'] * group['lr'])
+    return update
 
 
 @zero_guard("exp_avg_sq")
