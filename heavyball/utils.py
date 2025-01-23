@@ -1229,6 +1229,33 @@ def identity(x):
 
 
 @decorator_knowngood
+def _compilable_weight_decay_to_ema_(p, ema, ema_decay, weight_decay):
+    ema32 = _lerp32(ema, p, ema_decay)
+    _lerp32(p, ema32, weight_decay)
+
+
+def weight_decay_to_ema_(p, ema, ema_decay, weight_decay):
+    p, ema = list_guard(p, ema)
+    ema_decay, weight_decay = scalar_guard(ema_decay, weight_decay, p[0])
+    _compilable_weight_decay_to_ema_(p, ema, ema_decay, weight_decay)
+
+
+@decorator_knowngood
+def _compilable_l1_weight_decay_to_ema_(p, ema, ema_deacy, weight_decay):
+    ema32 = _lerp32(ema, p, ema_deacy)
+    for p_, e_ in zip(p, ema32):
+        p32 = promote(p)
+        p32 = p32 + (p32 - e_).sign() * weight_decay
+        copy_stochastic_(p_, p32)
+
+
+def l1_weight_decay_to_ema_(p, ema, ema_decay, weight_decay):
+    p, ema = list_guard(p, ema)
+    ema_decay, weight_decay = scalar_guard(ema_decay, weight_decay, p[0])
+    _compilable_l1_weight_decay_to_ema_(p, ema, ema_decay, weight_decay)
+
+
+@decorator_knowngood
 def _compilable_sign_(grad: List[Tensor], graft: bool):
     for g_ in grad:
         gs = g_.sign()
