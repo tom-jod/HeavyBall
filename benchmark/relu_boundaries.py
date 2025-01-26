@@ -29,9 +29,8 @@ class BaseDataset(torch.utils.data.Dataset, ABC):
     
     @abstractmethod
     def _generate_data(self):
-        """Generate dataset-specific data"""
         pass
-    
+
     def __len__(self):
         return self.n_samples // self.batch_size
     
@@ -40,7 +39,6 @@ class BaseDataset(torch.utils.data.Dataset, ABC):
         return self.X[batch_idx], self.y[batch_idx]
     
     def get_full_data(self):
-        """Return all data for plotting"""
         return self.X, self.y
 
 class CircleDataset(BaseDataset):
@@ -48,18 +46,15 @@ class CircleDataset(BaseDataset):
         generator = torch.Generator()
         generator.manual_seed(self.seed)
         
-        # Generate points in polar coordinates
         r1 = torch.normal(mean=2.0, std=0.2, size=(self.n_samples//2,), generator=generator)
         theta1 = torch.rand(self.n_samples//2, generator=generator) * 2 * np.pi
         
         r2 = torch.normal(mean=4.0, std=0.2, size=(self.n_samples//2,), generator=generator)
         theta2 = torch.rand(self.n_samples//2, generator=generator) * 2 * np.pi
         
-        # Convert to Cartesian coordinates
         x1 = torch.stack([r1 * torch.cos(theta1), r1 * torch.sin(theta1)], dim=1)
         x2 = torch.stack([r2 * torch.cos(theta2), r2 * torch.sin(theta2)], dim=1)
         
-        # Combine data
         X = torch.cat([x1, x2], dim=0).float()
         y = torch.cat([torch.zeros(self.n_samples//2), 
                       torch.ones(self.n_samples//2)]).reshape(-1).long()
@@ -76,14 +71,11 @@ class ModularAdditionDataset(BaseDataset):
         generator = torch.Generator()
         generator.manual_seed(self.seed)
         
-        # Generate random pairs of numbers
         x1 = torch.randint(0, self.modulo, (self.n_samples,), generator=generator).float()
         x2 = torch.randint(0, self.modulo, (self.n_samples,), generator=generator).float()
         
-        # Normalize to [0, 1]
         X = torch.stack([x1, x2], dim=1) / (self.modulo - 1)
         
-        # Compute modular addition
         y = ((x1 + x2) % self.modulo).long().reshape(-1)
         
         return X, y
@@ -93,15 +85,12 @@ class XORDataset(BaseDataset):
         generator = torch.Generator()
         generator.manual_seed(self.seed)
         
-        # Generate random binary inputs
         x1 = torch.randint(0, 2, (self.n_samples,), generator=generator).float()
         x2 = torch.randint(0, 2, (self.n_samples,), generator=generator).float()
         
-        # Add some noise for visualization
         noise = torch.normal(0, 0.1, (self.n_samples, 2), generator=generator)
         X = torch.stack([x1, x2], dim=1) + noise
         
-        # Compute XOR
         y = (x1 != x2).reshape(-1).long()
         
         return X, y
@@ -109,7 +98,6 @@ class XORDataset(BaseDataset):
 class SimpleMLP(nn.Module):
     def __init__(self, hidden_size=32, classes=2):
         super().__init__()
-        # Keep layers separate to access pre-activation values
         self.fc1 = nn.Linear(2, hidden_size)
         self.fc2 = nn.Linear(hidden_size, hidden_size)
         self.fc3 = nn.Linear(hidden_size, classes)
@@ -123,32 +111,25 @@ class SimpleMLP(nn.Module):
         return out
     
     def get_boundaries(self, x):
-        """Get pre-activation values for ReLU boundaries"""
         x1 = self.fc1(x)  # First layer pre-activations
         r1 = torch.relu(x1)
         x2 = self.fc2(r1)  # Second layer pre-activations
         return x1, x2
 
 def plot_decision_boundary(model, loader, ax, resolution, device='cuda'):
-    """Plot ReLU decision boundaries"""
     model.eval()
     
-    # Get full dataset for plotting
     X, y = loader.dataset.get_full_data()
     
-    # Determine bounds with margin
     margin = 1.0
     x_min, x_max = X[:, 0].min() - margin, X[:, 0].max() + margin
     y_min, y_max = X[:, 1].min() - margin, X[:, 1].max() + margin
     
-    # Create grid points
     xx, yy = np.meshgrid(np.linspace(x_min, x_max, resolution),
                         np.linspace(y_min, y_max, resolution))
     
-    # Prepare grid points as input
     grid = torch.FloatTensor(np.c_[xx.ravel(), yy.ravel()]).to(device)
     
-    # Get ReLU boundaries in batches
     batch_size = 10000
     boundaries1 = []
     boundaries2 = []
@@ -163,11 +144,9 @@ def plot_decision_boundary(model, loader, ax, resolution, device='cuda'):
     boundaries1 = torch.cat(boundaries1, dim=0).numpy()
     boundaries2 = torch.cat(boundaries2, dim=0).numpy()
     
-    # Plot data points
-    scatter = ax.scatter(X[:, 0], X[:, 1], c=y.squeeze(), 
+    scatter = ax.scatter(X[:, 0], X[:, 1], c=y.squeeze(),
                         cmap=plt.cm.RdYlBu, alpha=0.6, label='Training Data')
     
-    # Plot ReLU boundaries
     # First layer (blue)
     for i in range(boundaries1.shape[1]):
         values = boundaries1[:, i].reshape(xx.shape)
@@ -186,8 +165,7 @@ def plot_decision_boundary(model, loader, ax, resolution, device='cuda'):
     ax.set_ylim([y_min, y_max])
     ax.legend(loc='upper right')
     
-    # Add explanatory text
-    ax.text(0.02, 0.98, 'Blue: Layer 1 ReLU boundaries\nRed: Layer 2 ReLU boundaries', 
+    ax.text(0.02, 0.98, 'Blue: Layer 1 ReLU boundaries\nRed: Layer 2 ReLU boundaries',
             transform=ax.transAxes, fontsize=8, verticalalignment='top',
             bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
 
@@ -211,16 +189,13 @@ def main(
     dataset: str = typer.Option('circle', help='Dataset to use: circle, modular, xor'),
     modulo: int = typer.Option(11, help='Modulo for modular addition dataset')
 ):
-    # Set random seed for reproducibility
     torch.manual_seed(seed)
     np.random.seed(seed)
     torch.backends.cudnn.benchmark = True
     
-    # Set device
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f"Using device: {device}")
     
-    # Create dataset based on choice
     dataset_classes = {
         'circle': lambda: CircleDataset(n_samples, batch_size, seed),
         'modular': lambda: ModularAdditionDataset(n_samples, batch_size, modulo, seed),
@@ -241,7 +216,6 @@ def main(
         persistent_workers=True
     )
     
-    # Create model and optimizer
     model = SimpleMLP(hidden_size=hidden_size, classes=train_data.classes).to(device)
     model = torch.compile(model, mode='max-autotune-no-cudagraphs')
     
@@ -255,30 +229,25 @@ def main(
     )
     criterion = nn.CrossEntropyLoss()
     
-    # Setup for animation
     plt.ioff()
     fig, ax = plt.subplots(figsize=(10, 10))
     frames = []
     frame_files = []
     frame_count = 0
     
-    # Calculate logarithmically spaced epochs for frame capture
     log_space = np.logspace(0, np.log10(n_epochs + 1), n_frames) - 1
     frame_epochs = np.unique(log_space.astype(int))
     print(f"Will capture frames at epochs: {frame_epochs.tolist()}")
     
-    # Ensure output directory exists and is empty
     output_dir = Path('frames')
     output_dir.mkdir(exist_ok=True)
     for f in output_dir.glob('*.png'):
         f.unlink()
     
-    # Training loop
     train_iter = iter(train_loader)
     for epoch in range(n_epochs):
         model.train()
         
-        # Get batch
         try:
             x, y = next(train_iter)
         except StopIteration:
@@ -287,7 +256,6 @@ def main(
         
         x, y = x.squeeze(0).to(device), y.squeeze(0).to(device)
         
-        # Training step
         optimizer.zero_grad()
         outputs = model(x)
         loss = criterion(outputs, y)
@@ -315,7 +283,6 @@ def main(
     
     print(f"Generated {frame_count} frames")
     
-    # Save animation
     output_path = Path(output_file)
     if output_format != output_path.suffix[1:]:
         output_path = output_path.with_suffix(f'.{output_format}')
