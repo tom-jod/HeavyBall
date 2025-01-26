@@ -13,6 +13,7 @@ import torch
 import torch.nn as nn
 import tqdm
 
+device= 'cuda'
 heavyball.utils.compile_mode = None
 heavyball.utils.dynamic = True
 heavyball.utils.set_torch()

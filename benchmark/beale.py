@@ -52,7 +52,7 @@ def main(method: List[str] = typer.Option(['qr'], help='Eigenvector method to us
 
         def data():
             inp = torch.zeros((), device='cuda', dtype=d)
-            return inp, torch.zeros((), device='cuda', dtype=d)
+            return None, None
 
         def win(_model, loss: Union[float, hyperopt.Trials]):
             if not isinstance(loss, float):

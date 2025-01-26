@@ -34,7 +34,7 @@ def main(method: List[str] = typer.Option(['qr'], help='Eigenvector method to us
     for args in itertools.product(method, dtype, opt, [weight_decay]):
         m, d, o, wd = args
 
-        model = Model()
+        model = Model().cuda()
 
         def data():
             inp = torch.zeros((), device='cuda', dtype=d)
