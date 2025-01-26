@@ -32,14 +32,14 @@ class Model(nn.Module):
 @app.command()
 def main(method: List[str] = typer.Option(['qr'], help='Eigenvector method to use (for SOAP)'),
          dtype: List[str] = typer.Option(["float32"], help='Data type to use'), size: int = 32, depth: int = 1,
-         batch: int = 256, steps: int = 30_000, weight_decay: float = 0,
-         opt: List[str] = typer.Option(['RMSprop'], help='Optimizers to use')):
+         batch: int = 256, steps: int = 10, weight_decay: float = 0,
+         opt: List[str] = typer.Option(['ForeachSOAP', 'PaLMForeachSOAP', 'PrecondScheduleForeachSOAP'], help='Optimizers to use')):
     dtype = [getattr(torch, d) for d in dtype]
 
     for args in itertools.product(method, dtype, opt, [weight_decay]):
         m, d, o, wd = args
 
-        model = Model(size)
+        model = Model(size).cuda()
 
         def data():
             inp = torch.randn((batch, depth, size, size), device='cuda', dtype=d) / size ** 0.5
@@ -47,7 +47,7 @@ def main(method: List[str] = typer.Option(['qr'], help='Eigenvector method to us
 
         def win(model, _loss):
             with torch.no_grad():
-                return model.param.add(1).norm().item() < 1e-4
+                return model.param.add(1).norm().item() < 1e-4, {}
 
         trial(model, data, F.mse_loss, win, steps, o, d, size, batch, wd, m, 1, depth, failure_threshold=depth * 2, group=100, base_lr=1e-3, trials=20)
 

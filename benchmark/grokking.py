@@ -27,8 +27,10 @@ class ModularMLP(nn.Module):
             nn.Embedding(p, hidden_dim),
             nn.Flatten(),
             nn.Linear(numbers * hidden_dim, hidden_dim),
+            nn.LayerNorm(hidden_dim),
             nn.LeakyReLU(),
             nn.Linear(hidden_dim, hidden_dim),
+            nn.LayerNorm(hidden_dim),
             nn.LeakyReLU(),
             nn.Linear(hidden_dim, p)
         )
@@ -106,14 +108,14 @@ def plot_results(train_losses, test_accs, steps_to_grok=None, save_path=None):
 @app.command()
 def main(method: List[str] = typer.Option(['qr'], help='Eigenvector method to use (for SOAP)'),
          dtype: List[str] = typer.Option(["float32"], help='Data type to use'),
-         opt: List[str] = typer.Option(['AdamW', 'OrthoAdamW', 'AdamWOrtho', 'ForeachPSGDKron'], help='Optimizers to use'),
-         steps: int = 2000,
+         opt: List[str] = typer.Option(['ForeachSOAP', 'PaLMForeachSOAP', 'PrecondScheduleForeachSOAP'], help='Optimizers to use'),
+         steps: int = 100,
          batch_size: int = 32,
          hidden_dim: int = 32,
          p: int = 257,
          numbers: int = 4,
          weight_decay: float = 0,
-         lr: float = 1e-3,
+         lr: float = 1e-4,
          train_percent: float = 0.1,
          eval_samples: int = 1024,
          printervall: int = 1000,):

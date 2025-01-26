@@ -25,21 +25,23 @@ class Model(nn.Module):
 
 @app.command()
 def main(method: List[str] = typer.Option(['qr'], help='Eigenvector method to use (for SOAP)'),
-         dtype: List[str] = typer.Option(["float32"], help='Data type to use'), steps: int = 100_000,
+         dtype: List[str] = typer.Option(["float32"], help='Data type to use'), steps: int = 10,
          weight_decay: float = 0,
-         opt: List[str] = typer.Option(['ForeachLaProp', 'ForeachSOAP', 'ForeachPSGDKron'], help='Optimizers to use')):
+         opt: List[str] = typer.Option(['ForeachSOAP', 'PaLMForeachSOAP', 'PrecondScheduleForeachSOAP'], help='Optimizers to use')):
     dtype = [getattr(torch, d) for d in dtype]
     for args in itertools.product(method, dtype, opt, [weight_decay]):
         m, d, o, wd = args
 
-        model = Model()
+        model = Model().cuda()
 
         def data():
             inp = torch.zeros((), device='cuda', dtype=d)
             return inp, torch.zeros((), device='cuda', dtype=d)
 
         def win(_model, loss):
-            return loss < 1e-5
+            if isinstance(loss, float):
+                return loss < 1e-5, {}
+            return False, {}
 
         trial(model, data, torch.nn.functional.mse_loss, win, steps, o, d, 1, 1, wd, m, 1, 1)
 

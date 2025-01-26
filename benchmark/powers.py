@@ -27,17 +27,17 @@ class Model(nn.Module):
 
 @app.command()
 def main(method: List[str] = typer.Option(['qr'], help='Eigenvector method to use (for SOAP)'),
-         dtype: List[str] = typer.Option(["float32"], help='Data type to use'), size: int = 128, steps: int = 1_000,
-         weight_decay: float = 0, opt: List[str] = typer.Option(heavyball.__all__, help='Optimizers to use')):
+         dtype: List[str] = typer.Option(["float32"], help='Data type to use'), size: int = 128, steps: int = 10,
+         weight_decay: float = 0, opt: List[str] = typer.Option(['ForeachSOAP', 'PaLMForeachSOAP', 'PrecondScheduleForeachSOAP'], help='Optimizers to use')):
     dtype = [getattr(torch, d) for d in dtype]
     for args in itertools.product(method, dtype, opt, [weight_decay]):
         m, d, o, wd = args
 
-        model = Model(size).cpu()
+        model = Model(size).cuda()
 
         def data():
-            inp = torch.zeros((), device='cpu', dtype=d)
-            return inp, torch.zeros((), device='cpu', dtype=d)
+            inp = torch.zeros((), device='cuda', dtype=d)
+            return inp, torch.zeros((), device='cuda', dtype=d)
 
         def win(_model, loss):
             if not isinstance(loss, float):

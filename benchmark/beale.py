@@ -2,6 +2,7 @@ import copy
 import itertools
 import pathlib
 import random
+import time
 from typing import List, Union
 
 import hyperopt
@@ -28,10 +29,9 @@ def beale(x, y):
 
 @app.command()
 def main(method: List[str] = typer.Option(['qr'], help='Eigenvector method to use (for SOAP)'),
-         dtype: List[str] = typer.Option(["float32"], help='Data type to use'), steps: int = 200,
+         dtype: List[str] = typer.Option(["float32"], help='Data type to use'), steps: int = 100,
          weight_decay: float = 0,
-         opt: List[str] = typer.Option(['OrthoLaProp', 'LaProp'], help='Optimizers to use'),
-         display_steps: int = 20):
+         opt: List[str] = typer.Option(['ForeachSOAP', 'PaLMForeachSOAP', 'PrecondScheduleForeachSOAP'], help='Optimizers to use')):
     dtype = [getattr(torch, d) for d in dtype]
     coords = (-7, -4)
 
@@ -40,7 +40,7 @@ def main(method: List[str] = typer.Option(['qr'], help='Eigenvector method to us
 
     img = None
     colors = list(matplotlib.colors.TABLEAU_COLORS.values())
-    stride = max(1, steps // display_steps)
+    stride = max(1, steps // 20)
     rng = random.Random(0x1239121)
     rng.shuffle(colors)
 
@@ -51,14 +51,18 @@ def main(method: List[str] = typer.Option(['qr'], help='Eigenvector method to us
         model.double()
 
         def data():
-            return None, torch.zeros((), dtype=torch.float)
+            inp = torch.zeros((), device='cuda', dtype=d)
+            return inp, torch.zeros((), device='cuda', dtype=d)
 
         def win(_model, loss: Union[float, hyperopt.Trials]):
             if not isinstance(loss, float):
                 loss = loss.results[-1]['loss']
             return loss < 0, {}
 
-        model = trial(model, data, None, win, steps, o, d, 1, 1, wd, m, 1, 1, group=100, base_lr=1e-4, trials=300)
+        start_time = time.time()
+        model = trial(model, data, None, win, steps, o, d, 1, 1, wd, m, 1, 1, group=100, base_lr=1e-4, trials=100)
+        end_time = time.time()
+        print(f"{o} took {end_time - start_time:.2f} seconds")
 
         if img is None:
             fig, ax = model.plot_image(cmap="gray", levels=20, return_fig=True, xlim=(-8, 2), ylim=(-8, 2))

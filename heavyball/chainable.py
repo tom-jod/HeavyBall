@@ -311,6 +311,25 @@ def nesterov_momentum(group, updates, grads, params, momentum):
     return utils.nesterov_momentum(momentum, updates, utils.get_beta1(group))
 
 
+@zero_guard('momentum')
+@no_state
+def nesterov_ema(group, updates, grads, params, momentum):  # equivalent to Grokfast
+    return utils.nesterov_ema(momentum, updates, utils.get_beta1(group))
+
+
+def _store_std(state, group, update, grad, param):
+    state['init_std'] = torch.std(grad, dim=0)
+
+
+@general_guard("init_std", init_fn=_store_std)
+@no_state
+def mup_approx(group, updates, grads, params, init_std):
+    _updates = [(u, i) for u, i in zip(updates, init_std) if u.ndim > 1]
+    _updates, _init_std = zip(*_updates)
+    utils.stochastic_multiply_(_updates, _init_std)
+    return updates
+
+
 @zero_guard("momentum")
 @no_state
 def heavyball_momentum(group, updates, grads, params, momentum):
@@ -328,7 +347,7 @@ def scale_by_soap(group, update, grad, param, exp_avg, exp_avg_sq, Q, GG, inner:
 
     grad_projected = [utils.project(u, q, False) for u, q in zip(update, Q)]
     fn = _optim_fns[inner]
-    precond = fn(exp_avg, exp_avg_sq, grad_projected, utils.get_beta1(group), utils.get_beta2(group), group['step'])
+    precond = fn(exp_avg, exp_avg_sq, grad_projected, utils.get_beta1(group), utils.get_beta2(group), group['step'], group['eps'])
     precond = [utils.project(p, q, True) for p, q in zip(precond, Q)]
 
     for u, q, gg, eas in zip(update, Q, GG, exp_avg_sq):

@@ -317,6 +317,19 @@ def nesterov_momentum(state, grad, beta):
     return grad
 
 
+@decorator_knowngood
+def _compilable_nesterov_ema_(state, grad, beta):
+    ema32 = _lerp32(state, grad, beta)
+    stochastic_add_(grad, ema32, 1)
+
+
+def nesterov_ema(state, grad, beta):
+    state, grad = list_guard(state, grad)
+    beta = scalar_guard(beta, state[0])
+    _compilable_nesterov_ema_(state, grad, beta)
+    return grad
+
+
 def _compilable_grafting(magnitude, direction):
     return direction * (magnitude.norm() / direction.norm().clamp(min=1e-6))
 
@@ -507,6 +520,19 @@ def stochastic_add_(x: List[Tensor], y: List[Tensor], alpha: Union[float, int, T
     x, y = list_guard(x, y)
     alpha = scalar_guard(alpha, x[0])
     _compilable_stochastic_add_(x, y, alpha)
+
+
+@decorator_knowngood
+def _compilable_stochastic_multiply_(x: List[Tensor], y: List[Tensor]):
+    for x_, y_ in zip(x, y):
+        x32 = promote(x_)
+        y32 = promote(y_)
+        copy_stochastic_(x_, x32 * y32)
+
+
+def stochastic_multiply_(x: List[Tensor], y: List[Tensor]):
+    x, y = list_guard(x, y)
+    _compilable_stochastic_multiply_(x, y)
 
 
 @decorator
@@ -783,7 +809,7 @@ def _compilable_adam_(exp_avg: List[Tensor], exp_avg_sq: List[Tensor], grad: Lis
 
 
 def adam_(exp_avg: List[Tensor], exp_avg_sq: List[Tensor], grad: List[Tensor], beta1: float, beta2: float, step: int,
-          eps: float):
+          eps: float = 1e-8):
     exp_avg, exp_avg_sq, grad = map(list_guard, (exp_avg, exp_avg_sq, grad))
     beta1, beta2, step, eps = scalar_guard(beta1, beta2, step, eps, exp_avg[0])
     _compilable_adam_(exp_avg, exp_avg_sq, grad, beta1, beta2, step, eps)
@@ -815,23 +841,23 @@ def fused_adam_(y: List[Tensor], exp_avg: List[Tensor], exp_avg_sq: List[Tensor]
 
 @decorator_knowngood
 def _compilable_laprop_(exp_avg: List[Tensor], exp_avg_sq: List[Tensor], grad: List[Tensor], beta1: Tensor,
-                        beta2: Tensor, step: Tensor):
+                        beta2: Tensor, step: Tensor, eps: Tensor):
     beta1 = beta_debias(beta1, step)
     beta2 = beta_debias(beta2, step)
 
     gp32 = list(map(promote, grad))
 
-    denom = exp_avg_sq_(exp_avg_sq, gp32, beta2, 1e-8)
+    denom = exp_avg_sq_(exp_avg_sq, gp32, beta2, eps)
     gp32 = torch._foreach_div(gp32, denom)
     gp32 = _lerp32(exp_avg, gp32, beta1)
 
     copy_stochastic_list_(grad, gp32)
 
 
-def laprop_(exp_avg: List[Tensor], exp_avg_sq: List[Tensor], grad: List[Tensor], beta1: float, beta2: float, step: int):
+def laprop_(exp_avg: List[Tensor], exp_avg_sq: List[Tensor], grad: List[Tensor], beta1: float, beta2: float, step: int, eps: float = 1e-8):
     exp_avg, exp_avg_sq, grad = list_guard(exp_avg, exp_avg_sq, grad)
-    beta1, beta2, step = scalar_guard(beta1, beta2, step, exp_avg[0])
-    _compilable_laprop_(exp_avg, exp_avg_sq, grad, beta1, beta2, step)
+    beta1, beta2, step, eps = scalar_guard(beta1, beta2, step, exp_avg[0], eps)
+    _compilable_laprop_(exp_avg, exp_avg_sq, grad, beta1, beta2, step, eps)
     return grad
 
 

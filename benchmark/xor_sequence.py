@@ -48,14 +48,16 @@ class ModelTransformer(nn.Module):
 
 
 def win(_model, loss):
-    return loss < 0.1
+    if isinstance(loss, float):
+        return loss < 0.1, {}
+    return False, {}
 
 
 @app.command()
 def main(method: List[str] = typer.Option(['qr'], help='Eigenvector method to use (for SOAP)'),
          dtype: List[str] = typer.Option(["float32"], help='Data type to use'), length: int = 128, size: int = 128,
-         depth: int = 1, batch: int = 128, steps: int = 500_000, weight_decay: float = 0, opt: List[str] = typer.Option(
-            ['PrecondSchedulePaLMForeachSOAP'],
+         depth: int = 1, batch: int = 128, steps: int = 100, weight_decay: float = 0, opt: List[str] = typer.Option(
+            ['ForeachSOAP', 'PaLMForeachSOAP', 'PrecondScheduleForeachSOAP'],
             help='Optimizers to use')):
     dtype = [getattr(torch, d) for d in dtype]
 
@@ -63,7 +65,7 @@ def main(method: List[str] = typer.Option(['qr'], help='Eigenvector method to us
         m, d, (l, s, dp, b), o, wd = args
         torch.manual_seed(0x1239121)
 
-        model = Model(s, dp)
+        model = Model(s, dp).cuda()
 
         def data():
             inp = torch.randn((b, l, 1), device='cuda', dtype=d)

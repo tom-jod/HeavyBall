@@ -12,7 +12,7 @@ import torch
 np.warnings = warnings
 
 base_args = {'betas': (0.9, 0.999), 'precondition_frequency': 1, 'merge_dims': True, 'warmup_steps': 100,
-             'max_precond_dim': 2 ** 16, 'beta': 0.9, 'max_size_triangular': 2 ** 16, 'split': False}
+             'max_precond_dim': 2 ** 16, 'beta': 0.9, 'max_size_triangular': 2 ** 16, 'split': False, 'eps': 1e-8}
 
 
 def get_optim(optim, params, **kwargs):
@@ -38,7 +38,7 @@ def _get_objective(failure_threshold, model, opt, steps, group, data, loss_fn, w
 
     def _inner(params):
         nonlocal m, loss0, attempt
-        params = {'lr': params[0], 'betas': (1 - params[1], 1 - params[2]), 'shampoo_beta': 1 - params[3]}
+        params = {'lr': params[0], 'betas': (1 - params[1], 1 - params[2]), 'shampoo_beta': 1 - params[3], 'eps': 1e-8}
         m = copy.deepcopy(model)
         o = get_optim(opt, m.parameters(), **params, weight_decay=weight_decay, **kwargs)
         loss_hist = []

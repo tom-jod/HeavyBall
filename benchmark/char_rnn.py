@@ -34,7 +34,7 @@ def main(features: int = 512, sequence: int = 256, batch: int = 16, printervall:
     losses = 0
     accuracy = 0
 
-    for step in range(1, 10 ** 9):
+    for step in range(1, 100):  
         batch_offsets = torch.randint(0, len(chars) - sequence - 1, (batch,), device='cuda')
         batch_offsets = batch_offsets[:, None] + offsets
         batch_chars = chars[batch_offsets]
