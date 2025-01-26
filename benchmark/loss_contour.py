@@ -63,10 +63,10 @@ class MLP(nn.Module):
         layers.append(nn.Linear(in_shape, width))
 
         for _ in range(depth - 1):
-            layers.append(nn.Sequential(nn.Linear(width, expanded),  #
-                                        act,  #
-                                        DatasetNorm(expanded),  #
-                                        nn.Linear(expanded, width)))
+            layers.append(Residual(nn.Sequential(nn.Linear(width, expanded),  #
+                                                 act,  #
+                                                 DatasetNorm(expanded),  #
+                                                 nn.Linear(expanded, width))))
         layers.append(DatasetNorm(width))
         layers.append(nn.Linear(width, out_shape))
         self.model = nn.Sequential(*layers)
