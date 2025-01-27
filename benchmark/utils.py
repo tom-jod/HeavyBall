@@ -4,10 +4,13 @@ import inspect
 import random
 import warnings
 from datetime import datetime
-import heavyball.utils
+from typing import Union
+
 import hyperopt
 import numpy as np
 import torch
+
+import heavyball.utils
 
 np.warnings = warnings
 
@@ -38,7 +41,8 @@ def _get_objective(failure_threshold, model, opt, steps, group, data, loss_fn, w
 
     def _inner(params):
         nonlocal m, loss0, attempt
-        params = {'lr': params[0], 'betas': (1 - params[1], 1 - params[2]), 'shampoo_beta': 1 - params[3], 'eps': 1e-8}
+        params = {'lr': params[0], 'betas': (1 - params[1], 1 - params[2]), 'shampoo_beta': 1 - params[3], 'eps': 1e-8,
+                  'precond_lr': params[3]}  # we never have both precond_lr and shampoo_beta
         m = copy.deepcopy(model)
         o = get_optim(opt, m.parameters(), **params, weight_decay=weight_decay, **kwargs)
         loss_hist = []
@@ -100,33 +104,61 @@ def _get_objective(failure_threshold, model, opt, steps, group, data, loss_fn, w
     return objective, _get_m, _get_best, _get_attempts
 
 
+def loss_win_condition(target):
+    def win(_model, loss: Union[float, hyperopt.Trials]):
+        if not isinstance(loss, float):
+            loss = loss.results[-1]['loss']
+        return loss <= target, {}
+
+    return win
+
+
+def param_norm_win_condition(target, offset):
+    def win(model, loss):
+        with torch.no_grad():
+            return model.param.add(offset).norm().item() < target, {}
+
+    return win
+
+
 def trial(model, data, loss_fn, win_condition, steps, opt, dtype, size, batch, weight_decay, method, length, depth,
-          trials=10, failure_threshold=3, group=1000, base_lr: float = 1e-3):
+          trials=10, failure_threshold=3, group=1000, base_lr: float = 1e-3, return_best: bool = False):
     opt = getattr(heavyball, opt)
     if "soap" not in opt.__name__.lower() and method != 'qr':
         return
 
     heavyball.utils.zeroth_power_mode = method
 
-    for attempt in range(trials):
-        torch.cuda.empty_cache()
-        gc.collect()
+    torch.cuda.empty_cache()
+    gc.collect()
 
-        torch.manual_seed(0x1239121)
-        np.random.seed(0x1239122)
-        random.seed(0x1239123)
+    torch.manual_seed(0x1239121)
+    np.random.seed(0x1239122)
+    random.seed(0x1239123)
 
-        obj, get_m, get_best, get_attempt = _get_objective(failure_threshold, model, opt, steps, group, data, loss_fn,
-                                                       win_condition, weight_decay)
-        start_time = datetime.now()
-        out = hyperopt.fmin(obj, (hyperopt.hp.loguniform('lr', np.log(1e-6), np.log(0.1)),  #
-                                  hyperopt.hp.loguniform('1mbeta1', np.log(1e-3), np.log(1)),  #
-                                  hyperopt.hp.loguniform('1mbeta2', np.log(1e-5), np.log(1)),  #
-                                  hyperopt.hp.loguniform('1mshampoo_beta', np.log(1e-3), np.log(1))),  #
-                            max_evals=trials, algo=hyperopt.atpe.suggest,
-                            early_stop_fn=lambda x: win_condition(get_m(), x), return_argmin=True,
-                            show_progressbar=True)
-        torch.cuda.synchronize()
-        end_time = datetime.now()
-        print(f"Took: {end_time - start_time} | Attempt: {get_attempt()} | {opt.__name__}(lr={out['lr']:.5f}, betas=({1 - out['1mbeta1']:.3f}, {1 - out['1mbeta2']:.4f}), shampoo_beta={1 - out['1mshampoo_beta']:.3f})")
+    did_win = False
+
+    def _win_condition(*args):
+        nonlocal did_win
+        win_state, out = win_condition(*args)
+        did_win |= win_state
+        return win_state, out
+
+    obj, get_m, get_best, get_attempt = _get_objective(failure_threshold, model, opt, steps, group, data, loss_fn,
+                                                       _win_condition, weight_decay)
+    start_time = datetime.now()
+    out = hyperopt.fmin(obj, (hyperopt.hp.loguniform('lr', np.log(1e-6), np.log(0.1)),  #
+                              hyperopt.hp.loguniform('1mbeta1', np.log(1e-3), np.log(1)),  #
+                              hyperopt.hp.loguniform('1mbeta2', np.log(1e-5), np.log(1)),  #
+                              hyperopt.hp.loguniform('1mshampoo_beta', np.log(1e-4), np.log(1))),  #
+                        max_evals=trials, algo=hyperopt.atpe.suggest,
+                        early_stop_fn=lambda x: _win_condition(get_m(), x), return_argmin=True, show_progressbar=True)
+    torch.cuda.synchronize()
+    end_time = datetime.now()
+    if did_win:
+        print("Successfully found the minimum.")
+    print(f"Took: {end_time - start_time} | Attempt: {get_attempt()} | "  #
+          f"{opt.__name__}(lr={out['lr']:.5f}, betas=({1 - out['1mbeta1']:.3f}, {1 - out['1mbeta2']:.4f}), "  #
+          f"shampoo_beta={1 - out['1mshampoo_beta']:.3f})")
+    if return_best:
         return get_best()

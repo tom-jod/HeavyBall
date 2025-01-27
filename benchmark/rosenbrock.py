@@ -5,9 +5,11 @@ import torch
 import torch.backends.opt_einsum
 import torch.nn as nn
 import typer
+from torch.nn import functional as F
 
+import heavyball
 from heavyball.utils import set_torch
-from utils import trial
+from benchmark.utils import trial, loss_win_condition
 
 app = typer.Typer(pretty_exceptions_enable=False)
 set_torch()
@@ -20,30 +22,30 @@ class Model(nn.Module):
 
     def forward(self, inp):
         x, y = self.param
-        return (1 - x) ** 2 + 1 * (y - x ** 2) ** 2
+        # Return a tensor with batch dimension
+        return ((1 - x) ** 2 + 1 * (y - x ** 2) ** 2).unsqueeze(0)
 
 
 @app.command()
-def main(method: List[str] = typer.Option(['qr'], help='Eigenvector method to use (for SOAP)'),
-         dtype: List[str] = typer.Option(["float32"], help='Data type to use'), steps: int = 10,
-         weight_decay: float = 0,
-         opt: List[str] = typer.Option(['ForeachSOAP', 'PaLMForeachSOAP', 'PrecondScheduleForeachSOAP'], help='Optimizers to use')):
+def main(
+    method: List[str] = typer.Option(['qr'], help='Eigenvector method to use (for SOAP)'),
+    dtype: List[str] = typer.Option(['float32'], help='Data type to use'),
+    steps: int = 10,
+    weight_decay: float = 0,
+    opt: List[str] = typer.Option(['ForeachSOAP'], help='Optimizers to use'),
+    trials: int = 10,
+    win_condition_multiplier: float = 1.0,
+):
     dtype = [getattr(torch, d) for d in dtype]
-    for args in itertools.product(method, dtype, opt, [weight_decay]):
-        m, d, o, wd = args
+    model = Model().cuda()
 
-        model = Model().cuda()
+    def data():
+        inp = torch.zeros((1,), device='cuda', dtype=dtype[0])
+        target = torch.zeros((1,), device='cuda', dtype=dtype[0])
+        return inp, target
 
-        def data():
-            inp = torch.zeros((), device='cuda', dtype=d)
-            return inp, torch.zeros((), device='cuda', dtype=d)
-
-        def win(_model, loss):
-            if isinstance(loss, float):
-                return loss < 1e-5, {}
-            return False, {}
-
-        trial(model, data, torch.nn.functional.mse_loss, win, steps, o, d, 1, 1, wd, m, 1, 1)
+    trial(model, data, F.mse_loss, loss_win_condition(1e-5 * win_condition_multiplier), steps, opt[0], dtype[0], 1, 1, weight_decay, method[0], 1, 1,
+          failure_threshold=3, group=100, base_lr=1e-3, trials=trials)
 
 
 if __name__ == '__main__':

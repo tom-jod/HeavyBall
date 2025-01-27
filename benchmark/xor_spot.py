@@ -15,7 +15,7 @@ import torch.nn as nn
 import typer
 
 from heavyball.utils import set_torch
-from utils import trial
+from utils import loss_win_condition, trial
 
 app = typer.Typer(pretty_exceptions_enable=False)
 set_torch()
@@ -25,27 +25,23 @@ class Model(nn.Module):
     def __init__(self, size, depth):
         super().__init__()
         self.embed = nn.Embedding(4, size)
-        self.enc = nn.LSTM(size, size, depth, batch_first=True)
+        self.enc = nn.LSTM(size, size, depth, batch_first=False)
+        self.enc.flatten_parameters()
         self.proj = nn.Linear(size, 1, bias=False)
 
     def forward(self, inp):
+        inp = inp.transpose(0, 1)
         inp = self.embed(inp.squeeze(-1).long())
         inp = inp[0] + inp[1]
         out, _ = self.enc(inp)
         return self.proj(out[:, -1])
 
-
-def win(_model, loss):
-    if isinstance(loss, float):
-        return loss < 0.1, {}
-    return False, {}
-
-
 @app.command()
 def main(method: List[str] = typer.Option(['qr'], help='Eigenvector method to use (for SOAP)'),
          dtype: List[str] = typer.Option(["float32"], help='Data type to use'), length: int = 8, size: int = 32,
          depth: int = 1, batch: int = 32, steps: int = 10, weight_decay: float = 0,
-         opt: List[str] = typer.Option(['ForeachSOAP', 'PaLMForeachSOAP', 'PrecondScheduleForeachSOAP'], help='Optimizers to use')):
+         opt: List[str] = typer.Option(['ForeachSOAP', 'PaLMForeachSOAP', 'PrecondScheduleForeachSOAP'], help='Optimizers to use'),
+         win_condition_multiplier: float = 1.0, trials: int = 10):
     dtype = [getattr(torch, d) for d in dtype]
 
     for args in itertools.product(method, dtype, [(length, size, depth, batch)], opt, [weight_decay]):
@@ -62,8 +58,8 @@ def main(method: List[str] = typer.Option(['qr'], help='Eigenvector method to us
             target = (inp * zeros).sum(1) % 2
             return torch.stack((inp, zeros + 2), 0).to(d), target.to(d)
 
-        trial(model, data, torch.nn.functional.binary_cross_entropy_with_logits, win, steps, o, d, s, b, wd, m, l, dp,
-              failure_threshold=10)
+        trial(model, data, torch.nn.functional.binary_cross_entropy_with_logits, loss_win_condition(win_condition_multiplier * 0.1), steps, o, d, s, b, wd, m, l, dp,
+              failure_threshold=10, trials=trials)
 
 
 if __name__ == '__main__':

@@ -856,7 +856,7 @@ def _compilable_laprop_(exp_avg: List[Tensor], exp_avg_sq: List[Tensor], grad: L
 
 def laprop_(exp_avg: List[Tensor], exp_avg_sq: List[Tensor], grad: List[Tensor], beta1: float, beta2: float, step: int, eps: float = 1e-8):
     exp_avg, exp_avg_sq, grad = list_guard(exp_avg, exp_avg_sq, grad)
-    beta1, beta2, step, eps = scalar_guard(beta1, beta2, step, exp_avg[0], eps)
+    beta1, beta2, step, eps = scalar_guard(beta1, beta2, step, eps, exp_avg[0])
     _compilable_laprop_(exp_avg, exp_avg_sq, grad, beta1, beta2, step, eps)
     return grad
 

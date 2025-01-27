@@ -1,19 +1,15 @@
 import copy
-import datetime
-import multiprocessing
 import os
-import threading
-import time
 
-import heavyball
-import imageio
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
 import torch.nn as nn
 import tqdm
 
-device= 'cuda'
+import heavyball
+
+device = 'cuda'
 heavyball.utils.compile_mode = None
 heavyball.utils.dynamic = True
 heavyball.utils.set_torch()

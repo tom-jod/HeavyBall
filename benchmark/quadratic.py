@@ -8,7 +8,7 @@ import typer
 
 import heavyball
 from heavyball.utils import set_torch
-from benchmark.utils import trial
+from benchmark.utils import param_norm_win_condition, trial
 
 app = typer.Typer(pretty_exceptions_enable=False)
 set_torch()
@@ -25,11 +25,6 @@ class Model(nn.Module):
         # Apply scaling and compute loss per batch item
         return (param * self.scale).square()
 
-def win(model, loss):
-    with torch.no_grad():
-        # Win if parameter norm is close to zero
-        return model.param.norm().item() < 1e-4, {}
-
 @app.command()
 def main(
     method: List[str] = typer.Option(['qr'], help='Eigenvector method to use (for SOAP)'),
@@ -39,6 +34,9 @@ def main(
     steps: int = 100,
     weight_decay: float = 0,
     opt: List[str] = typer.Option(['ForeachSOAP'], help='Optimizers to use'),
+    trials: int = 10,
+    win_condition_multiplier: float = 1.0,
+
 ):
     dtype = [getattr(torch, d) for d in dtype]
     model = Model(size).cuda()
@@ -48,8 +46,8 @@ def main(
         inp = torch.ones((batch, size), device='cuda', dtype=dtype[0])
         return inp, torch.zeros((batch, size), device='cuda', dtype=dtype[0])
 
-    trial(model, data, F.mse_loss, win, steps, opt[0], dtype[0], size, batch, weight_decay, method[0], 1, 1,
-          failure_threshold=2, group=100, base_lr=1e-3, trials=20)
+    trial(model, data, F.mse_loss, param_norm_win_condition(win_condition_multiplier * 1e-4, 0), steps, opt[0], dtype[0], size, batch, weight_decay, method[0], 1, 1,
+          failure_threshold=2, group=100, base_lr=1e-3, trials=trials)
 
 if __name__ == '__main__':
     app()
