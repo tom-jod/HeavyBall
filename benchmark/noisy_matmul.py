@@ -48,8 +48,8 @@ def main(
         inp = torch.randn((batch, depth, size, size), device='cuda', dtype=dtype[0]) / size ** 0.5
         return inp, torch.zeros((batch, size), device='cuda', dtype=dtype[0])
 
-    trial(model, data, F.mse_loss, param_norm_win_condition(1e-4 * win_condition_multiplier, 1), steps, opt[0], dtype[0], size, batch, weight_decay, method[0], 1, depth,
-          failure_threshold=depth * 2, group=100, base_lr=1e-3, trials=trials)
+    trial(model, data, F.mse_loss, param_norm_win_condition(1e-6 * win_condition_multiplier, 1), steps, opt[0], dtype[0], size, batch, weight_decay, method[0], 1, depth,
+          failure_threshold=depth * 2, base_lr=1e-3, trials=trials)
 
 if __name__ == '__main__':
     app()

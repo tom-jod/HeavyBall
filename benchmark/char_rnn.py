@@ -74,7 +74,7 @@ def main(
         return src, tgt
 
     trial(model, data, F.cross_entropy, loss_win_condition(win_condition_multiplier * 2.0), steps, opt[0], dtype[0], features, batch, weight_decay, method[0], sequence, 1,
-          failure_threshold=10, group=100, base_lr=1e-3, trials=trials)
+          failure_threshold=10, base_lr=1e-3, trials=trials)
 
 
 if __name__ == '__main__':

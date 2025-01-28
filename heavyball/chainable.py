@@ -254,7 +254,7 @@ def scale_by_adopt(group, update, grad, param, exp_avg, exp_avg_sq):
     return utils.adopt(update, exp_avg_sq, exp_avg, utils.get_beta1(group), utils.get_beta2(group), group['step'] - 2)
 
 
-def _init_soap(state, group, update, grad, param):
+def _init_soap(state, group, update, grad, param, inner: str = ''):
     utils.init_preconditioner(grad, state, utils.get_beta2(group), group['max_precond_dim'], group['precondition_1d'])
 
 

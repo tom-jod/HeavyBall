@@ -58,7 +58,7 @@ def main(method: List[str] = typer.Option(['qr'], help='Eigenvector method to us
             target = (inp * zeros).sum(1) % 2
             return torch.stack((inp, zeros + 2), 0).to(d), target.to(d)
 
-        trial(model, data, torch.nn.functional.binary_cross_entropy_with_logits, loss_win_condition(win_condition_multiplier * 0.1), steps, o, d, s, b, wd, m, l, dp,
+        trial(model, data, torch.nn.functional.binary_cross_entropy_with_logits, loss_win_condition(win_condition_multiplier * 1e-2), steps, o, d, s, b, wd, m, l, dp,
               failure_threshold=10, trials=trials)
 
 

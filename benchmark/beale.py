@@ -21,7 +21,7 @@ app = typer.Typer(pretty_exceptions_enable=False)
 set_torch()
 
 
-def beale(x, y):
+def objective(x, y):
     x = x + 3
     y = y + 0.5
     return (1.5 - x + x * y) ** 2 + (2.25 - x + x * y ** 2) ** 2 + (2.625 - x + x * y ** 3) ** 2
@@ -33,7 +33,7 @@ class Model(nn.Module):
         self.param = nn.Parameter(torch.tensor(x).float())
 
     def forward(self):
-        return beale(*self.param)
+        return objective(*self.param)
 
 
 @app.command()
@@ -45,7 +45,7 @@ def main(method: List[str] = typer.Option(['qr'], help='Eigenvector method to us
     coords = (-7, -4)
 
     # Clean up old plots
-    for path in pathlib.Path('.').glob('beale_*.png'):
+    for path in pathlib.Path('.').glob('beale.png'):
         path.unlink()
 
     img = None
@@ -55,7 +55,7 @@ def main(method: List[str] = typer.Option(['qr'], help='Eigenvector method to us
     rng.shuffle(colors)
 
     if show_image:
-        model = FunctionDescent2D(lambda *x: beale(*x).log(), coords=coords, xlim=(-8, 2), ylim=(-8, 2), normalize=8,
+        model = FunctionDescent2D(lambda *x: objective(*x).log(), coords=coords, xlim=(-8, 2), ylim=(-8, 2), normalize=8,
                                   after_step=torch.exp)
     else:
         model = Model(coords)
@@ -64,12 +64,9 @@ def main(method: List[str] = typer.Option(['qr'], help='Eigenvector method to us
     def data():
         return None, None
 
-    start_time = time.time()
-    model = trial(model, data, None, loss_win_condition(win_condition_multiplier * 1e-6 * (not show_image)), steps,
-                  opt[0], dtype[0], 1, 1, weight_decay, method[0], 1, 1, group=100, base_lr=1e-4, trials=trials,
+    model = trial(model, data, None, loss_win_condition(win_condition_multiplier * 1e-8 * (not show_image)), steps,
+                  opt[0], dtype[0], 1, 1, weight_decay, method[0], 1,  1, base_lr=1e-4, trials=trials,
                   return_best=show_image)
-    end_time = time.time()
-    print(f"{opt[0]} took {end_time - start_time:.2f} seconds")
 
     if not show_image:
         return

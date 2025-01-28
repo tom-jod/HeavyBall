@@ -104,12 +104,6 @@ class ForeachSOAP(C.BaseOpt):
             Nikhil Vyas, Depen Morwani, Rosie Zhao, Itai Shapira, David Brandfonbrener, Lucas Janson, Sham Kakade
             https://arxiv.org/abs/2409.11321
             https://github.com/nikhilvyas/SOAP
-
-        ScheduleFree:
-            The Road Less Scheduled
-            Aaron Defazio, Xingyu Alice Yang, Harsh Mehta, Konstantin Mishchenko, Ahmed Khaled, Ashok Cutkosky
-            https://arxiv.org/abs/2405.15682
-            https://github.com/facebookresearch/schedule_free
     """
     use_precond_schedule: bool = False
 
@@ -135,6 +129,42 @@ class ForeachSOAP(C.BaseOpt):
             self.precond_schedule = 1 / defaults.pop("precondition_frequency")
         super().__init__(params, defaults, foreach, gradient_clipping, update_clipping, palm,  #
                          C.scale_by_soap)
+
+class ForeachSOLP(C.BaseOpt):
+    """
+    ForeachSOAP
+
+    Sources:
+        Baseline SOAP:
+            SOAP: Improving and Stabilizing Shampoo using Adam
+            Nikhil Vyas, Depen Morwani, Rosie Zhao, Itai Shapira, David Brandfonbrener, Lucas Janson, Sham Kakade
+            https://arxiv.org/abs/2409.11321
+            https://github.com/nikhilvyas/SOAP
+    """
+    use_precond_schedule: bool = False
+
+    def __init__(self, params, lr: float = 3e-3, betas=(0.9, 0.95), shampoo_beta: float = 0.95, eps: float = 1e-8,
+                 weight_decay: float = 0.01, precondition_frequency: int = 2, max_precond_dim: int = 2048,  #
+                 merge_dims: bool = True, precondition_1d: bool = False, normalize_grads: bool = False,
+                 data_format: str = "channels_first", correct_bias: bool = True, warmup_steps: int = 0,
+                 split: bool = False, foreach: bool = True, mars: bool = False, caution: bool = False,
+                 mars_gamma: float = 0.0025, palm: bool = C.use_default, precond_scheduler=(1 / 3, 9),
+                 beta2_scale: float = 0.8, use_precond_schedule: bool = C.use_default,
+                 gradient_clipping: C.str_or_fn = C.use_default, update_clipping: C.str_or_fn = C.use_default):
+        use_precond_schedule = C.default(use_precond_schedule, self.use_precond_schedule)
+
+        defaults = locals()
+        defaults.pop("self")
+        params = defaults.pop("params")
+
+        if use_precond_schedule:
+            del defaults['precondition_frequency']
+            self.precond_schedule = utils.get_soap_precond_schedule(defaults.pop("precond_scheduler"))
+        else:
+            del defaults['precond_scheduler']
+            self.precond_schedule = 1 / defaults.pop("precondition_frequency")
+        super().__init__(params, defaults, foreach, gradient_clipping, update_clipping, palm,  #
+                         functools.partial(C.scale_by_soap, inner='laprop'))
 
 
 class PaLMForeachSOAP(ForeachSOAP):

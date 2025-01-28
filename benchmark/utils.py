@@ -2,20 +2,22 @@ import copy
 import gc
 import inspect
 import random
+import sys
+import time
 import warnings
 from datetime import datetime
 from typing import Union
 
+import heavyball.utils
 import hyperopt
 import numpy as np
 import torch
 
-import heavyball.utils
-
 np.warnings = warnings
 
 base_args = {'betas': (0.9, 0.999), 'precondition_frequency': 1, 'merge_dims': True, 'warmup_steps': 100,
-             'max_precond_dim': 2 ** 16, 'beta': 0.9, 'max_size_triangular': 2 ** 16, 'split': False, 'eps': 1e-8}
+             'max_precond_dim': 2 ** 16, 'beta': 0.9, 'max_size_triangular': 2 ** 16, 'split': False, 'eps': 1e-8,
+             'weight_decay': 1e-4}
 
 
 def get_optim(optim, params, **kwargs):
@@ -26,82 +28,99 @@ def get_optim(optim, params, **kwargs):
 
 
 def ema(hist, beta=0.9):
-    hist = [h.item() if hasattr(h, 'item') else h for h in hist]
-    fac = beta ** np.flip(np.arange(len(hist)))
+    fac = beta ** np.arange(len(hist), 0, -1)
     fac /= fac.sum()
-    return np.array(hist) @ fac
+    return hist @ fac
 
 
-def _get_objective(failure_threshold, model, opt, steps, group, data, loss_fn, win_condition, weight_decay, **kwargs):
-    m = None
-    loss0 = None
-    attempt = 0
-    best_loss = None
-    avg = None
+class Objective:
+    def __init__(self, failure_threshold, model, opt, steps, group, data, loss_fn, win_condition, weight_decay,
+                 max_consecutive_failures=1, minimal_improvement=1e-2, **kwargs):
+        self.failure_threshold = failure_threshold
+        self.model = torch.compile(model.cuda(), mode='max-autotune-no-cudagraphs')
+        self.opt = opt
+        self.steps = steps
+        self.group = group
+        self.data = data
+        self.loss_fn = loss_fn
+        self.win_condition = win_condition
+        self.weight_decay = weight_decay
+        self.kwargs = kwargs
+        self.max_consecutive_failures = max_consecutive_failures    
+        self.minimal_improvement = minimal_improvement
 
-    def _inner(params):
-        nonlocal m, loss0, attempt
+        self.m = None
+        self.loss0 = None
+        self.attempt = 0
+        self.best_loss = None
+        self.avg = None
+
+    def _inner(self, params):
         params = {'lr': params[0], 'betas': (1 - params[1], 1 - params[2]), 'shampoo_beta': 1 - params[3], 'eps': 1e-8,
-                  'precond_lr': params[3]}  # we never have both precond_lr and shampoo_beta
-        m = copy.deepcopy(model)
-        o = get_optim(opt, m.parameters(), **params, weight_decay=weight_decay, **kwargs)
-        loss_hist = []
+                  'precond_lr': params[3]  # we never have both precond_lr and shampoo_beta
+                  }
+        self.m = copy.deepcopy(self.model)
+        o = get_optim(self.opt, self.m.parameters(), **params, weight_decay=self.weight_decay, **self.kwargs)
+        torch_hist = []
+        loss_hist = np.empty(self.steps, dtype=np.float64)
+        ema_states = np.empty(8, dtype=np.float64)
+        update_factor = 3.0 ** (-np.arange(1, 9))
+        consecutive_failures = 0
 
-        for i in range(steps // group):
-            for _ in range(group):
-                inp, tgt = data()
+
+        for i in range(self.steps // self.group):
+            if hasattr(o, 'train'):
+                o.train()
+
+            for _ in range(self.group):
+                inp, tgt = self.data()
 
                 def _closure():
-                    loss = m() if inp is None else m(inp)
-                    if loss_fn is not None:
-                        loss = loss_fn(loss, tgt)
+                    loss = self.m() if inp is None else self.m(inp)
+                    if self.loss_fn is not None:
+                        loss = self.loss_fn(loss, tgt)
                     loss.backward()
                     return loss
 
                 loss = o.step(_closure)
                 o.zero_grad()
-                loss_hist.append(loss.detach())
-                if loss0 is None:
-                    loss0 = loss_hist[-1].item()
+                torch_hist.append(loss.detach())
+                if self.loss0 is None:
+                    self.loss0 = torch_hist[-1].item()
             if hasattr(o, 'eval'):
                 o.eval()
-            for j, loss in enumerate(loss_hist[-group:], group * i):
-                loss = loss.item()
-                if win_condition(m, loss)[0]:
-                    return ema(loss_hist), m
-                if loss > failure_threshold * loss0 or not np.isfinite(loss):
-                    return ema(loss_hist), m
-            if hasattr(o, 'train'):
-                o.train()
-            if loss > failure_threshold * loss0 or not np.isfinite(loss):
-                return ema(loss_hist), m
-        return ema(loss_hist), m
+            for j, h in enumerate(torch_hist):
+                loss_hist[i * self.group + j] = h.item()
+            torch_hist.clear()
+            lh = loss_hist[:(i + 1) * self.group]
+            if i == 0:
+                ema_states[:] = np.stack([ema(lh, 1 - u) for u in update_factor])            
+            else:
+                for loss in lh[-self.group:]:
+                    ema_states += update_factor * (loss - ema_states) 
+                    failed = np.any(ema_states[1:] * (1 - self.minimal_improvement) < ema_states[:-1])
+                    if failed:
+                        consecutive_failures += 1
+                    else:
+                        consecutive_failures = 0
+                    if consecutive_failures >= self.max_consecutive_failures:
+                        return ema_states[-1], self.m, loss
+            for j, loss in enumerate(lh[-self.group:]):
+                if self.win_condition(self.m, loss)[0] or loss > self.failure_threshold * self.loss0 or not np.isfinite(loss):
+                    return ema_states[-1], self.m, loss                    
+        return ema_states[-1], self.m, loss
 
-    def _objective(params):
-        nonlocal m, loss0, attempt, avg, best_loss
-        attempt += 1
-        loss = _inner(params)[0]
-        if best_loss is None or loss < best_loss:
-            best_loss = loss
-            avg = np.log(np.array(params))
-        return loss
+    def objective(self, params):
+        self.attempt += 1
+        target, _, loss = self._inner(params)
+        if self.best_loss is None or loss < self.best_loss or not np.isfinite(self.best_loss):
+            self.best_loss = loss
+            self.avg = np.log(np.array(params))
+        return target
 
-    def objective(params):
-        nonlocal best_loss
-        return _objective(params)
-
-    def _get_m():
-        return m
-
-    def _get_best():
-        nonlocal group
-        group = 1
-        return _inner(np.exp(avg))[1]
-
-    def _get_attempts():
-        return attempt
-
-    return objective, _get_m, _get_best, _get_attempts
+    def get_best(self):
+        self.group = 1
+        return self._inner(np.exp(self.avg))[1]
 
 
 def loss_win_condition(target):
@@ -122,7 +141,18 @@ def param_norm_win_condition(target, offset):
 
 
 def trial(model, data, loss_fn, win_condition, steps, opt, dtype, size, batch, weight_decay, method, length, depth,
-          trials=10, failure_threshold=3, group=1000, base_lr: float = 1e-3, return_best: bool = False):
+          trials=10, failure_threshold=3, group=256, base_lr: float = 1e-3, return_best: bool = False):
+    kwargs = {'caution': False, 'mars': False}
+    if opt.startswith('cautious-'):
+        opt = opt[len('cautious-'):]
+        kwargs['caution'] = True
+    if opt.startswith('unscaled_cautious-'):
+        opt = opt[len('unscaled_cautious-'):]
+        heavyball.utils.disable_caution_scaling()
+        kwargs['caution'] = True
+    if opt.startswith('mars-'):
+        opt = opt[len('mars-'):]
+        kwargs['mars'] = True
     opt = getattr(heavyball, opt)
     if "soap" not in opt.__name__.lower() and method != 'qr':
         return
@@ -142,23 +172,24 @@ def trial(model, data, loss_fn, win_condition, steps, opt, dtype, size, batch, w
         nonlocal did_win
         win_state, out = win_condition(*args)
         did_win |= win_state
-        return win_state, out
+        return did_win, out
 
-    obj, get_m, get_best, get_attempt = _get_objective(failure_threshold, model, opt, steps, group, data, loss_fn,
-                                                       _win_condition, weight_decay)
-    start_time = datetime.now()
-    out = hyperopt.fmin(obj, (hyperopt.hp.loguniform('lr', np.log(1e-6), np.log(0.1)),  #
-                              hyperopt.hp.loguniform('1mbeta1', np.log(1e-3), np.log(1)),  #
-                              hyperopt.hp.loguniform('1mbeta2', np.log(1e-5), np.log(1)),  #
-                              hyperopt.hp.loguniform('1mshampoo_beta', np.log(1e-4), np.log(1))),  #
-                        max_evals=trials, algo=hyperopt.atpe.suggest,
-                        early_stop_fn=lambda x: _win_condition(get_m(), x), return_argmin=True, show_progressbar=True)
+    obj = Objective(failure_threshold, model, opt, steps, group, data, loss_fn, _win_condition, weight_decay, **kwargs)
+    start_time = time.time()
+    sys.stdout = sys.stderr
+    out = hyperopt.fmin(obj.objective, (hyperopt.hp.loguniform('lr', np.log(1e-6), np.log(0.1)),  #
+                                        hyperopt.hp.loguniform('1mbeta1', np.log(1e-3), np.log(1)),  #
+                                        hyperopt.hp.loguniform('1mbeta2', np.log(1e-5), np.log(1)),  #
+                                        hyperopt.hp.loguniform('1mshampoo_beta', np.log(1e-4), np.log(1))),  #
+                        max_evals=trials, algo=hyperopt.atpe.suggest, early_stop_fn=lambda x: _win_condition(obj.m, x),
+                        return_argmin=True, show_progressbar=True)
     torch.cuda.synchronize()
-    end_time = datetime.now()
+    sys.stdout = sys.__stdout__
+    end_time = time.time()
     if did_win:
         print("Successfully found the minimum.")
-    print(f"Took: {end_time - start_time} | Attempt: {get_attempt()} | "  #
+    print(f"Took: {end_time - start_time} | Attempt: {obj.attempt} | "  #
           f"{opt.__name__}(lr={out['lr']:.5f}, betas=({1 - out['1mbeta1']:.3f}, {1 - out['1mbeta2']:.4f}), "  #
-          f"shampoo_beta={1 - out['1mshampoo_beta']:.3f})")
+          f"shampoo_beta={1 - out['1mshampoo_beta']:.3f}) | Best Loss: {obj.best_loss}")
     if return_best:
-        return get_best()
+        return obj.get_best()

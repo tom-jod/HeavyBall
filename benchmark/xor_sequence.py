@@ -64,7 +64,7 @@ def main(
         xored = torch.logical_xor(i0, i1)
         return inp.long().squeeze(-1), xored.to(dtype[0])
 
-    trial(model, data, F.binary_cross_entropy_with_logits, loss_win_condition(win_condition_multiplier * 0.1), steps, opt[0], dtype[0], size, batch, weight_decay, method[0], length, depth,
+    trial(model, data, F.binary_cross_entropy_with_logits, loss_win_condition(win_condition_multiplier * 1e-2), steps, opt[0], dtype[0], size, batch, weight_decay, method[0], length, depth,
           failure_threshold=10, base_lr=0.001, trials=trials)
 
 

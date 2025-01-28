@@ -3,6 +3,7 @@ import pathlib
 import random
 import time
 from typing import List
+import math
 
 import matplotlib.colors
 import matplotlib.pyplot as plt
@@ -21,8 +22,9 @@ app = typer.Typer(pretty_exceptions_enable=False)
 set_torch()
 
 
-def objective(x, y):
-    return (1 - x) ** 2 + 1 * (y - x ** 2) ** 2
+def objective(*args, A=10):
+    offset = len(args) * A
+    return offset + sum(x ** 2  - (2 * math.pi * x).cos() * A for x in args)
 
 
 class Model(nn.Module):
@@ -38,15 +40,14 @@ class Model(nn.Module):
 def main(method: List[str] = typer.Option(['qr'], help='Eigenvector method to use (for SOAP)'),
          dtype: List[str] = typer.Option(['float32'], help='Data type to use'), steps: int = 100,
          weight_decay: float = 0, opt: List[str] = typer.Option(['ForeachSOAP'], help='Optimizers to use'),
-         show_image: bool = False, trials: int = 100, win_condition_multiplier: float = 1.0, ):
+         show_image: bool = True, trials: int = 100, win_condition_multiplier: float = 1.0, ):
     dtype = [getattr(torch, d) for d in dtype]
-    coords = (-7, -4)
+    coords = (-2.5, -1.5)
 
     # Clean up old plots
-    for path in pathlib.Path('.').glob('rosenbrock.png'):
+    for path in pathlib.Path('.').glob('rastrigin.png'):
         path.unlink()
 
-    img = None
     colors = list(matplotlib.colors.TABLEAU_COLORS.values())
     stride = max(1, steps // 20)
     rng = random.Random(0x1239121)
@@ -62,27 +63,23 @@ def main(method: List[str] = typer.Option(['qr'], help='Eigenvector method to us
     def data():
         return None, None
 
-    model = trial(model, data, None, loss_win_condition(win_condition_multiplier * 1e-8 * (not show_image)), steps,
-                  opt[0], dtype[0], 1, 1, weight_decay, method[0], 1,  1, base_lr=1e-4, trials=trials,
+    model = trial(model, data, None, loss_win_condition(win_condition_multiplier * 0.1 * (not show_image)), steps,
+                  opt[0], dtype[0], 1, 1, weight_decay, method[0], 1, 1, base_lr=1e-4, trials=trials,
                   return_best=show_image)
 
     if not show_image:
         return
 
-    if img is None:
-        fig, ax = model.plot_image(cmap="gray", levels=20, return_fig=True, xlim=(-8, 2), ylim=(-8, 2))
-        ax.set_frame_on(False)
-        img = fig, ax
+    fig, ax = model.plot_image(cmap="gray", levels=20, return_fig=True, xlim=(-8, 2), ylim=(-8, 2))
+    ax.set_frame_on(False)
 
-    fig, ax = img
     c = colors[0]
     ax.plot(*list(zip(*model.coords_history)), linewidth=1, color=c, zorder=2, label=f'{method[0]} {opt[0]}')
     ax.scatter(*list(zip(*model.coords_history[::stride])), s=8, zorder=1, alpha=0.75, marker='x', color=c)
     ax.scatter(*model.coords_history[-1], s=64, zorder=3, marker='x', color=c)
 
-    f = copy.deepcopy(fig)
-    f.legend()
-    f.savefig('rosenbrock.png', dpi=1000)
+    fig.legend()
+    fig.savefig('rastrigin.png', dpi=1000)
     plt.close(fig)
 
 

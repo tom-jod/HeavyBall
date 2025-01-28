@@ -20,9 +20,6 @@ class Model(nn.Module):
         self.register_buffer('scale', F.normalize(torch.arange(size).float().add(1).square(), dim=0))
 
     def forward(self, inp):
-        # Expand param to match batch size
-        param = self.param.view(1, -1).expand(inp.size(0), -1)
-        # Apply scaling and compute loss per batch item
         return (param * self.scale).square()
 
 @app.command()
@@ -42,12 +39,10 @@ def main(
     model = Model(size).cuda()
 
     def data():
-        # For quadratic problem, input is just a batch dimension tensor
-        inp = torch.ones((batch, size), device='cuda', dtype=dtype[0])
-        return inp, torch.zeros((batch, size), device='cuda', dtype=dtype[0])
+        return None, None
 
-    trial(model, data, F.mse_loss, param_norm_win_condition(win_condition_multiplier * 1e-4, 0), steps, opt[0], dtype[0], size, batch, weight_decay, method[0], 1, 1,
-          failure_threshold=2, group=100, base_lr=1e-3, trials=trials)
+    trial(model, data, None, param_norm_win_condition(win_condition_multiplier * 1e-8, 0), steps, opt[0], dtype[0], size, batch, weight_decay, method[0], 1, 1,
+          failure_threshold=2, base_lr=1e-3, trials=trials)
 
 if __name__ == '__main__':
     app()
