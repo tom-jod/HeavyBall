@@ -22,10 +22,14 @@ app = typer.Typer(pretty_exceptions_enable=False)
 set_torch()
 
 
-def objective(*args, A=10):
-    offset = len(args) * A
-    return offset + sum(x ** 2  - (2 * math.pi * x).cos() * A for x in args)
+def _formula(x, A):
+    return 1 + x ** 2 - A * math.cos(2 * math.pi * x)
 
+def objective(*args, A=10):
+    if len(args) == 1:
+        return _formula(args[0], A).mean()
+
+    return sum(_formula(x, A) for x in args) / len(args)
 
 class Model(nn.Module):
     def __init__(self, x):
@@ -33,16 +37,18 @@ class Model(nn.Module):
         self.param = nn.Parameter(torch.tensor(x).float())
 
     def forward(self):
-        return objective(*self.param)
+        return objective(self.param)
 
 
 @app.command()
 def main(method: List[str] = typer.Option(['qr'], help='Eigenvector method to use (for SOAP)'),
          dtype: List[str] = typer.Option(['float32'], help='Data type to use'), steps: int = 100,
          weight_decay: float = 0, opt: List[str] = typer.Option(['ForeachSOAP'], help='Optimizers to use'),
-         show_image: bool = False, trials: int = 100, win_condition_multiplier: float = 1.0, ):
+         show_image: bool = False, trials: int = 100, win_condition_multiplier: float = 1.0, size: int = 128):
+    if show_image:
+        assert size == 2, "Image can only be displayed for 2D functions"
     dtype = [getattr(torch, d) for d in dtype]
-    coords = (-2.5, -1.5)
+    coords = (-2.2,) * size
 
     # Clean up old plots
     for path in pathlib.Path('.').glob('rastrigin.png'):
