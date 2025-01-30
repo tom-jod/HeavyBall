@@ -13,9 +13,13 @@ import hyperopt
 import numpy as np
 import torch
 
+from torch._dynamo import config
+
+config.cache_size_limit = 2 ** 16
+
 np.warnings = warnings
 
-base_args = {'betas': (0.9, 0.999), 'precondition_frequency': 1, 'merge_dims': True, 'warmup_steps': 100,
+base_args = {'betas': (0.9, 0.999), 'precondition_frequency': 1, 'merge_dims': False, 'warmup_steps': 100,
              'max_precond_dim': 2 ** 16, 'beta': 0.9, 'max_size_triangular': 2 ** 16, 'split': False, 'eps': 1e-8,
              'weight_decay': 1e-4}
 
@@ -35,9 +39,12 @@ def ema(hist, beta=0.9):
 
 class Objective:
     def __init__(self, failure_threshold, model, opt, steps, group, data, loss_fn, win_condition, weight_decay,
-                 max_consecutive_failures=1, minimal_improvement=1e-2, **kwargs):
+                 max_consecutive_failures=32, minimal_improvement=1e-4, ema_index: int = 0, **kwargs):
         self.failure_threshold = failure_threshold
-        self.model = torch.compile(model.cuda(), mode='max-autotune-no-cudagraphs')
+        self.model = model.cuda()
+        for mod in self.model.modules():
+            if isinstance(mod, torch.nn.RNNBase):
+                mod.flatten_parameters()
         self.opt = opt
         self.steps = steps
         self.group = group
@@ -46,8 +53,9 @@ class Objective:
         self.win_condition = win_condition
         self.weight_decay = weight_decay
         self.kwargs = kwargs
-        self.max_consecutive_failures = max_consecutive_failures    
+        self.max_consecutive_failures = max_consecutive_failures
         self.minimal_improvement = minimal_improvement
+        self.ema_index = ema_index
 
         self.m = None
         self.loss0 = None
@@ -63,10 +71,9 @@ class Objective:
         o = get_optim(self.opt, self.m.parameters(), **params, weight_decay=self.weight_decay, **self.kwargs)
         torch_hist = []
         loss_hist = np.empty(self.steps, dtype=np.float64)
-        ema_states = np.empty(8, dtype=np.float64)
-        update_factor = 3.0 ** (-np.arange(1, 9))
+        ema_states = np.zeros(20, dtype=np.float64)
+        update_factor = 2.0 ** (-np.arange(1, 21))
         consecutive_failures = 0
-
 
         for i in range(self.steps // self.group):
             if hasattr(o, 'train'):
@@ -86,6 +93,9 @@ class Objective:
                 o.zero_grad()
                 torch_hist.append(loss.detach())
                 if self.loss0 is None:
+                    for mod in self.m.modules():
+                        if isinstance(mod, torch.nn.RNNBase):
+                            mod.flatten_parameters()
                     self.loss0 = torch_hist[-1].item()
             if hasattr(o, 'eval'):
                 o.eval()
@@ -93,22 +103,23 @@ class Objective:
                 loss_hist[i * self.group + j] = h.item()
             torch_hist.clear()
             lh = loss_hist[:(i + 1) * self.group]
-            if i == 0:
-                ema_states[:] = np.stack([ema(lh, 1 - u) for u in update_factor])            
-            else:
-                for loss in lh[-self.group:]:
-                    ema_states += update_factor * (loss - ema_states) 
-                    failed = np.any(ema_states[1:] * (1 - self.minimal_improvement) < ema_states[:-1])
-                    if failed:
-                        consecutive_failures += 1
-                    else:
-                        consecutive_failures = 0
-                    if consecutive_failures >= self.max_consecutive_failures:
-                        return ema_states[-1], self.m, loss
             for j, loss in enumerate(lh[-self.group:]):
-                if self.win_condition(self.m, loss)[0] or loss > self.failure_threshold * self.loss0 or not np.isfinite(loss):
-                    return ema_states[-1], self.m, loss                    
-        return ema_states[-1], self.m, loss
+                uf = 1 - heavyball.utils.beta_debias(1 - update_factor, i * self.group + j + 1)
+                ema_states += uf * (loss - ema_states)
+                comparison = ema_states[:, None] * (1 - self.minimal_improvement) < ema_states[None, :]
+                comparison = np.triu(comparison, k=1)
+                failed = np.any(comparison)
+                if failed:
+                    consecutive_failures += 1
+                else:
+                    consecutive_failures = 0
+                if consecutive_failures >= self.max_consecutive_failures:
+                    return ema_states[self.ema_index], self.m, loss
+            for j, loss in enumerate(lh[-self.group:]):
+                if self.win_condition(self.m, loss)[0] or loss > self.failure_threshold * self.loss0 or not np.isfinite(
+                        loss):
+                    return ema_states[self.ema_index], self.m, loss
+        return ema_states[self.ema_index], self.m, loss
 
     def objective(self, params):
         self.attempt += 1
@@ -141,7 +152,7 @@ def param_norm_win_condition(target, offset):
 
 
 def trial(model, data, loss_fn, win_condition, steps, opt, dtype, size, batch, weight_decay, method, length, depth,
-          trials=10, failure_threshold=3, group=256, base_lr: float = 1e-3, return_best: bool = False):
+          trials=10, failure_threshold=3, group=64, base_lr: float = 1e-3, return_best: bool = False):
     kwargs = {'caution': False, 'mars': False}
     if opt.startswith('cautious-'):
         opt = opt[len('cautious-'):]
@@ -177,7 +188,7 @@ def trial(model, data, loss_fn, win_condition, steps, opt, dtype, size, batch, w
     obj = Objective(failure_threshold, model, opt, steps, group, data, loss_fn, _win_condition, weight_decay, **kwargs)
     start_time = time.time()
     sys.stdout = sys.stderr
-    out = hyperopt.fmin(obj.objective, (hyperopt.hp.loguniform('lr', np.log(1e-6), np.log(0.1)),  #
+    out = hyperopt.fmin(obj.objective, (hyperopt.hp.loguniform('lr', np.log(1e-7), np.log(10)),  #
                                         hyperopt.hp.loguniform('1mbeta1', np.log(1e-3), np.log(1)),  #
                                         hyperopt.hp.loguniform('1mbeta2', np.log(1e-5), np.log(1)),  #
                                         hyperopt.hp.loguniform('1mshampoo_beta', np.log(1e-4), np.log(1))),  #

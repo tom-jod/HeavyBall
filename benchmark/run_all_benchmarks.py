@@ -110,17 +110,36 @@ def unordered_star_imap(pool, fn, iterable):
 def main(opt: list[str] = typer.Option([], help='Optimizers'), steps: int = 100_000, timeout: int = 3600 * 4,
          output: str = 'benchmark_results.md', trials: int = 1000, dtype: str = 'float32', parallelism: int = 16,
          caution: bool = False, mars: bool = False, unscaled_caution: bool = False):
-    scripts = ['beale.py', 'powers.py', 'powers_varying_target.py', 'quadratic_varying_target.py',
-               'quadratic_varying_scale.py', 'rastrigin.py', 'rosenbrock.py', 'xor_digit.py', 'xor_sequence.py',
-               'xor_spot.py']
+    benchmarks = [
+        'beale.py',
+        'rosenbrock.py',
+        'quadratic_varying_scale.py',
+        'quadratic_varying_target.py',
+        'noisy_matmul.py',
+        'xor_sequence.py',
+        'xor_digit.py',
+        'xor_spot.py',
+        'saddle_point.py',
+        'discontinuous_gradient.py',
+        'plateau_navigation.py',
+        'scale_invariant.py',
+        'momentum_utilization.py',
+        'batch_size_scaling.py',
+        'sparse_gradient.py',
+        'layer_wise_scale.py',
+        'gradient_delay.py',
+        'ill_conditioned.py',
+        'gradient_noise_scale.py',
+        'adversarial_gradient.py'
+    ]
 
     opt = ['mars-' + o for o in opt if mars] + opt
     opt = ['cautious-' + o for o in opt if caution] + ['unscaled_cautious-' + o for o in opt if unscaled_caution] + opt
 
     results = []
-    total = len(scripts) * len(opt)
+    total = len(benchmarks) * len(opt)
     completed = 0
-    args = [(script, o, steps, dtype, trials, timeout) for script in scripts for o in opt]
+    args = [(script, o, steps, dtype, trials, timeout) for script in benchmarks for o in opt]
 
     with mp_pool.ThreadPool(parallelism) as pool:
         for (script, o, steps, dtype, trials, timeout), result in unordered_star_imap(pool, run_benchmark, args):

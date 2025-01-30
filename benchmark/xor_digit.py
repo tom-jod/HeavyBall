@@ -22,23 +22,24 @@ class Model(nn.Module):
         self.embed = nn.Embedding(2, size)
         self.enc = nn.LSTM(size, size, depth, batch_first=False)
         self.enc.flatten_parameters()
-        self.proj = nn.Linear(size, 1, bias=False)
+        self.proj = nn.Sequential(nn.LayerNorm(size),  #
+                                  nn.Linear(size, 1))
 
     def forward(self, inp):
         inp = inp.transpose(0, 1)
         inp = self.embed(inp.squeeze(-1).long())
         out, _ = self.enc(inp)
-        return self.proj(out[:, -1])
+        return self.proj(out[-1, :])
 
 
 @app.command()
 def main(
     method: List[str] = typer.Option(['qr'], help='Eigenvector method to use (for SOAP)'),
     dtype: List[str] = typer.Option(['float32'], help='Data type to use'),
-    length: int = 16,
+    length: int = 8,
     size: int = 32,
     depth: int = 1,
-    batch: int = 16,
+    batch: int = 128,
     steps: int = 10,
     weight_decay: float = 0,
     opt: List[str] = typer.Option(['ForeachSOAP'], help='Optimizers to use'),

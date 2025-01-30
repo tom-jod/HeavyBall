@@ -19,8 +19,8 @@ class Model(nn.Module):
         self.param = nn.Parameter(torch.randn(size))
         self.register_buffer('scale', F.normalize(torch.arange(size).float().add(1).square(), dim=0))
 
-    def forward(self, inp):
-        return (param * self.scale).square()
+    def forward(self):
+        return (self.param * self.scale).square().mean()
 
 @app.command()
 def main(

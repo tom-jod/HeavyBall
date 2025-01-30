@@ -130,7 +130,7 @@ def plot_decision_boundary(model, loader, ax, resolution, device='cuda'):
     
     grid = torch.FloatTensor(np.c_[xx.ravel(), yy.ravel()]).to(device)
     
-    batch_size = 10000
+    batch_size = 2 ** 14
     boundaries1 = []
     boundaries2 = []
     

@@ -5,6 +5,9 @@ import random
 import string
 import warnings
 from typing import List, Optional, Tuple, Callable, Union
+import ast
+import inspect
+import textwrap
 
 import numpy as np
 import torch
@@ -616,13 +619,43 @@ def project(grad, Q, back: bool):
         grad = out.to(grad.dtype)
     return grad
 
+from unittest.mock import patch
+
+def modify_closure(closure):
+    """
+    Modifies the closure function to use retain_graph=True in backward().
+
+    Args:
+        closure: The closure function passed to the optimizer.
+
+    Returns:
+        The return value of the modified closure.
+    """
+
+    def patched_backward(self, *args, **kwargs):
+        kwargs['retain_graph'] = True
+        return original_backward(self, *args, **kwargs)
+
+    original_backward = torch.Tensor.backward
+
+    with patch.object(torch.Tensor, 'backward', patched_backward):
+        return closure()
+
 
 class StatefulOptimizer(torch.optim.Optimizer):
+    """
+    two_step_hessian saves memory, but needs more compute. 
+    Both `True` and `False` have some edge cases they don't support, so experiment with it.
+    The previous (heavyball<=1.5.3) default was `True`, which is incompatible with some benchmarks but works better with RevNet
+    Further notice that both methods have different numerics outputs
+    """
+
     ema_decay: float = 0.001
     compile_step: bool = False
     hessian_approx: bool = False
     precond_schedule: Union[Callable, float, None] = None
     stochastic_schedule: bool = False
+    two_step_hessian: bool = False
 
     def __init__(self, params, defaults, foreach: bool = True, use_ema: bool = False):
         super().__init__(params, {**defaults, 'foreach': foreach})
@@ -734,39 +767,55 @@ class StatefulOptimizer(torch.optim.Optimizer):
                         ema_clone = self.state_(p)['param_ema'].data.clone()
                         set_(self.state_(p)['param_ema'], p.data)
                         set_(p.data, ema_clone)
+    def _handle_closure(self, closure):
+        hessian_approx = self.hessian_approx and self._is_preconditioning
+
+        if closure is None:
+            if hessian_approx:
+                raise ValueError("Hessian approximation requires a closure.")
+            return None
+
+        if not hessian_approx:
+            with torch.enable_grad():
+                loss = closure()
+            return loss
+
+        with torch.enable_grad():
+            if self.two_step_hessian:
+                loss = closure()  # closure without retain_graph=True
+            else:
+                loss = modify_closure(closure)  # closure with retain_graph=True
+
+        grads = []
+        for group in self.param_groups:
+            for p, g in self.split_p_and_g_in_group(group, skip_none=True, should_promote=False):
+                grads.append(g)
+                p.vector = torch.randn_like(p)
+                p.orig = p.data.clone()
+                stochastic_add_(p.data, p.vector, tiny_bf16)
+
+        with torch.enable_grad():
+            if self.two_step_hessian:
+                closure()
+            else:
+                loss.backward(retain_graph=False)  # clean up
+
+        for group in self.param_groups:
+            for p, g in self.split_p_and_g_in_group(group, skip_none=True, should_promote=False):
+                p.grad = grads.pop(0)
+                stochastic_add_(g, p.grad, -1)
+                p.hessian_vector = g
+                p.data.copy_(p.orig)
+                del p.orig
+        return loss
+
 
     def step(self, closure: Optional[Callable] = None):
         if self.precond_schedule is None:
             self._is_preconditioning = False
         else:
             self._is_preconditioning = psgd_should_update(self._inner_group, self.precond_schedule, self._precond_rng)
-        hessian_approx = self.hessian_approx and self._is_preconditioning
-        if closure is None:
-            if hessian_approx:
-                raise ValueError("Hessian approximation requires a closure.")
-            loss = None
-        else:
-            with torch.enable_grad():
-                loss = closure()
-            if hessian_approx:
-                grads = []
-                for group in self.param_groups:
-                    for p, g in self.split_p_and_g_in_group(group, skip_none=True, should_promote=False):
-                        grads.append(g)
-                        p.vector = torch.randn_like(p)
-                        p.orig = p.data.clone()
-                        stochastic_add_(p.data, p.vector, tiny_bf16)
-
-                with torch.enable_grad():
-                    closure()
-
-                for group in self.param_groups:
-                    for p, g in self.split_p_and_g_in_group(group, skip_none=True, should_promote=False):
-                        p.grad = grads.pop(0)
-                        stochastic_add_(g, p.grad, -1)
-                        p.hessian_vector = g
-                        p.data.copy_(p.orig)
-                        del p.orig
+        loss = self._handle_closure(closure)
 
         # we assume that parameters are constant and that there are no excessive recompiles
         with torch.no_grad(), torch._dynamo.utils.disable_cache_limit():
