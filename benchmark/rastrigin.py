@@ -23,7 +23,7 @@ set_torch()
 
 
 def _formula(x, A):
-    return 1 + x ** 2 - A * math.cos(2 * math.pi * x)
+    return 1 + x ** 2 - A * torch.cos(2 * math.pi * x)
 
 def objective(*args, A=10):
     if len(args) == 1:
