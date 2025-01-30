@@ -12,7 +12,6 @@ import heavyball.utils
 import hyperopt
 import numpy as np
 import torch
-
 from torch._dynamo import config
 
 config.cache_size_limit = 2 ** 16
@@ -31,15 +30,52 @@ def get_optim(optim, params, **kwargs):
     return o
 
 
-def ema(hist, beta=0.9):
-    fac = beta ** np.arange(len(hist), 0, -1)
-    fac /= fac.sum()
-    return hist @ fac
+class Validator:
+    def __init__(self, mapping, emas: int = 20):
+        self.mapping = mapping
+        max_consecutive_failures, minimal_improvement = zip(*mapping.items())
+        self.max_consecutive_failures = np.array(max_consecutive_failures)
+        self.minimal_improvement = np.array(minimal_improvement)
+        self.consecutive_failures = np.zeros(len(max_consecutive_failures), dtype=np.int64)
+        self.emas = emas
+        self.ema_states = np.zeros((self.emas,), dtype=np.float64)
+        self.update_factor = 2.0 ** (-np.arange(1, 21))
+        self.step = 0
+        self.triu_indices = np.triu_indices(self.emas, k=1)
+
+    def new(self):
+        new = copy.copy(self)
+        new.consecutive_failures = np.zeros_like(new.consecutive_failures)
+        new.ema_states = np.zeros_like(new.ema_states)
+        new.step = 0
+        return new
+
+    def __call__(self, loss):
+        if not np.isfinite(loss):
+            return True
+
+        # fused, debiased EMAs
+        self.step += 1
+        uf = 1 - heavyball.utils.beta_debias(1 - self.update_factor, self.step)
+        self.ema_states += uf * (loss - self.ema_states)
+
+        # create flat comparison matrix
+        old_state = self.ema_states[:, None]  # vertical
+        new_state = self.ema_states[None, :]  # horizontal
+        flat_ratio = (old_state / new_state)[self.triu_indices]
+
+        # new * (1 - minimal_improvement) < old  == 1 - mi < old / new
+        comparison = (1 - self.minimal_improvement)[:, None] < flat_ratio[None, :]
+
+        # aggregate failures
+        failed = np.any(comparison, axis=1)
+        self.consecutive_failures[:] = np.where(failed, self.consecutive_failures + 1, 0)
+        return np.any(self.consecutive_failures >= self.max_consecutive_failures)
 
 
 class Objective:
     def __init__(self, failure_threshold, model, opt, steps, group, data, loss_fn, win_condition, weight_decay,
-                 max_consecutive_failures=32, minimal_improvement=1e-4, ema_index: int = 0, **kwargs):
+                 ema_index: int = 0, **kwargs):
         self.failure_threshold = failure_threshold
         self.model = model.cuda()
         for mod in self.model.modules():
@@ -53,10 +89,11 @@ class Objective:
         self.win_condition = win_condition
         self.weight_decay = weight_decay
         self.kwargs = kwargs
-        self.max_consecutive_failures = max_consecutive_failures
-        self.minimal_improvement = minimal_improvement
         self.ema_index = ema_index
 
+        self.validator = Validator(
+            {32768: 1e-7, 16384: 1e-6, 8192: 1e-5, 4096: 1e-4, 1024: 1e-3, 512: 1e-2, 256: 0, 128: -1e-4, 64: -1e-3,
+             32: -0.01, 16: -0.1, 8: -0.33, 4: -0.5, 2: -0.75, 1: -0.99})
         self.m = None
         self.loss0 = None
         self.attempt = 0
@@ -71,9 +108,7 @@ class Objective:
         o = get_optim(self.opt, self.m.parameters(), **params, weight_decay=self.weight_decay, **self.kwargs)
         torch_hist = []
         loss_hist = np.empty(self.steps, dtype=np.float64)
-        ema_states = np.zeros(20, dtype=np.float64)
-        update_factor = 2.0 ** (-np.arange(1, 21))
-        consecutive_failures = 0
+        validator = self.validator.new()
 
         for i in range(self.steps // self.group):
             if hasattr(o, 'train'):
@@ -104,22 +139,12 @@ class Objective:
             torch_hist.clear()
             lh = loss_hist[:(i + 1) * self.group]
             for j, loss in enumerate(lh[-self.group:]):
-                uf = 1 - heavyball.utils.beta_debias(1 - update_factor, i * self.group + j + 1)
-                ema_states += uf * (loss - ema_states)
-                comparison = ema_states[:, None] * (1 - self.minimal_improvement) < ema_states[None, :]
-                comparison = np.triu(comparison, k=1)
-                failed = np.any(comparison)
-                if failed:
-                    consecutive_failures += 1
-                else:
-                    consecutive_failures = 0
-                if consecutive_failures >= self.max_consecutive_failures:
-                    return ema_states[self.ema_index], self.m, loss
+                if validator(loss):
+                    return validator.ema_states[self.ema_index], self.m, loss
             for j, loss in enumerate(lh[-self.group:]):
-                if self.win_condition(self.m, loss)[0] or loss > self.failure_threshold * self.loss0 or not np.isfinite(
-                        loss):
-                    return ema_states[self.ema_index], self.m, loss
-        return ema_states[self.ema_index], self.m, loss
+                if self.win_condition(self.m, loss)[0] or loss > self.failure_threshold * self.loss0:
+                    return validator.ema_states[self.ema_index], self.m, loss
+        return validator.ema_states[self.ema_index], self.m, loss
 
     def objective(self, params):
         self.attempt += 1
