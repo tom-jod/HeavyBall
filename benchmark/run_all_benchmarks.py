@@ -113,6 +113,7 @@ def main(opt: list[str] = typer.Option([], help='Optimizers'), steps: int = 100_
     benchmarks = [
         'beale.py',
         'rosenbrock.py',
+        'rastrigin.py',
         'quadratic_varying_scale.py',
         'quadratic_varying_target.py',
         'noisy_matmul.py',
@@ -132,6 +133,7 @@ def main(opt: list[str] = typer.Option([], help='Optimizers'), steps: int = 100_
         'gradient_noise_scale.py',
         'adversarial_gradient.py'
     ]
+    # benchmarks = ['xor_sequence.py', 'quadratic_varying_target.py', 'quadratic_varying_target.py', 'plateau_navigation.py']
 
     opt = ['mars-' + o for o in opt if mars] + opt
     opt = ['cautious-' + o for o in opt if caution] + ['unscaled_cautious-' + o for o in opt if unscaled_caution] + opt
