@@ -22,12 +22,13 @@ def objective(x, y):
 
 
 class Model(nn.Module):
-    def __init__(self, x):
+    def __init__(self, x, offset):
         super().__init__()
         self.param = nn.Parameter(torch.tensor(x).float())
+        self.offset = offset
 
     def forward(self):
-        return objective(*self.param)
+        return objective(*self.param) + self.offset
 
 
 @app.command()
@@ -36,7 +37,7 @@ def main(method: List[str] = typer.Option(['qr'], help='Eigenvector method to us
          weight_decay: float = 0, opt: List[str] = typer.Option(['ForeachSOAP'], help='Optimizers to use'),
          show_image: bool = False, trials: int = 100, win_condition_multiplier: float = 1.0, ):
     dtype = [getattr(torch, d) for d in dtype]
-    coords = (0.1, 0.1)  # Start near but not at saddle point
+    coords = (1e-6, 1e-6)  # Start near but not at saddle point
 
     # Clean up old plots
     for path in pathlib.Path('.').glob('saddle_point.png'):
@@ -48,17 +49,19 @@ def main(method: List[str] = typer.Option(['qr'], help='Eigenvector method to us
     rng = random.Random(0x1239121)
     rng.shuffle(colors)
 
+    offset = win_condition_multiplier * 10
+
     if show_image:
-        model = FunctionDescent2D(lambda *x: objective(*x).log(), coords=coords, xlim=(-2, 2), ylim=(-2, 2), normalize=8,
+        model = FunctionDescent2D(lambda *x: objective(*x).add(offset).log(), coords=coords, xlim=(-2, 2), ylim=(-2, 2), normalize=8,
                                   after_step=torch.exp)
     else:
-        model = Model(coords)
+        model = Model(coords, offset)
     model.double()
 
     def data():
         return None, None
 
-    trial(model, data, None, loss_win_condition(win_condition_multiplier * -10000), steps, opt[0], dtype[0], 1, 1,
+    trial(model, data, None, loss_win_condition(0.1), steps, opt[0], dtype[0], 1, 1,
           weight_decay, method[0], 1, 1, failure_threshold=3, base_lr=1e-3, trials=trials)
 
 

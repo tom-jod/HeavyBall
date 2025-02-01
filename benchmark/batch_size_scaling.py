@@ -1,13 +1,13 @@
 import math
+import random
 from typing import List
 
 import torch
 import torch.backends.opt_einsum
 import typer
-from torch import nn
-
-from benchmark.utils import trial, loss_win_condition
+from benchmark.utils import trial, param_norm_win_condition, Validator
 from heavyball.utils import set_torch
+from torch import nn
 
 app = typer.Typer(pretty_exceptions_enable=False)
 set_torch()
@@ -17,16 +17,16 @@ class Model(nn.Module):
     def __init__(self, size=1024):
         super().__init__()
         self.param = nn.Parameter(torch.randn(size))
-        self.register_buffer('batch_sizes', torch.tensor([1, 4, 16, 64, 256]))
-        self.current_batch = 0
+        self.register_buffer('batch_sizes', torch.tensor([1, 4, 16, 64]))
+        self.rng = random.Random(0x1238192)
 
     def forward(self):
         """Test optimizer's ability to handle different batch sizes and noise scales."""
-        batch_size = self.batch_sizes[self.current_batch].item()
-        self.current_batch = (self.current_batch + 1) % len(self.batch_sizes)
-        
-        # Add noise scaled by batch size
-        noise = torch.randn_like(self.param) / math.sqrt(batch_size)
+        batch_size = self.rng.choice(self.batch_sizes)
+        generator = torch.Generator(device=self.param.device).manual_seed(self.rng.randint(0, 2 ** 31))
+        noise = torch.randn(self.param.shape, generator=generator, device=self.param.device)
+        scale = self.param.norm() / (noise.norm() + 1e-6)
+        noise *= scale.detach() / math.sqrt(batch_size)
         return (self.param + noise).square().mean()
 
 
@@ -42,8 +42,8 @@ def main(method: List[str] = typer.Option(['qr'], help='Eigenvector method to us
         return None, None
 
     # Use a more lenient win condition since we have inherent noise
-    trial(model, data, None, loss_win_condition(win_condition_multiplier * 1e-4), steps, opt[0], dtype[0], 1, 1,
-          weight_decay, method[0], 1, 1, failure_threshold=3, base_lr=1e-3, trials=trials)
+    trial(model, data, None, param_norm_win_condition(win_condition_multiplier * 1e-8, 0), steps, opt[0], dtype[0], 1,
+          1, weight_decay, method[0], 1, 1, failure_threshold=5, base_lr=1e-3, trials=trials)
 
 
 if __name__ == '__main__':

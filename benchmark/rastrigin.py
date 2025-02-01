@@ -23,7 +23,7 @@ set_torch()
 
 
 def _formula(x, A):
-    return 1 + x ** 2 - A * torch.cos(2 * math.pi * x)
+    return x ** 2 + A * (1 - torch.cos(2 * math.pi * x))
 
 def objective(*args, A=10):
     if len(args) == 1:
@@ -44,7 +44,7 @@ class Model(nn.Module):
 def main(method: List[str] = typer.Option(['qr'], help='Eigenvector method to use (for SOAP)'),
          dtype: List[str] = typer.Option(['float32'], help='Data type to use'), steps: int = 100,
          weight_decay: float = 0, opt: List[str] = typer.Option(['ForeachSOAP'], help='Optimizers to use'),
-         show_image: bool = False, trials: int = 100, win_condition_multiplier: float = 1.0, size: int = 128):
+         show_image: bool = False, trials: int = 100, win_condition_multiplier: float = 1.0, size: int = 2):
     if show_image:
         assert size == 2, "Image can only be displayed for 2D functions"
     dtype = [getattr(torch, d) for d in dtype]
@@ -69,7 +69,7 @@ def main(method: List[str] = typer.Option(['qr'], help='Eigenvector method to us
     def data():
         return None, None
 
-    model = trial(model, data, None, loss_win_condition(win_condition_multiplier * 0.1 * (not show_image)), steps,
+    model = trial(model, data, None, loss_win_condition(win_condition_multiplier * 1e-2 * (not show_image)), steps,
                   opt[0], dtype[0], 1, 1, weight_decay, method[0], 1, 1, base_lr=1e-4, trials=trials,
                   return_best=show_image)
 

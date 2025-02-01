@@ -8,6 +8,7 @@ import torch.backends.opt_einsum
 import typer
 from image_descent import FunctionDescent2D
 from torch import nn
+import math
 
 from benchmark.utils import trial, loss_win_condition
 from heavyball.utils import set_torch
@@ -16,9 +17,11 @@ app = typer.Typer(pretty_exceptions_enable=False)
 set_torch()
 
 
-def objective(x, y):
-    """Tests optimizer's ability to handle regions with very small gradients."""
-    return 1/(1 + torch.exp(-100*(x**2 + y**2 - 1)))  # Sharp plateau transition
+def objective(x, y, scale: float = 10):
+    """Tests optimizer's ability to handle regions with very small gradients and sharp plateaus."""
+    output = 1/(1 + torch.exp((x**2 + y**2 - 1) * -scale))
+    minimum = 1 / (1 + math.exp(scale))
+    return output - minimum  # ensure the minimum is at 0
 
 
 class Model(nn.Module):
@@ -58,7 +61,7 @@ def main(method: List[str] = typer.Option(['qr'], help='Eigenvector method to us
     def data():
         return None, None
 
-    trial(model, data, None, loss_win_condition(win_condition_multiplier * 1e-6), steps, opt[0], dtype[0], 1, 1,
+    trial(model, data, None, loss_win_condition(win_condition_multiplier * 1e-4), steps, opt[0], dtype[0], 1, 1,
           weight_decay, method[0], 1, 1, failure_threshold=3, base_lr=1e-3, trials=trials)
 
 

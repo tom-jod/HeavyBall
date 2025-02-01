@@ -5,7 +5,7 @@ import torch.backends.opt_einsum
 import typer
 from torch import nn
 
-from benchmark.utils import trial, loss_win_condition
+from benchmark.utils import trial, param_norm_win_condition
 from heavyball.utils import set_torch
 
 app = typer.Typer(pretty_exceptions_enable=False)
@@ -22,7 +22,7 @@ class Model(nn.Module):
         """Test optimizer's ability to handle changing noise levels during training."""
         self.step += 1
         # Noise that decreases over time
-        noise_scale = 1.0 / (1.0 + self.step/1024)
+        noise_scale = 1.0 / (4.0 + self.step)
         noise = torch.randn_like(self.param) * noise_scale
         return (self.param + noise).square().mean()
 
@@ -39,7 +39,7 @@ def main(method: List[str] = typer.Option(['qr'], help='Eigenvector method to us
         return None, None
 
     # Lenient initial condition due to high initial noise
-    trial(model, data, None, loss_win_condition(win_condition_multiplier * 1e-4), steps, opt[0], dtype[0], 1, 1,
+    trial(model, data, None, param_norm_win_condition(win_condition_multiplier * 1e-3, 0), steps, opt[0], dtype[0], 1, 1,
           weight_decay, method[0], 1, 1, failure_threshold=5, base_lr=1e-3, trials=trials)
 
 

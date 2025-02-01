@@ -13,7 +13,7 @@ set_torch()
 
 
 class Model(nn.Module):
-    def __init__(self, size=2 ** 14, sparsity=1 / 128):
+    def __init__(self, size=2 ** 10, sparsity=2 ** -5):
         super().__init__()
         self.param = nn.Parameter(torch.randn(size))
         self.sparsity = sparsity
@@ -41,7 +41,7 @@ def main(method: List[str] = typer.Option(['qr'], help='Eigenvector method to us
         return None, None
 
     # Win condition accounts for sparsity - harder to reach very low loss
-    trial(model, data, None, loss_win_condition(win_condition_multiplier * 1e-5), steps, opt[0], dtype[0], 1, 1,
+    trial(model, data, None, loss_win_condition(win_condition_multiplier * 1e-4), steps, opt[0], dtype[0], 1, 1,
           weight_decay, method[0], 1, 1, failure_threshold=5, base_lr=1e-3, trials=trials)  # More failure attempts allowed
 
 

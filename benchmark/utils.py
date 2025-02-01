@@ -1,6 +1,7 @@
 import copy
 import gc
 import inspect
+from multiprocessing import Value
 import random
 import sys
 import time
@@ -12,6 +13,7 @@ import heavyball.utils
 import hyperopt
 import numpy as np
 import torch
+import functools
 from torch._dynamo import config
 
 config.cache_size_limit = 2 ** 16
@@ -20,7 +22,7 @@ np.warnings = warnings
 
 base_args = {'betas': (0.9, 0.999), 'precondition_frequency': 1, 'merge_dims': False, 'warmup_steps': 100,
              'max_precond_dim': 2 ** 16, 'beta': 0.9, 'max_size_triangular': 2 ** 16, 'split': False, 'eps': 1e-8,
-             'weight_decay': 1e-4}
+             'weight_decay': 0}
 
 
 def get_optim(optim, params, **kwargs):
@@ -29,49 +31,106 @@ def get_optim(optim, params, **kwargs):
     o = optim(params, **{k: v for k, v in args.items() if k in signature.parameters})
     return o
 
+class FailureCounter:
+    def __init__(self, mapping, broadcast: int = 1):
+        self.mapping = mapping
+        self.broadcast = broadcast
+        max_consecutive_failures, minimal_improvement = zip(*mapping.items())
+        self.max_consecutive_failures = torch.tensor(max_consecutive_failures, dtype=torch.float64, device='cuda')
+        self.minimal_improvement = torch.tensor(minimal_improvement, dtype=torch.float64, device='cuda')
+        self.consecutive_failures = torch.zeros(len(minimal_improvement), dtype=torch.int64, device='cuda').repeat(broadcast)
+
+    def compare(self, inp, other):
+        old_state = inp.reshape(1, -1, 1)  # vertical
+        new_state = other.reshape(1, 1, -1)  # horizontal
+
+        comparison = new_state * (1 - self.minimal_improvement.reshape(-1, 1, 1)) < old_state
+        return comparison
+
+    def new(self):
+        return FailureCounter(self.mapping, self.broadcast)
+
+    def __call__(self, comparison, failure_scale: float = 1):
+        failed = torch.any(comparison, axis=tuple(range(1, comparison.ndim)))
+        self.consecutive_failures.copy_(torch.where(failed, self.consecutive_failures + 1, 0))
+        return torch.any(self.consecutive_failures >= (self.max_consecutive_failures.view(-1, 1) * failure_scale).flatten())
+
+
+
 
 class Validator:
-    def __init__(self, mapping, emas: int = 20):
-        self.mapping = mapping
-        max_consecutive_failures, minimal_improvement = zip(*mapping.items())
-        self.max_consecutive_failures = np.array(max_consecutive_failures)
-        self.minimal_improvement = np.array(minimal_improvement)
-        self.consecutive_failures = np.zeros(len(max_consecutive_failures), dtype=np.int64)
-        self.emas = emas
-        self.ema_states = np.zeros((self.emas,), dtype=np.float64)
-        self.update_factor = 2.0 ** (-np.arange(1, 21))
+    ema_index: int = 0
+    global_warmup: int = 128
+    ema_patience: float = 1
+    ema_start: int = 0
+
+    def __init__(self, ema_mapping, global_min_mapping, global_avg_mapping, steps, emas: int = 20):
         self.step = 0
-        self.triu_indices = np.triu_indices(self.emas, k=1)
+        self.emas = emas
+
+        self.ema_states = torch.zeros((self.emas,), dtype=torch.float64, device='cuda')
+        es = self.ema_start + 1
+        self.update_factor = 2.0 ** (-torch.arange(es, 20 + es, dtype=torch.float64, device='cuda'))
+        self.ema_failures = FailureCounter(ema_mapping);
+        self.triu_indices = torch.triu_indices(self.emas, self.emas, offset=1)
+
+        self.global_min_loss = torch.tensor((float('inf'),) * steps, dtype=torch.float64, device='cuda')
+        self.global_min_failures = FailureCounter(global_min_mapping, steps)
+
+        self.global_avg_loss = torch.zeros_like(self.global_min_loss)
+        self.global_avg_step = torch.zeros_like(self.global_avg_loss)
+        self.seen_until = np.zeros((), dtype=np.int64)  # seen_until has to be shared
+        self.global_avg_failures = FailureCounter(global_avg_mapping, steps)
+
 
     def new(self):
         new = copy.copy(self)
-        new.consecutive_failures = np.zeros_like(new.consecutive_failures)
-        new.ema_states = np.zeros_like(new.ema_states)
+        new.ema_failures = new.ema_failures.new()
+        new.global_min_failures = new.global_min_failures.new()
+        new.global_avg_failures = new.global_avg_failures.new()
+        new.ema_states = torch.zeros_like(new.ema_states)
         new.step = 0
         return new
 
-    def __call__(self, loss):
-        if not np.isfinite(loss):
-            return True
-
-        # fused, debiased EMAs
+    def _update_ema(self, loss):
         self.step += 1
+        np.copyto(self.seen_until, np.maximum(self.seen_until, self.step - 1))
+
         uf = 1 - heavyball.utils.beta_debias(1 - self.update_factor, self.step)
         self.ema_states += uf * (loss - self.ema_states)
 
-        # create flat comparison matrix
-        old_state = self.ema_states[:, None]  # vertical
-        new_state = self.ema_states[None, :]  # horizontal
-        flat_ratio = (old_state / new_state)[self.triu_indices]
+    def _global_min(self):
+        loss = self.ema_states[self.ema_index]
+        comparison = self.global_min_failures.compare(loss, self.global_min_loss).view(-1, 1)
+        global_failed = self.global_min_failures(comparison, torch.arange(1, 1 + self.global_min_loss.size(0), device='cuda').view(1, -1).clamp(min=self.global_warmup))
 
-        # new * (1 - minimal_improvement) < old  == 1 - mi < old / new
-        comparison = (1 - self.minimal_improvement)[:, None] < flat_ratio[None, :]
+        loss_slice = self.global_min_loss[self.step - 1:]
+        loss_slice.copy_(torch.where(torch.logical_and(loss < loss_slice, torch.isfinite(loss)), loss, loss_slice))
+        return global_failed
 
-        # aggregate failures
-        failed = np.any(comparison, axis=1)
-        self.consecutive_failures[:] = np.where(failed, self.consecutive_failures + 1, 0)
-        return np.any(self.consecutive_failures >= self.max_consecutive_failures)
+    def _global_avg(self):
+        loss = self.ema_states[self.ema_index]
 
+        self.global_avg_step[self.step - 1] += 1
+        self.global_avg_loss[self.step - 1].lerp_(loss, 1 / self.global_avg_step[self.step - 1])
+
+        comparison = self.global_avg_failures.compare(loss, self.global_avg_loss).view(-1, 1)
+        comparison[self.seen_until - 1:].fill_(False)
+        return self.global_avg_failures(comparison, torch.arange(1, 1 + self.global_avg_loss.size(0), device='cuda').view(1, -1).clamp(min=self.global_warmup))
+
+    def _local_convergence(self):
+        comparison = self.ema_failures.compare(self.ema_states, self.ema_states)
+        comparison = comparison[tuple([slice(None), *self.triu_indices])]
+        return self.ema_failures(comparison, self.ema_patience)
+
+    def __call__(self, loss):
+        self._update_ema(loss)
+
+        outputs = [self._global_min(), self._global_avg(), self._local_convergence()]
+        return functools.reduce(torch.logical_or, outputs)
+
+class Stop(Exception):
+    pass
 
 class Objective:
     def __init__(self, failure_threshold, model, opt, steps, group, data, loss_fn, win_condition, weight_decay,
@@ -93,12 +152,15 @@ class Objective:
 
         self.validator = Validator(
             {32768: 1e-7, 16384: 1e-6, 8192: 1e-5, 4096: 1e-4, 1024: 1e-3, 512: 1e-2, 256: 0, 128: -1e-4, 64: -1e-3,
-             32: -0.01, 16: -0.1, 8: -0.33, 4: -0.5, 2: -0.75, 1: -0.99})
+             32: -0.01, 16: -0.1, 8: -0.33, 4: -0.5, 2: -0.75, 1: -0.99},
+             {2: 0},  {6: 0},
+             steps)  # same loss as best after 3x as many steps; 6x higher loss at same step - for every per-step minimum
         self.m = None
-        self.loss0 = None
         self.attempt = 0
         self.best_loss = None
+        self.best_at = 0
         self.avg = None
+
 
     def _inner(self, params):
         params = {'lr': params[0], 'betas': (1 - params[1], 1 - params[2]), 'shampoo_beta': 1 - params[3], 'eps': 1e-8,
@@ -106,15 +168,14 @@ class Objective:
                   }
         self.m = copy.deepcopy(self.model)
         o = get_optim(self.opt, self.m.parameters(), **params, weight_decay=self.weight_decay, **self.kwargs)
-        torch_hist = []
-        loss_hist = np.empty(self.steps, dtype=np.float64)
+        torch_hist = torch.empty(self.group, dtype=torch.float64, device='cuda')
         validator = self.validator.new()
 
         for i in range(self.steps // self.group):
             if hasattr(o, 'train'):
                 o.train()
 
-            for _ in range(self.group):
+            for j in range(self.group):
                 inp, tgt = self.data()
 
                 def _closure():
@@ -126,32 +187,29 @@ class Objective:
 
                 loss = o.step(_closure)
                 o.zero_grad()
-                torch_hist.append(loss.detach())
-                if self.loss0 is None:
-                    for mod in self.m.modules():
-                        if isinstance(mod, torch.nn.RNNBase):
-                            mod.flatten_parameters()
-                    self.loss0 = torch_hist[-1].item()
+
+                with torch.no_grad():
+                    torch_hist[j] = loss.detach()
             if hasattr(o, 'eval'):
                 o.eval()
-            for j, h in enumerate(torch_hist):
-                loss_hist[i * self.group + j] = h.item()
-            torch_hist.clear()
-            lh = loss_hist[:(i + 1) * self.group]
-            for j, loss in enumerate(lh[-self.group:]):
-                if validator(loss):
-                    return validator.ema_states[self.ema_index], self.m, loss
-            for j, loss in enumerate(lh[-self.group:]):
-                if self.win_condition(self.m, loss)[0] or loss > self.failure_threshold * self.loss0:
-                    return validator.ema_states[self.ema_index], self.m, loss
-        return validator.ema_states[self.ema_index], self.m, loss
+            with torch.no_grad():
+                for loss in torch_hist:
+                    loss_cpu = loss.item()
+                    if not np.isfinite(loss_cpu) or self.win_condition(self.m, loss_cpu)[0]:
+                        return validator.ema_states.min().item(), self.m, loss_cpu
+                    if validator(loss).item():
+                        return validator.ema_states.min().item(), self.m, loss_cpu
+        return validator.ema_states.min().item(), self.m, loss.item()
 
     def objective(self, params):
         self.attempt += 1
         target, _, loss = self._inner(params)
         if self.best_loss is None or loss < self.best_loss or not np.isfinite(self.best_loss):
             self.best_loss = loss
+            self.best_at = self.attempt
             self.avg = np.log(np.array(params))
+        if self.best_at * 4 < self.attempt and self.attempt - self.best_at > 50:  # no improvement in a while
+            raise Stop
         return target
 
     def get_best(self):
@@ -161,7 +219,7 @@ class Objective:
 
 def loss_win_condition(target):
     def win(_model, loss: Union[float, hyperopt.Trials]):
-        if not isinstance(loss, float):
+        if not isinstance(loss, (float, torch.Tensor)):
             loss = loss.results[-1]['loss']
         return loss <= target, {}
 
@@ -169,9 +227,11 @@ def loss_win_condition(target):
 
 
 def param_norm_win_condition(target, offset):
+    target = torch.full((), target, device='cuda')
     def win(model, loss):
         with torch.no_grad():
-            return model.param.add(offset).norm().item() < target, {}
+            norm = model.param.add(offset).square().mean().sqrt()
+            return (norm < target).item(), {}
 
     return win
 
@@ -212,15 +272,20 @@ def trial(model, data, loss_fn, win_condition, steps, opt, dtype, size, batch, w
 
     obj = Objective(failure_threshold, model, opt, steps, group, data, loss_fn, _win_condition, weight_decay, **kwargs)
     start_time = time.time()
-    sys.stdout = sys.stderr
-    out = hyperopt.fmin(obj.objective, (hyperopt.hp.loguniform('lr', np.log(1e-7), np.log(10)),  #
-                                        hyperopt.hp.loguniform('1mbeta1', np.log(1e-3), np.log(1)),  #
-                                        hyperopt.hp.loguniform('1mbeta2', np.log(1e-5), np.log(1)),  #
-                                        hyperopt.hp.loguniform('1mshampoo_beta', np.log(1e-4), np.log(1))),  #
-                        max_evals=trials, algo=hyperopt.atpe.suggest, early_stop_fn=lambda x: _win_condition(obj.m, x),
-                        return_argmin=True, show_progressbar=True)
+    stdout, sys.stdout = sys.stdout, sys.stderr
+    try:
+        out = hyperopt.fmin(obj.objective, (hyperopt.hp.loguniform('lr', np.log(1e-7), np.log(10)),  #
+                                            hyperopt.hp.loguniform('1mbeta1', np.log(1e-3), np.log(1)),  #
+                                            hyperopt.hp.loguniform('1mbeta2', np.log(1e-5), np.log(1)),  #
+                                            hyperopt.hp.loguniform('1mshampoo_beta', np.log(1e-4), np.log(1))),  #
+                            max_evals=trials, algo=hyperopt.atpe.suggest, early_stop_fn=lambda x: _win_condition(obj.m, x),
+                            return_argmin=True, show_progressbar=True)
+    except Stop:
+        out = {'lr': 0, '1mbeta1': 0, '1mbeta2': 0, '1mshampoo_beta': 0}
+    finally:
+        sys.stdout = stdout
     torch.cuda.synchronize()
-    sys.stdout = sys.__stdout__
+    
     end_time = time.time()
     if did_win:
         print("Successfully found the minimum.")

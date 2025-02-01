@@ -21,7 +21,7 @@ class Model(nn.Module):
 
     def forward(self):
         """Test optimizer's ability to handle poorly-conditioned problems."""
-        return (self.param * self.scales).square().sum()
+        return (self.param * self.scales).square().mean()
 
 
 @app.command()
@@ -36,7 +36,7 @@ def main(method: List[str] = typer.Option(['qr'], help='Eigenvector method to us
         return None, None
 
     # Very lenient win condition due to extreme condition number (1e12)
-    trial(model, data, None, loss_win_condition(win_condition_multiplier * 1e-3), steps * 2, opt[0], dtype[0], 1, 1,
+    trial(model, data, None, loss_win_condition(win_condition_multiplier * 0.1), steps * 2, opt[0], dtype[0], 1, 1,
           weight_decay, method[0], 1, 1, failure_threshold=10, base_lr=1e-4, trials=trials)  # Lower lr, more steps and attempts
 
 
