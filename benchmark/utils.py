@@ -238,6 +238,8 @@ def param_norm_win_condition(target, offset):
 
 def trial(model, data, loss_fn, win_condition, steps, opt, dtype, size, batch, weight_decay, method, length, depth,
           trials=10, failure_threshold=3, group=64, base_lr: float = 1e-3, return_best: bool = False):
+    heavyball.utils.set_torch()
+
     kwargs = {'caution': False, 'mars': False}
     if opt.startswith('cautious-'):
         opt = opt[len('cautious-'):]

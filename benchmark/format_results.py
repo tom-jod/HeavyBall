@@ -7,6 +7,7 @@ from datetime import datetime
 from matplotlib.patches import Rectangle, FancyBboxPatch
 from matplotlib.colors import LinearSegmentedColormap, to_rgba
 import colorsys
+import typer
 
 def parse_loss(loss_str):
     if loss_str.strip() == 'inf':
@@ -303,9 +304,8 @@ def create_visual_matrix(success_matrix, attempts_matrix, runtime_matrix, loss_m
     
     return fig
 
-def main():
-    # Read and process results
-    df = read_benchmark_results('benchmark_results.md')
+def main(file: str = 'benchmark_results.md'):
+    df = read_benchmark_results(file)
     success_matrix, attempts_matrix, runtime_matrix, loss_matrix = create_result_matrix(df)
     
     # Create the enhanced visual matrix
@@ -353,4 +353,4 @@ def main():
         print(f"{optimizer}: Mean={mean_val:.2e}, Median={median_val:.2e}")
 
 if __name__ == "__main__":
-    main()
+    typer.run(main)

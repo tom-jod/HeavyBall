@@ -24,3 +24,5 @@ This test suite is meant to have fast execution, with each test case covering di
 | Gradient Noise Scale | Test adaptation to changing noise levels                |
 | Memory Length | Test effective use of optimization history                     |
 | Adversarial Gradient | Test robustness to misleading gradient patterns        |
+| Dynamic Landscape | Test adaptation to continuously shifting optimal parameters |
+| Exploding Gradient | Test handling of exponentially growing gradient magnitudes |
