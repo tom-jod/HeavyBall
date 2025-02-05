@@ -107,28 +107,26 @@ def dim_merger(grad, max_precond_dim, split: bool = False):
     so, [128, 64, 3, 3] should result in [128, 576] or [128, 64, 9] instead of [73728] or [8192, 3, 3] the baseline
     would've done
     """
-    shape = grad.shape
     new_shape = []
+    cum_size = 1
 
-    curr_shape = 1
-
-    for sh in shape[1:][::-1]:
-        temp_shape = curr_shape * sh
-        if temp_shape > max_precond_dim:
-            if curr_shape > 1:
-                new_shape.append(curr_shape)
-                curr_shape = sh
+    for s in grad.shape[1:][::-1]:
+        temp_size = cum_size * s
+        if temp_size > max_precond_dim:
+            if cum_size > 1:
+                new_shape.append(cum_size)
+                cum_size = s
             else:
-                new_shape.append(sh)
-                curr_shape = 1
+                new_shape.append(s)
+                cum_size = 1
         else:
-            curr_shape = temp_shape
-    new_shape = [*shape[:1], *new_shape[::-1]]
+            cum_size = temp_size
 
-    if curr_shape > 1 or len(new_shape) == 0:
-        new_shape.append(curr_shape)
+    if cum_size > 1:
+        new_shape.append(cum_size)
 
-    new_grad = grad.reshape(new_shape)  # needs to be .reshape() due to channels_last
+    new_shape = [grad.shape[0], *new_shape[::-1]]
+    new_grad = grad.reshape(new_shape)
     if not split:
         return new_grad
 
