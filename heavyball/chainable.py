@@ -255,7 +255,7 @@ def scale_by_adopt(group, update, grad, param, exp_avg, exp_avg_sq):
 
 
 def _init_soap(state, group, update, grad, param, inner: str = ''):
-    utils.init_preconditioner(grad, state, utils.get_beta2(group), group['max_precond_dim'], group['precondition_1d'])
+    utils.init_preconditioner(grad, state, group['max_precond_dim'], group['precondition_1d'])
 
 
 def _init_psgd(state, group, update, grad, param, cached: bool = False, prob: Optional[callable] = None):
@@ -350,9 +350,9 @@ def scale_by_soap(group, update, grad, param, exp_avg, exp_avg_sq, Q, GG, inner:
     precond = fn(exp_avg, exp_avg_sq, grad_projected, utils.get_beta1(group), utils.get_beta2(group), group['step'], group['eps'])
     precond = [utils.project(p, q, True) for p, q in zip(precond, Q)]
 
-    for u, q, gg, eas in zip(update, Q, GG, exp_avg_sq):
-        utils.update_preconditioner(u, q, gg, eas, group['max_precond_dim'], group['precondition_1d'],
-                                    utils.beta_debias(group['shampoo_beta'], group['step']),
+    for u, q, gg, ea_sq in zip(update, Q, GG, exp_avg_sq):
+        utils.update_preconditioner(u, q, gg, ea_sq,
+                                    utils.beta_debias(group['shampoo_beta'], group['step'] + 1),
                                     group['is_preconditioning'])
     return precond
 
@@ -503,7 +503,7 @@ def create_branch(branches: List[List[callable]], merge_fn: callable):
     def _branch(state, group, update, grad, param):
         outputs = []
         for branch in branches:
-            branch_update = [torch.clone(g, memory_format=torch.preserve_format) for u in update]
+            branch_update = [torch.clone(u, memory_format=torch.preserve_format) for u in update]
             branch_update, skip_update = _inner_chain(state, group, branch_update, grad, param, *branch)
             if skip_update:
                 raise ValueError("Branches should not skip updates")

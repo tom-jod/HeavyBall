@@ -1,20 +1,19 @@
 import functools
 import gc
 import math
+import numpy as np
 import random
 import string
-import warnings
-from typing import List, Optional, Tuple, Callable, Union
-import ast
-import inspect
-import textwrap
-
-import numpy as np
 import torch
+import warnings
+
 from torch import Tensor
 from torch._dynamo.exc import TorchDynamoException
 from torch.backends import cudnn, opt_einsum
 from torch.utils._pytree import tree_map
+from typing import List, Optional, Tuple, Callable, Union
+from unittest.mock import patch
+
 
 compile_mode = "max-autotune-no-cudagraphs"
 dynamic = False
@@ -54,7 +53,7 @@ def decorator_knowngood(func: Callable):
     return _fn
 
 
-einsum_base = string.ascii_lowercase + string.ascii_uppercase
+einsum_base = string.ascii_lowercase
 
 
 @decorator_knowngood
@@ -369,27 +368,15 @@ def get_orthogonal_matrix_QR(GG, Q, exp_avg_sq):
     Computes the eigenbases of the preconditioner using one round of power iteration
     followed by torch.linalg.qr decomposition.
     """
-    matrix = []
-    orth_matrix = []
-    for m, o in zip(GG, Q):
-        if len(m) == 0:
-            matrix.append([])
-            orth_matrix.append([])
-            continue
-        if m.data.dtype != torch.float:
-            matrix.append(promote(m.data))
-            orth_matrix.append(promote(o.data))
-        else:
-            matrix.append(promote(m.data))
-            orth_matrix.append(promote(o.data))
 
     indices = []
 
-    for ind, (m, o, q) in enumerate(zip(matrix, orth_matrix, Q)):
-        if len(m) == 0:
+    for m, o, q in zip(GG, Q, Q):
+        if m is None:
             indices.append(None)
             continue
 
+        m, o = promote(m.data), promote(o.data)
         tmp = m @ o
         est_eig = torch.einsum('ij,ij->j', o, tmp)
         sort_idx = torch.argsort(est_eig, descending=True)
@@ -401,30 +388,19 @@ def get_orthogonal_matrix_QR(GG, Q, exp_avg_sq):
     _compilable_scatter_set(exp_avg_sq, exp_avg_sq, indices)
 
 
-def get_orthogonal_matrix(mat):
+def get_orthogonal_matrix(GG):
     """
     Computes the eigenbases of the preconditioner using torch.linalg.eigh decomposition.
     """
-    matrix = []
-    for m in mat:
-        if len(m) == 0:
-            matrix.append([])
-            continue
-        if m.data.dtype != torch.float:
-            float_data = False
-            original_type = m.data.dtype
-            original_device = m.data.device
-            matrix.append(promote(m.data))
-        else:
-            float_data = True
-            matrix.append(m.data)
 
     final = []
-    for m in matrix:
-        if len(m) == 0:
-            final.append([])
+
+    for m in GG:
+        if m is None:
+            final.append(None)
             continue
 
+        m = promote(m.data)
         device, dtype = m.device, m.dtype
         for modifier in (None, torch.double, 'cpu'):
             if modifier is not None:
@@ -460,20 +436,22 @@ def get_beta1(group):
     beta = None
     if 'beta' in group:
         beta = group['beta']
-    if beta is None and 'betas' in group:
+    elif 'betas' in group:
         beta = group['betas'][0]
     if beta is None:
-        raise ValueError("Beta not found in group.")
-    return beta
+        raise ValueError("beta1 not found in group.")
+    else:
+        return beta
 
 
 def get_beta2(group):
-    if 'beta2_scale' in group:
-        step = max(group.get("step", 1), 1)
-        return 1 - step ** -group['beta2_scale']
+    beta = None
     if 'betas' in group:
-        return group['betas'][1]
-    raise ValueError("Beta2 not found in group.")
+        beta = group['betas'][1]
+    if beta is None:
+        raise ValueError("beta2 not found in group.")
+    else:
+        return beta
 
 
 def stochastic_lerp_(x: List[Tensor], y: List[Tensor], a: Union[float, int, Tensor]):
@@ -537,18 +515,16 @@ def stochastic_multiply_(x: List[Tensor], y: List[Tensor]):
 
 
 @decorator
-def compute_ggt(grad, GG, max_precond_dim, precondition_1d, beta):
-    if grad.dim() == 1 and (not precondition_1d or grad.shape[0] > max_precond_dim):
-        return
-
-    for idx, sh in enumerate(grad.shape):
-        if sh > max_precond_dim:
+def update_ggt(grad, GG, beta):
+    for i, m in enumerate(GG):
+        if m is None:
             continue
-        b = einsum_base[idx]
-        g0 = einsum_base[:grad.dim()]
-        g1 = g0.replace(b, b.upper())
-        outer_product = torch.einsum(f'{g0},{g1}->{b + b.upper()}', grad, grad)
-        GG[idx].lerp_(outer_product, 1 - beta)
+
+        abc = einsum_base[:grad.ndim]
+        b, B = abc[i], abc[i].upper()
+        aBc = abc.replace(b, B)
+        outer_product = torch.einsum(f'{abc},{aBc}->{b}{B}', grad, grad)
+        m.lerp_(outer_product, 1 - beta)
 
 
 def promote(x):
@@ -567,57 +543,46 @@ def min_dtype(xs: List[Tensor]):
     return torch.float32
 
 
-def update_preconditioner(grad, Q, GG, exp_avg_sq, max_precond_dim, precondition_1d, beta, update_precond):
+def update_preconditioner(grad, Q, GG, exp_avg_sq, beta, update_precond):
     """
     Updates the preconditioner matrices and the eigenbases (L, R, Q_L, Q_R in the paper).
     """
-    compute_ggt(grad, GG, max_precond_dim, precondition_1d, beta)
+    update_ggt(grad, GG, beta)
     if update_precond:
         get_orthogonal_matrix_QR(GG, Q, exp_avg_sq)
 
 
-def init_preconditioner(grad, state, beta, max_precond_dim=10000, precondition_1d=False):
+def init_preconditioner(grad, state, max_precond_dim=10000, precondition_1d=False):
     """
     Initializes the preconditioner matrices (L and R in the paper).
     """
-    state['GG'] = []  # Will hold all the preconditioner matrices (L and R in the paper).
-    if grad.dim() == 1:
-        if precondition_1d or grad.shape[0] > max_precond_dim:
-            state['GG'].append(torch.zeros(grad.shape[0], grad.shape[0], device=grad.device, dtype=grad.dtype))
-        else:
-            state['GG'].append([])
+    state['GG'] = []
+    state['Q'] = None
 
-    else:
-        for sh in grad.shape:
-            if sh > max_precond_dim:
-                state['GG'].append([])
+    if grad.numel() > 1 and (grad.ndim > 1 or precondition_1d):
+        for s in grad.shape:
+            if s > max_precond_dim or s == 1:
+                state['GG'].append(None)
             else:
-                state['GG'].append(torch.zeros(sh, sh, device=grad.device, dtype=grad.dtype))
+                state['GG'].append(torch.zeros(s, s, device=grad.device, dtype=grad.dtype))
+    else:
+        state['GG'].append(None)
 
-    compute_ggt(grad, state['GG'], max_precond_dim, precondition_1d, beta)
+    update_ggt(grad, state['GG'], beta=0.0)
     state['Q'] = get_orthogonal_matrix(state['GG'])
 
 
 @decorator
 def project(grad, Q, back: bool):
-    """
+    abc = einsum_base[:grad.ndim]
+    aAcC = ",".join([i.upper() + i if back else i + i.upper() for i, q in zip(abc, Q) if q is not None])
+    AbC = "".join([i.upper() if i in aAcC else i for i in abc])
 
-    :param grad:
-    :param Q:
-    :param merge_dims:
-    :param max_precond_dim:
-    :param back: whether to project to Shampoo eigenbases or back to original space
-    :return:
-    """
-    param = einsum_base[:grad.dim()]
-    preconditioners = ",".join([(g + g.upper())[::-1 if back else 1] for m, g in zip(Q, param) if len(m) > 0])
-    if preconditioners:
-        out = ''.join([c.upper() if c.upper() in preconditioners else c for c in param])
-        out = torch.einsum(f'{param},{preconditioners}->{out}', promote(grad), *[q for q in Q if len(q) > 0])
-        grad = out.to(grad.dtype)
+    if aAcC:
+        grad = torch.einsum(f'{abc},{aAcC}->{AbC}', promote(grad), *[q for q in Q if q is not None]).to(grad)
+
     return grad
 
-from unittest.mock import patch
 
 def modify_closure(closure):
     """
@@ -642,7 +607,7 @@ def modify_closure(closure):
 
 class StatefulOptimizer(torch.optim.Optimizer):
     """
-    two_step_hessian saves memory, but needs more compute. 
+    two_step_hessian saves memory, but needs more compute.
     Both `True` and `False` have some edge cases they don't support, so experiment with it.
     The previous (heavyball<=1.5.3) default was `True`, which is incompatible with some benchmarks but works better with RevNet
     Further notice that both methods have different numerics outputs
@@ -964,7 +929,7 @@ def _compilable_adopt_(grad, exp_avg_sq, exp_avg, beta1, beta2, step):
     copy_stochastic_list_(exp_avg, exp_avg32)
 
     beta2 = beta_debias(beta2, step + 1)
-    exp_avg_sq32 = [eas32.lerp(g * g, 1 - beta2) for eas32, g in zip(exp_avg_sq32, u32)]
+    exp_avg_sq32 = [eas32.lerp(g * g, 1 - beta2) for eas32, g in zip(exp_avg_sq32, g32)]
     copy_stochastic_list_(exp_avg_sq, exp_avg_sq32)
 
     copy_stochastic_list_(grad, update)
