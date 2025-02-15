@@ -1,19 +1,17 @@
 import functools
 import gc
 import math
-import numpy as np
 import random
 import string
-import torch
 import warnings
+from typing import List, Optional, Tuple, Callable, Union
 
+import numpy as np
+import torch
 from torch import Tensor
 from torch._dynamo.exc import TorchDynamoException
 from torch.backends import cudnn, opt_einsum
 from torch.utils._pytree import tree_map
-from typing import List, Optional, Tuple, Callable, Union
-from unittest.mock import patch
-
 
 compile_mode = "max-autotune-no-cudagraphs"
 dynamic = False
@@ -53,7 +51,7 @@ def decorator_knowngood(func: Callable):
     return _fn
 
 
-einsum_base = string.ascii_lowercase
+einsum_base = string.ascii_lowercase + string.ascii_uppercase
 
 
 @decorator_knowngood
@@ -106,26 +104,28 @@ def dim_merger(grad, max_precond_dim, split: bool = False):
     so, [128, 64, 3, 3] should result in [128, 576] or [128, 64, 9] instead of [73728] or [8192, 3, 3] the baseline
     would've done
     """
+    shape = grad.shape
     new_shape = []
-    cum_size = 1
 
-    for s in grad.shape[1:][::-1]:
-        temp_size = cum_size * s
-        if temp_size > max_precond_dim:
-            if cum_size > 1:
-                new_shape.append(cum_size)
-                cum_size = s
+    curr_shape = 1
+
+    for sh in shape[1:][::-1]:
+        temp_shape = curr_shape * sh
+        if temp_shape > max_precond_dim:
+            if curr_shape > 1:
+                new_shape.append(curr_shape)
+                curr_shape = sh
             else:
-                new_shape.append(s)
-                cum_size = 1
+                new_shape.append(sh)
+                curr_shape = 1
         else:
-            cum_size = temp_size
+            curr_shape = temp_shape
+    new_shape = [*shape[:1], *new_shape[::-1]]
 
-    if cum_size > 1:
-        new_shape.append(cum_size)
+    if curr_shape > 1 or len(new_shape) == 0:
+        new_shape.append(curr_shape)
 
-    new_shape = [grad.shape[0], *new_shape[::-1]]
-    new_grad = grad.reshape(new_shape)
+    new_grad = grad.reshape(new_shape)  # needs to be .reshape() due to channels_last
     if not split:
         return new_grad
 
@@ -239,15 +239,21 @@ def clean():
     torch.cuda.empty_cache()
     gc.collect()
 
+def _ignore_warning(msg):
+    warnings.filterwarnings('ignore', f'.*{msg}.*')
 
-def set_torch():
+def set_torch(benchmark_limit: int = 32):
     cudnn.benchmark = True
     cudnn.deterministic = False
+    cudnn.benchmark_limit = benchmark_limit
     torch.use_deterministic_algorithms(False)
     torch.set_float32_matmul_precision("high")  # highest: FP32, high: TF32, medium: bf16
     opt_einsum.enabled = True
     opt_einsum.strategy = "dp"
 
+    # Torch calls these for 2nd-order optimization in HeavyBall, but they are explicitly handled.
+    _ignore_warning( 'Using backward() with create_graph=True will create a reference cycle between the parameter and its gradient which can cause a memory leak')
+    _ignore_warning( 'We recommend using autograd.grad when creating the graph to avoid this. If you have to use this function, make sure to reset the .grad fields of your parameters to None after use to break the cycle and avoid the leak')
 
 @decorator
 def zeropower_via_newtonschulz5(G, steps=5, eps=1e-7):
@@ -368,15 +374,27 @@ def get_orthogonal_matrix_QR(GG, Q, exp_avg_sq):
     Computes the eigenbases of the preconditioner using one round of power iteration
     followed by torch.linalg.qr decomposition.
     """
+    matrix = []
+    orth_matrix = []
+    for m, o in zip(GG, Q):
+        if len(m) == 0:
+            matrix.append([])
+            orth_matrix.append([])
+            continue
+        if m.data.dtype != torch.float:
+            matrix.append(promote(m.data))
+            orth_matrix.append(promote(o.data))
+        else:
+            matrix.append(promote(m.data))
+            orth_matrix.append(promote(o.data))
 
     indices = []
 
-    for m, o, q in zip(GG, Q, Q):
-        if m is None:
+    for ind, (m, o, q) in enumerate(zip(matrix, orth_matrix, Q)):
+        if len(m) == 0:
             indices.append(None)
             continue
 
-        m, o = promote(m.data), promote(o.data)
         tmp = m @ o
         est_eig = torch.einsum('ij,ij->j', o, tmp)
         sort_idx = torch.argsort(est_eig, descending=True)
@@ -388,19 +406,30 @@ def get_orthogonal_matrix_QR(GG, Q, exp_avg_sq):
     _compilable_scatter_set(exp_avg_sq, exp_avg_sq, indices)
 
 
-def get_orthogonal_matrix(GG):
+def get_orthogonal_matrix(mat):
     """
     Computes the eigenbases of the preconditioner using torch.linalg.eigh decomposition.
     """
+    matrix = []
+    for m in mat:
+        if len(m) == 0:
+            matrix.append([])
+            continue
+        if m.data.dtype != torch.float:
+            float_data = False
+            original_type = m.data.dtype
+            original_device = m.data.device
+            matrix.append(promote(m.data))
+        else:
+            float_data = True
+            matrix.append(m.data)
 
     final = []
-
-    for m in GG:
-        if m is None:
-            final.append(None)
+    for m in matrix:
+        if len(m) == 0:
+            final.append([])
             continue
 
-        m = promote(m.data)
         device, dtype = m.device, m.dtype
         for modifier in (None, torch.double, 'cpu'):
             if modifier is not None:
@@ -436,22 +465,20 @@ def get_beta1(group):
     beta = None
     if 'beta' in group:
         beta = group['beta']
-    elif 'betas' in group:
+    if beta is None and 'betas' in group:
         beta = group['betas'][0]
     if beta is None:
-        raise ValueError("beta1 not found in group.")
-    else:
-        return beta
+        raise ValueError("Beta not found in group.")
+    return beta
 
 
 def get_beta2(group):
-    beta = None
+    if 'beta2_scale' in group:
+        step = max(group.get("step", 1), 1)
+        return 1 - step ** -group['beta2_scale']
     if 'betas' in group:
-        beta = group['betas'][1]
-    if beta is None:
-        raise ValueError("beta2 not found in group.")
-    else:
-        return beta
+        return group['betas'][1]
+    raise ValueError("Beta2 not found in group.")
 
 
 def stochastic_lerp_(x: List[Tensor], y: List[Tensor], a: Union[float, int, Tensor]):
@@ -515,16 +542,18 @@ def stochastic_multiply_(x: List[Tensor], y: List[Tensor]):
 
 
 @decorator
-def update_ggt(grad, GG, beta):
-    for i, m in enumerate(GG):
-        if m is None:
-            continue
+def compute_ggt(grad, GG, max_precond_dim, precondition_1d, beta):
+    if grad.dim() == 1 and (not precondition_1d or grad.shape[0] > max_precond_dim):
+        return
 
-        abc = einsum_base[:grad.ndim]
-        b, B = abc[i], abc[i].upper()
-        aBc = abc.replace(b, B)
-        outer_product = torch.einsum(f'{abc},{aBc}->{b}{B}', grad, grad)
-        m.lerp_(outer_product, 1 - beta)
+    for idx, sh in enumerate(grad.shape):
+        if sh > max_precond_dim:
+            continue
+        b = einsum_base[idx]
+        g0 = einsum_base[:grad.dim()]
+        g1 = g0.replace(b, b.upper())
+        outer_product = torch.einsum(f'{g0},{g1}->{b + b.upper()}', grad, grad)
+        GG[idx].lerp_(outer_product, 1 - beta)
 
 
 def promote(x):
@@ -543,46 +572,57 @@ def min_dtype(xs: List[Tensor]):
     return torch.float32
 
 
-def update_preconditioner(grad, Q, GG, exp_avg_sq, beta, update_precond):
+def update_preconditioner(grad, Q, GG, exp_avg_sq, max_precond_dim, precondition_1d, beta, update_precond):
     """
     Updates the preconditioner matrices and the eigenbases (L, R, Q_L, Q_R in the paper).
     """
-    update_ggt(grad, GG, beta)
+    compute_ggt(grad, GG, max_precond_dim, precondition_1d, beta)
     if update_precond:
         get_orthogonal_matrix_QR(GG, Q, exp_avg_sq)
 
 
-def init_preconditioner(grad, state, max_precond_dim=10000, precondition_1d=False):
+def init_preconditioner(grad, state, beta, max_precond_dim=10000, precondition_1d=False):
     """
     Initializes the preconditioner matrices (L and R in the paper).
     """
-    state['GG'] = []
-    state['Q'] = None
+    state['GG'] = []  # Will hold all the preconditioner matrices (L and R in the paper).
+    if grad.dim() == 1:
+        if precondition_1d or grad.shape[0] > max_precond_dim:
+            state['GG'].append(torch.zeros(grad.shape[0], grad.shape[0], device=grad.device, dtype=grad.dtype))
+        else:
+            state['GG'].append([])
 
-    if grad.numel() > 1 and (grad.ndim > 1 or precondition_1d):
-        for s in grad.shape:
-            if s > max_precond_dim or s == 1:
-                state['GG'].append(None)
-            else:
-                state['GG'].append(torch.zeros(s, s, device=grad.device, dtype=grad.dtype))
     else:
-        state['GG'].append(None)
+        for sh in grad.shape:
+            if sh > max_precond_dim:
+                state['GG'].append([])
+            else:
+                state['GG'].append(torch.zeros(sh, sh, device=grad.device, dtype=grad.dtype))
 
-    update_ggt(grad, state['GG'], beta=0.0)
+    compute_ggt(grad, state['GG'], max_precond_dim, precondition_1d, beta)
     state['Q'] = get_orthogonal_matrix(state['GG'])
 
 
 @decorator
 def project(grad, Q, back: bool):
-    abc = einsum_base[:grad.ndim]
-    aAcC = ",".join([i.upper() + i if back else i + i.upper() for i, q in zip(abc, Q) if q is not None])
-    AbC = "".join([i.upper() if i in aAcC else i for i in abc])
+    """
 
-    if aAcC:
-        grad = torch.einsum(f'{abc},{aAcC}->{AbC}', promote(grad), *[q for q in Q if q is not None]).to(grad)
-
+    :param grad:
+    :param Q:
+    :param merge_dims:
+    :param max_precond_dim:
+    :param back: whether to project to Shampoo eigenbases or back to original space
+    :return:
+    """
+    param = einsum_base[:grad.dim()]
+    preconditioners = ",".join([(g + g.upper())[::-1 if back else 1] for m, g in zip(Q, param) if len(m) > 0])
+    if preconditioners:
+        out = ''.join([c.upper() if c.upper() in preconditioners else c for c in param])
+        out = torch.einsum(f'{param},{preconditioners}->{out}', promote(grad), *[q for q in Q if len(q) > 0])
+        grad = out.to(grad.dtype)
     return grad
 
+from unittest.mock import patch
 
 def modify_closure(closure):
     """
@@ -596,7 +636,7 @@ def modify_closure(closure):
     """
 
     def patched_backward(self, *args, **kwargs):
-        kwargs['retain_graph'] = True
+        kwargs['create_graph'] = True
         return original_backward(self, *args, **kwargs)
 
     original_backward = torch.Tensor.backward
@@ -607,7 +647,7 @@ def modify_closure(closure):
 
 class StatefulOptimizer(torch.optim.Optimizer):
     """
-    two_step_hessian saves memory, but needs more compute.
+    finite_differences saves memory, but needs more compute. (Alternative is true HVP)
     Both `True` and `False` have some edge cases they don't support, so experiment with it.
     The previous (heavyball<=1.5.3) default was `True`, which is incompatible with some benchmarks but works better with RevNet
     Further notice that both methods have different numerics outputs
@@ -618,7 +658,7 @@ class StatefulOptimizer(torch.optim.Optimizer):
     hessian_approx: bool = False
     precond_schedule: Union[Callable, float, None] = None
     stochastic_schedule: bool = False
-    two_step_hessian: bool = False
+    finite_differences: bool = False
 
     def __init__(self, params, defaults, foreach: bool = True, use_ema: bool = False):
         super().__init__(params, {**defaults, 'foreach': foreach})
@@ -743,33 +783,47 @@ class StatefulOptimizer(torch.optim.Optimizer):
                 loss = closure()
             return loss
 
-        with torch.enable_grad():
-            if self.two_step_hessian:
+        if self.finite_differences:
+            with torch.enable_grad():
                 loss = closure()  # closure without retain_graph=True
-            else:
+
+            grads = []
+            for group in self.param_groups:
+                for p, g in self.split_p_and_g_in_group(group, skip_none=True, should_promote=False):
+                    grads.append(g)
+                    p.vector = torch.randn_like(p)
+                    p.orig = p.data.clone()
+                    stochastic_add_(p.data, p.vector, tiny_bf16)
+        else:
+            with torch.enable_grad():
                 loss = modify_closure(closure)  # closure with retain_graph=True
 
-        grads = []
-        for group in self.param_groups:
-            for p, g in self.split_p_and_g_in_group(group, skip_none=True, should_promote=False):
-                grads.append(g)
-                p.vector = torch.randn_like(p)
-                p.orig = p.data.clone()
-                stochastic_add_(p.data, p.vector, tiny_bf16)
 
-        with torch.enable_grad():
-            if self.two_step_hessian:
+        if self.finite_differences:
+            with torch.enable_grad():
                 closure()
-            else:
-                loss.backward(retain_graph=False)  # clean up
 
-        for group in self.param_groups:
-            for p, g in self.split_p_and_g_in_group(group, skip_none=True, should_promote=False):
-                p.grad = grads.pop(0)
-                stochastic_add_(g, p.grad, -1)
-                p.hessian_vector = g
-                p.data.copy_(p.orig)
-                del p.orig
+            for group in self.param_groups:
+                for p, g in self.split_p_and_g_in_group(group, skip_none=True, should_promote=False):
+                    p.grad = grads.pop(0)
+                    stochastic_add_(g, p.grad, -1)
+                    p.hessian_vector = g
+                    p.data.copy_(p.orig)
+                    del p.orig
+        else:
+            for group in self.param_groups:
+                for p, g in self.split_p_and_g_in_group(group, skip_none=True, should_promote=False):
+                    p.grad = g
+            params, grads = zip(*[x for group in self.param_groups for x in self.split_p_and_g_in_group(group, skip_none=True, should_promote=False)])
+            vs = [torch.randn_like(p) for p in params]
+            with torch.enable_grad():
+                hvs = torch.autograd.grad(grads, params, vs)
+
+            for p, g, v, hv in zip(params, grads, vs, hvs):
+                p.hessian_vector = hv
+                p.grad = g
+                p.vector = v
+
         return loss
 
 
@@ -929,7 +983,7 @@ def _compilable_adopt_(grad, exp_avg_sq, exp_avg, beta1, beta2, step):
     copy_stochastic_list_(exp_avg, exp_avg32)
 
     beta2 = beta_debias(beta2, step + 1)
-    exp_avg_sq32 = [eas32.lerp(g * g, 1 - beta2) for eas32, g in zip(exp_avg_sq32, g32)]
+    exp_avg_sq32 = [eas32.lerp(g * g, 1 - beta2) for eas32, g in zip(exp_avg_sq32, u32)]
     copy_stochastic_list_(exp_avg_sq, exp_avg_sq32)
 
     copy_stochastic_list_(grad, update)
