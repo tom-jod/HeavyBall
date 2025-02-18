@@ -189,7 +189,7 @@ def exp_avg_sq_(state, grad, beta2, eps, out=None):
 
 @decorator_knowngood
 def _compilable_scale_by_exp_avg_sq_(state: List[Tensor], grad: List[Tensor], beta2: Tensor, eps: Tensor):
-    g32 = promote(grad)
+    g32 = list(map(promote, grad))
     denom = _compilable_exp_avg_sq_(state, g32, beta2, eps, [None])
     out = torch._foreach_div(g32, denom)
     copy_stochastic_list_(grad, out)
@@ -204,7 +204,7 @@ def scale_by_exp_avg_sq_(exp_avg_sq, grad, beta2, eps):
 
 @decorator_knowngood
 def _compilable_exp_avg_(state, grad, beta):
-    lerped = _lerp32(state, grad, beta)
+    lerped = _lerp(state, grad, beta)
     copy_stochastic_list_(grad, lerped)
 
 
@@ -275,19 +275,10 @@ def set_torch(benchmark_limit: int = 32):
 
 @decorator
 def zeropower_via_newtonschulz5(G, steps=5, eps=1e-7):
-    """
-    Newton-Schulz iteration to compute the zeroth power / orthogonalization of G. We opt to use a
-    quintic iteration whose coefficients are selected to maximize the slope at zero. For the purpose
-    of minimizing steps, it turns out to be empirically effective to keep increasing the slope at
-    zero even beyond the point where the iteration no longer converges all the way to one everywhere
-    on the interval. This iteration therefore does not produce UV^T but rather something like US'V^T
-    where S' is diagonal with S_{ii}' ~ Uniform(0.5, 1.5), which turns out not to hurt model
-    performance at all relative to UV^T, where USV^T = G is the SVD.
-    """
     assert len(G.shape) == 2
     a, b, c = (3.4445, -4.7750, 2.0315)
-    X = G.bfloat16()
-    X /= (X.norm() + eps)  # ensure top singular value <= 1
+    X = G.to(torch.bfloat16 if G.dtype != torch.float64 else G.dtype)  # Preserve float64 if present
+    X /= (X.norm() + eps) # ensure top singular value <= 1
     if G.size(0) > G.size(1):
         X = X.T
     for _ in range(steps):
@@ -343,7 +334,7 @@ def nesterov_momentum(state, grad, beta):
 
 @decorator_knowngood
 def _compilable_nesterov_ema_(state, grad, beta):
-    ema32 = _lerp32(state, grad, beta)
+    ema32 = _lerp(state, grad, beta)
     stochastic_add_(grad, ema32, 1)
 
 
@@ -354,6 +345,7 @@ def nesterov_ema(state, grad, beta):
     return grad
 
 
+@decorator_knowngood
 def _compilable_grafting(magnitude, direction):
     return direction * (magnitude.norm() / direction.norm().clamp(min=1e-6))
 
@@ -565,7 +557,7 @@ def compute_ggt(grad, GG, max_precond_dim, precondition_1d, beta):
     for idx, sh in enumerate(grad.shape):
         if sh > max_precond_dim:
             continue
-        if not GG[idx]:
+        if isinstance(GG[idx], list) and not GG[idx]:
             continue
         b = einsum_base[idx]
         g0 = einsum_base[:grad.dim()]
@@ -576,7 +568,7 @@ def compute_ggt(grad, GG, max_precond_dim, precondition_1d, beta):
 
 def promote(x):
     if isinstance(x, torch.dtype) and x in (torch.bfloat16, torch.float16):
-        return torch.float32
+            return torch.float32
     if isinstance(x, Tensor) and x.dtype in (torch.bfloat16, torch.float16):
         return x.float()
     return x
@@ -861,11 +853,11 @@ def copy_stochastic_list_(target: List[Tensor], source: List[Tensor]):
         copy_stochastic_(t, s)
 
 
-def _lerp32(state: List[Tensor], grad: List[Tensor], beta):
+@decorator_knowngood
+def _lerp(state: List[Tensor], grad: List[Tensor], beta):
     ea32 = list(map(promote, state))
     grad = list(map(promote, grad))
     beta = promote(beta)
-
     ea32 = [e.lerp(g, 1 - beta) for e, g in zip(ea32, grad)]
     copy_stochastic_list_(state, ea32)
     return ea32
@@ -878,8 +870,7 @@ def _compilable_adam_(exp_avg: List[Tensor], exp_avg_sq: List[Tensor], grad: Lis
     beta2 = beta_debias(beta2, step)
 
     g32 = list(map(promote, grad))
-
-    exp_avg32 = _lerp32(exp_avg, g32, beta1)
+    exp_avg32 = _lerp(exp_avg, g32, beta1)
     denom = exp_avg_sq_(exp_avg_sq, g32, beta2, eps)
     u32 = torch._foreach_div(exp_avg32, denom)
     copy_stochastic_list_(grad, u32)
@@ -901,9 +892,8 @@ def _fused_compilable_adam_(y: List[Tensor], exp_avg: List[Tensor], exp_avg_sq: 
     beta2 = beta_debias(beta2, step)
 
     u32, g32 = [list(map(promote, x)) for x in [update, grad]]
-
-    exp_avg32 = _lerp32(exp_avg, u32, beta1)
-    denom = exp_avg_sq_(exp_avg_sq, u32, beta2, 1e-8)
+    exp_avg32 = _lerp(exp_avg, u32, beta1)
+    denom = exp_avg_sq_(exp_avg_sq, u32, beta2, eps)
     u32 = torch._foreach_div(exp_avg32, denom)
     _compilable_update_(y, u32, decay, lr, caution, g32)
 
@@ -913,7 +903,7 @@ def fused_adam_(y: List[Tensor], exp_avg: List[Tensor], exp_avg_sq: List[Tensor]
                 caution: bool):
     y, exp_avg, exp_avg_sq, grad = list_guard(y, exp_avg, exp_avg_sq, grad)
     beta1, beta2, step, lr = scalar_guard(beta1, beta2, step, lr, y[0])
-    return _fused_compilable_adam_(y, exp_avg, exp_avg_sq, update, grad, beta1, beta2, step, decay, lr, eps, caution)
+    _fused_compilable_adam_(y, exp_avg, exp_avg_sq, update, grad, beta1, beta2, step, decay, lr, eps, caution)
 
 
 @decorator_knowngood
@@ -923,11 +913,9 @@ def _compilable_laprop_(exp_avg: List[Tensor], exp_avg_sq: List[Tensor], grad: L
     beta2 = beta_debias(beta2, step)
 
     gp32 = list(map(promote, grad))
-
     denom = exp_avg_sq_(exp_avg_sq, gp32, beta2, eps)
     gp32 = torch._foreach_div(gp32, denom)
-    gp32 = _lerp32(exp_avg, gp32, beta1)
-
+    gp32 = _lerp(exp_avg, gp32, beta1)
     copy_stochastic_list_(grad, gp32)
 
 
@@ -946,10 +934,9 @@ def _fused_compilable_laprop_(y: List[Tensor], exp_avg: List[Tensor], exp_avg_sq
     beta2 = beta_debias(beta2, step)
 
     u32, gp32 = [list(map(promote, x)) for x in [update, grad]]
-
-    denom = exp_avg_sq_(exp_avg_sq, u32, beta2, 1e-8)
+    denom = exp_avg_sq_(exp_avg_sq, u32, beta2, eps)
     u32 = torch._foreach_div(u32, denom)
-    u32 = _lerp32(exp_avg, u32, beta1)
+    u32 = _lerp(exp_avg, u32, beta1)
     _compilable_update_(y, u32, decay, lr, caution, gp32)
 
 
@@ -1082,7 +1069,6 @@ def init_Q_exprs(t, scale, max_size, min_ndim_triangular, memory_save_mode, dtyp
     reusable einsum expressions for updating Q and preconditioning gradient.
     """
     letters = string.ascii_lowercase + string.ascii_uppercase
-
     dtype = dtype if dtype is not None else t.dtype
     shape = t.shape
 
@@ -1126,11 +1112,9 @@ def init_Q_exprs(t, scale, max_size, min_ndim_triangular, memory_save_mode, dtyp
             piece1A.append(letters[i])
             piece2A = piece2A + letters[i]
             piece3A = piece3A + letters[i]
-
             piece1 = "".join([(letters[i + 13] if j == i else letters[j]) for j in range(len(shape))])
             subscripts = piece1 + "," + piece1 + "->" + letters[i + 13]
             exprGs.append(subscripts)
-
             piece1P.append(letters[i + 13])
             piece2P.append(letters[i + 13])
             piece3P = piece3P + letters[i + 13]
@@ -1138,16 +1122,13 @@ def init_Q_exprs(t, scale, max_size, min_ndim_triangular, memory_save_mode, dtyp
         else:
             # use triangular matrix as preconditioner for this dim
             Q.append(scale * torch.eye(size, dtype=dtype, device=t.device))
-
             piece1A.append(letters[i] + letters[i + 13])
             piece2A = piece2A + letters[i + 13]
             piece3A = piece3A + letters[i]
-
             piece1 = "".join([(letters[i + 13] if j == i else letters[j]) for j in range(len(shape))])
             piece2 = "".join([(letters[i + 26] if j == i else letters[j]) for j in range(len(shape))])
             subscripts = (piece1 + "," + piece2 + "->" + letters[i + 13] + letters[i + 26])
             exprGs.append(subscripts)
-
             a, b, c = (letters[i], letters[i + 13], letters[i + 26])
             piece1P.append(a + b)
             piece2P.append(a + c)
@@ -1168,7 +1149,7 @@ def psgd_balance_Q(Q_in):
 
 
 def psgd_calc_A_and_conjB(exprA, G, Q, V=None):
-    eps = scalar_guard(math.sqrt(torch.finfo(torch.float32).eps), G)
+    eps = scalar_guard(math.sqrt(torch.finfo(G.dtype).eps), G)
     eps *= G.norm() / G.numel()
     G = G + torch.randn_like(G) * eps
     md = min_dtype(Q + [G])
@@ -1194,9 +1175,7 @@ def psgd_lb(A, max_abs):
     A /= max_abs
     a0 = torch.einsum('ij,ij->j', A, A)
     i = torch.argmax(a0)
-
     x = torch.index_select(A, 1, i).flatten().contiguous()
-
     x = torch.einsum('i,ij->j', x, A)
     x /= x.norm()
     x = torch.einsum('j,kj->k', x, A)
@@ -1209,15 +1188,12 @@ def psgd_lb(A, max_abs):
 def psgd_update_precond(Q, exprs, G, precond_lr, oq, store_triu_as_line, V):
     """Update Kronecker product preconditioner Q with pair (V, G)."""
     exprA, exprGs, _ = exprs
-
     A, conjB = psgd_calc_A_and_conjB(exprA, G, Q, V)
 
     for q, exprG, o in zip(Q, exprGs, oq):
         term1 = promote(torch.einsum(exprG, A, A))
         term2 = promote(torch.einsum(exprG, conjB, conjB))
-
         term1, term2 = term1 - term2, term1 + term2
-
         term1 *= precond_lr
         norm = term2.norm(float('inf'))
         if q.dim() < 2:
@@ -1333,8 +1309,8 @@ def identity(x):
 
 @decorator_knowngood
 def _compilable_weight_decay_to_ema_(p, ema, ema_decay, weight_decay):
-    ema32 = _lerp32(ema, p, ema_decay)
-    _lerp32(p, ema32, 1 - weight_decay)
+    ema32 = _lerp(ema, p, ema_decay)
+    _lerp(p, ema32, 1 - weight_decay)
 
 
 def weight_decay_to_ema_(p, ema, ema_decay, weight_decay):
@@ -1344,10 +1320,10 @@ def weight_decay_to_ema_(p, ema, ema_decay, weight_decay):
 
 
 @decorator_knowngood
-def _compilable_l1_weight_decay_to_ema_(p, ema, ema_deacy, weight_decay):
-    ema32 = _lerp32(ema, p, ema_deacy)
+def _compilable_l1_weight_decay_to_ema_(p, ema, ema_decay, weight_decay):
+    ema32 = _lerp(ema, p, ema_decay)
     for p_, e_ in zip(p, ema32):
-        p32 = promote(p)
+        p32 = promote(p_)
         p32 = p32 + (p32 - e_).sign() * weight_decay
         copy_stochastic_(p_, p32)
 
@@ -1524,7 +1500,6 @@ def _compilable_orthogonalization(weight: List[Tensor], grad: List[Tensor], eps:
 
         if graft:
             out = _compilable_grafting(g, out)
-
         copy_stochastic_(g, out)
 
 

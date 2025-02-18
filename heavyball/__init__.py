@@ -114,7 +114,8 @@ class ForeachSOAP(C.BaseOpt):
                  split: bool = False, foreach: bool = True, mars: bool = False, caution: bool = False,
                  mars_gamma: float = 0.0025, palm: bool = C.use_default, precond_scheduler=(1 / 3, 9),
                  beta2_scale: float = 0.8, use_precond_schedule: bool = C.use_default,
-                 gradient_clipping: C.str_or_fn = C.use_default, update_clipping: C.str_or_fn = C.use_default):
+                 gradient_clipping: C.str_or_fn = C.use_default, update_clipping: C.str_or_fn = C.use_default,
+                 storage_dtype: str = 'float32'):
         use_precond_schedule = C.default(use_precond_schedule, self.use_precond_schedule)
 
         defaults = locals()
