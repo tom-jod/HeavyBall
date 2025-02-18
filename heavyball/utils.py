@@ -1,23 +1,39 @@
+import copy
 import functools
 import gc
+import inspect
 import math
+import numpy as np
 import random
 import string
+import sys
+import time
 import warnings
+from datetime import datetime
 from typing import List, Optional, Tuple, Callable, Union
 
-import numpy as np
+import hyperopt
 import torch
 from torch import Tensor
+from torch._dynamo import config
 from torch._dynamo.exc import TorchDynamoException
 from torch.backends import cudnn, opt_einsum
 from torch.utils._pytree import tree_map
+from unittest.mock import patch
+
+config.cache_size_limit = 2 ** 16
+
+np.warnings = warnings
 
 compile_mode = "max-autotune-no-cudagraphs"
 dynamic = False
 compile_mode_recommended_to_none = None
 zeroth_power_mode = 'qr'  # 'qr' is baseline, 'newtonschulz' converges better and faster
 tiny_bf16 = torch.finfo(torch.bfloat16).tiny
+
+base_args = {'betas': (0.9, 0.999), 'precondition_frequency': 1, 'merge_dims': False, 'warmup_steps': 100,
+             'max_precond_dim': 2 ** 16, 'beta': 0.9, 'max_size_triangular': 2 ** 16, 'split': False, 'eps': 1e-8,
+             'weight_decay': 1e-4}
 
 
 def decorator(func):
@@ -106,7 +122,6 @@ def dim_merger(grad, max_precond_dim, split: bool = False):
     """
     shape = grad.shape
     new_shape = []
-
     curr_shape = 1
 
     for sh in shape[1:][::-1]:
@@ -239,8 +254,10 @@ def clean():
     torch.cuda.empty_cache()
     gc.collect()
 
+
 def _ignore_warning(msg):
     warnings.filterwarnings('ignore', f'.*{msg}.*')
+
 
 def set_torch(benchmark_limit: int = 32):
     cudnn.benchmark = True
@@ -252,8 +269,9 @@ def set_torch(benchmark_limit: int = 32):
     opt_einsum.strategy = "dp"
 
     # Torch calls these for 2nd-order optimization in HeavyBall, but they are explicitly handled.
-    _ignore_warning( 'Using backward() with create_graph=True will create a reference cycle between the parameter and its gradient which can cause a memory leak')
-    _ignore_warning( 'We recommend using autograd.grad when creating the graph to avoid this. If you have to use this function, make sure to reset the .grad fields of your parameters to None after use to break the cycle and avoid the leak')
+    _ignore_warning('Using backward() with create_graph=True will create a reference cycle between the parameter and its gradient which can cause a memory leak')
+    _ignore_warning('We recommend using autograd.grad when creating the graph to avoid this. If you have to use this function, make sure to reset the .grad fields of your parameters to None after use to break the cycle and avoid the leak')
+
 
 @decorator
 def zeropower_via_newtonschulz5(G, steps=5, eps=1e-7):
@@ -340,8 +358,6 @@ def _compilable_grafting(magnitude, direction):
     return direction * (magnitude.norm() / direction.norm().clamp(min=1e-6))
 
 
-# mode in ("newtonschulz", "qr", "svd")
-# scale_mode in ("none", "scale", "graft")
 @decorator_knowngood
 def inplace_orthogonal_(x: Tensor, mode: str, out: Tensor, scale_mode: str):
     if mode == 'newtonschulz' or x.shape[0] != x.shape[1]:
@@ -401,7 +417,7 @@ def get_orthogonal_matrix_QR(GG, Q, exp_avg_sq):
         indices.append(sort_idx)
         inplace_orthogonal_(tmp[:, sort_idx], zeroth_power_mode, q, "none")
 
-    indices = tuple(slice(None) if ind is None else ind.view(*(1,) * i, -1, *(1,) * (exp_avg_sq.dim() - i - 1))  #
+    indices = tuple(slice(None) if ind is None else ind.view(*(1,) * i, -1, *(1,) * (exp_avg_sq.dim() - i - 1))
                     for i, ind in enumerate(indices))
     _compilable_scatter_set(exp_avg_sq, exp_avg_sq, indices)
 
@@ -549,6 +565,8 @@ def compute_ggt(grad, GG, max_precond_dim, precondition_1d, beta):
     for idx, sh in enumerate(grad.shape):
         if sh > max_precond_dim:
             continue
+        if not GG[idx]:
+            continue
         b = einsum_base[idx]
         g0 = einsum_base[:grad.dim()]
         g1 = g0.replace(b, b.upper())
@@ -591,7 +609,6 @@ def init_preconditioner(grad, state, beta, max_precond_dim=10000, precondition_1
             state['GG'].append(torch.zeros(grad.shape[0], grad.shape[0], device=grad.device, dtype=grad.dtype))
         else:
             state['GG'].append([])
-
     else:
         for sh in grad.shape:
             if sh > max_precond_dim:
@@ -606,11 +623,8 @@ def init_preconditioner(grad, state, beta, max_precond_dim=10000, precondition_1
 @decorator
 def project(grad, Q, back: bool):
     """
-
     :param grad:
     :param Q:
-    :param merge_dims:
-    :param max_precond_dim:
     :param back: whether to project to Shampoo eigenbases or back to original space
     :return:
     """
@@ -622,11 +636,10 @@ def project(grad, Q, back: bool):
         grad = out.to(grad.dtype)
     return grad
 
-from unittest.mock import patch
 
 def modify_closure(closure):
     """
-    Modifies the closure function to use retain_graph=True in backward().
+    Modifies the closure function to use create_graph=True in backward().
 
     Args:
         closure: The closure function passed to the optimizer.
@@ -652,7 +665,6 @@ class StatefulOptimizer(torch.optim.Optimizer):
     The previous (heavyball<=1.5.3) default was `True`, which is incompatible with some benchmarks but works better with RevNet
     Further notice that both methods have different numerics outputs
     """
-
     ema_decay: float = 0.001
     compile_step: bool = False
     hessian_approx: bool = False
@@ -770,6 +782,7 @@ class StatefulOptimizer(torch.optim.Optimizer):
                         ema_clone = self.state_(p)['param_ema'].data.clone()
                         set_(self.state_(p)['param_ema'], p.data)
                         set_(p.data, ema_clone)
+
     def _handle_closure(self, closure):
         hessian_approx = self.hessian_approx and self._is_preconditioning
 
@@ -796,8 +809,7 @@ class StatefulOptimizer(torch.optim.Optimizer):
                     stochastic_add_(p.data, p.vector, tiny_bf16)
         else:
             with torch.enable_grad():
-                loss = modify_closure(closure)  # closure with retain_graph=True
-
+                loss = modify_closure(closure)  # closure with create_graph=True
 
         if self.finite_differences:
             with torch.enable_grad():
@@ -826,7 +838,6 @@ class StatefulOptimizer(torch.optim.Optimizer):
 
         return loss
 
-
     def step(self, closure: Optional[Callable] = None):
         if self.precond_schedule is None:
             self._is_preconditioning = False
@@ -840,7 +851,7 @@ class StatefulOptimizer(torch.optim.Optimizer):
                 group['is_preconditioning'] = self._is_preconditioning
                 self._step(group)
                 if self.use_ema:
-                    self.ema_update(group)
+                    self.ema_update()
 
         return loss
 
