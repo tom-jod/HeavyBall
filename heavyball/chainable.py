@@ -347,13 +347,13 @@ def scale_by_soap(group, update, grad, param, exp_avg, exp_avg_sq, Q, GG, inner:
 
     grad_projected = [utils.project(u, q, False) for u, q in zip(update, Q)]
     fn = _optim_fns[inner]
-    precond = fn(exp_avg, exp_avg_sq, grad_projected, utils.get_beta1(group), utils.get_beta2(group), group['step'],
+    precond = fn(exp_avg, exp_avg_sq, grad_projected, utils.get_beta1(group), utils.get_beta2(group), group['step'] - 1,
                  group['eps'])
     precond = [utils.project(p, q, True) for p, q in zip(precond, Q)]
 
-    for u, q, gg, ea_sq in zip(update, Q, GG, exp_avg_sq):
-        utils.update_preconditioner(u, q, gg, ea_sq, group['max_precond_dim'], group['precondition_1d'],
-                                    utils.beta_debias(group['shampoo_beta'], group['step'] + 1),
+    for u, q, gg, ea, ea_sq in zip(update, Q, GG, exp_avg, exp_avg_sq):
+        utils.update_preconditioner(u, q, gg, ea, ea_sq, group['max_precond_dim'], group['precondition_1d'],
+                                    utils.beta_debias(group['shampoo_beta'], group['step']),
                                     group['is_preconditioning'])
     return precond
 

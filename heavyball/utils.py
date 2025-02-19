@@ -168,8 +168,7 @@ def beta_debias(beta, step):
 def _compilable_exp_avg_sq_(state: List[Tensor], grad: List[Tensor], beta2: Tensor, eps: Tensor,
                             out: List[Optional[Tensor]]):
     s32, g32 = [list(map(promote, x)) for x in (state, grad)]
-    s32 = torch._foreach_mul(s32, beta2)
-    s32 = [s + g * g * (1 - beta2) for s, g in zip(s32, g32)]
+    s32 = [s * beta2 + g * g * (1 - beta2) for s, g in zip(s32, g32)]
     denom = torch._foreach_sqrt(s32)
     denom = [d.clamp(min=eps) for d in denom]
     copy_stochastic_list_(state, s32)
@@ -377,7 +376,7 @@ def _compilable_scatter_set(target, source, index):
     target[:] = source.contiguous()[index].reshape_as(target)
 
 
-def get_orthogonal_matrix_QR(GG, Q, exp_avg_sq):
+def get_orthogonal_matrix_QR(GG, Q):
     """
     Computes the eigenbases of the preconditioner using one round of power iteration
     followed by torch.linalg.qr decomposition.
@@ -396,22 +395,14 @@ def get_orthogonal_matrix_QR(GG, Q, exp_avg_sq):
             matrix.append(promote(m.data))
             orth_matrix.append(promote(o.data))
 
-    indices = []
-
     for ind, (m, o, q) in enumerate(zip(matrix, orth_matrix, Q)):
         if len(m) == 0:
-            indices.append(None)
             continue
 
         tmp = m @ o
         est_eig = torch.einsum('ij,ij->j', o, tmp)
         sort_idx = torch.argsort(est_eig, descending=True)
-        indices.append(sort_idx)
-        inplace_orthogonal_(tmp[:, sort_idx], zeroth_power_mode, q, "none")
-
-    indices = tuple(slice(None) if ind is None else ind.view(*(1,) * i, -1, *(1,) * (exp_avg_sq.dim() - i - 1))
-                    for i, ind in enumerate(indices))
-    _compilable_scatter_set(exp_avg_sq, exp_avg_sq, indices)
+        q[:, sort_idx], _ = torch.linalg.qr(tmp[:, sort_idx])
 
 
 def get_orthogonal_matrix(mat):
@@ -424,12 +415,8 @@ def get_orthogonal_matrix(mat):
             matrix.append([])
             continue
         if m.data.dtype != torch.float:
-            float_data = False
-            original_type = m.data.dtype
-            original_device = m.data.device
             matrix.append(promote(m.data))
         else:
-            float_data = True
             matrix.append(m.data)
 
     final = []
@@ -582,16 +569,19 @@ def min_dtype(xs: List[Tensor]):
     return torch.float32
 
 
-def update_preconditioner(grad, Q, GG, exp_avg_sq, max_precond_dim, precondition_1d, beta, update_precond):
+def update_preconditioner(grad, Q, GG, exp_avg, exp_avg_sq, max_precond_dim, precondition_1d, beta, update_precond):
     """
     Updates the preconditioner matrices and the eigenbases (L, R, Q_L, Q_R in the paper).
     """
     compute_ggt(grad, GG, max_precond_dim, precondition_1d, beta)
     if update_precond:
-        get_orthogonal_matrix_QR(GG, Q, exp_avg_sq)
+        tmp = project(exp_avg, Q, back=True)
+        get_orthogonal_matrix_QR(GG, Q)
+        set_(exp_avg, project(tmp, Q, back=False))
 
 
-def init_preconditioner(grad, state, beta, max_precond_dim=10000, precondition_1d=False):
+
+def init_preconditioner(grad, state, max_precond_dim, precondition_1d):
     """
     Initializes the preconditioner matrices (L and R in the paper).
     """
@@ -608,7 +598,7 @@ def init_preconditioner(grad, state, beta, max_precond_dim=10000, precondition_1
             else:
                 state['GG'].append(torch.zeros(sh, sh, device=grad.device, dtype=grad.dtype))
 
-    compute_ggt(grad, state['GG'], max_precond_dim, precondition_1d, beta)
+    compute_ggt(grad, state['GG'], max_precond_dim, precondition_1d, 0)
     state['Q'] = get_orthogonal_matrix(state['GG'])
 
 
@@ -801,7 +791,7 @@ class StatefulOptimizer(torch.optim.Optimizer):
                     stochastic_add_(p.data, p.vector, tiny_bf16)
         else:
             with torch.enable_grad():
-                loss = modify_closure(closure)  # closure with create_graph=True
+                loss = modify_closure(closure)
 
         if self.finite_differences:
             with torch.enable_grad():
