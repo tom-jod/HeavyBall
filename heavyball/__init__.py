@@ -110,12 +110,11 @@ class ForeachSOAP(C.BaseOpt):
     def __init__(self, params, lr: float = 3e-3, betas=(0.9, 0.95), shampoo_beta: float = 0.95, eps: float = 1e-8,
                  weight_decay: float = 0.01, precondition_frequency: int = 2, max_precond_dim: int = 2048,  #
                  merge_dims: bool = True, precondition_1d: bool = False, normalize_grads: bool = False,
-                 correct_bias: bool = True, warmup_steps: int = 0,
-                 split: bool = False, foreach: bool = True, mars: bool = False, caution: bool = False,
-                 mars_gamma: float = 0.0025, palm: bool = C.use_default, precond_scheduler=(1 / 3, 9),
-                 beta2_scale: float = 0.8, use_precond_schedule: bool = C.use_default,
+                 correct_bias: bool = True, warmup_steps: int = 0, split: bool = False, foreach: bool = True,
+                 mars: bool = False, caution: bool = False, mars_gamma: float = 0.0025, palm: bool = C.use_default,
+                 precond_scheduler=(1 / 3, 9), beta2_scale: float = 0.8, use_precond_schedule: bool = C.use_default,
                  gradient_clipping: C.str_or_fn = C.use_default, update_clipping: C.str_or_fn = C.use_default,
-                 storage_dtype: str = 'float32'):
+                 storage_dtype: str = 'float32', stochastic_schedule: bool = False):
         use_precond_schedule = C.default(use_precond_schedule, self.use_precond_schedule)
 
         defaults = locals()
@@ -145,7 +144,7 @@ class ForeachSignLaProp(C.BaseOpt):
 
 class ForeachSOLP(C.BaseOpt):
     """
-    ForeachSOAP
+    ForeachSOLP
 
     Sources:
         Baseline SOAP:
@@ -159,11 +158,11 @@ class ForeachSOLP(C.BaseOpt):
     def __init__(self, params, lr: float = 3e-3, betas=(0.9, 0.95), shampoo_beta: float = 0.95, eps: float = 1e-8,
                  weight_decay: float = 0.01, precondition_frequency: int = 2, max_precond_dim: int = 2048,  #
                  merge_dims: bool = True, precondition_1d: bool = False, normalize_grads: bool = False,
-                 correct_bias: bool = True, warmup_steps: int = 0,
-                 split: bool = False, foreach: bool = True, mars: bool = False, caution: bool = False,
-                 mars_gamma: float = 0.0025, palm: bool = C.use_default, precond_scheduler=(1 / 3, 9),
-                 beta2_scale: float = 0.8, use_precond_schedule: bool = C.use_default,
-                 gradient_clipping: C.str_or_fn = C.use_default, update_clipping: C.str_or_fn = C.use_default):
+                 correct_bias: bool = True, warmup_steps: int = 0, split: bool = False, foreach: bool = True,
+                 mars: bool = False, caution: bool = False, mars_gamma: float = 0.0025, palm: bool = C.use_default,
+                 precond_scheduler=(1 / 3, 9), beta2_scale: float = 0.8, use_precond_schedule: bool = C.use_default,
+                 gradient_clipping: C.str_or_fn = C.use_default, update_clipping: C.str_or_fn = C.use_default,
+                 storage_dtype: str = 'float32', stochastic_schedule: bool = False):
         use_precond_schedule = C.default(use_precond_schedule, self.use_precond_schedule)
 
         defaults = locals()
@@ -233,7 +232,7 @@ class ForeachPSGDKron(C.BaseOpt):
                  max_size_triangular=2048, min_ndim_triangular=2, memory_save_mode=None,
                  momentum_into_precond_update=True, warmup_steps: int = 0, merge_dims: bool = False,
                  split: bool = False, store_triu_as_line: bool = True, foreach: bool = True, q_dtype='float32',
-                 stochastic_schedule: bool = True, storage_dtype: str = 'float32', mars: bool = False,
+                 stochastic_schedule: bool = False, storage_dtype: str = 'float32', mars: bool = False,
                  caution: bool = False, mars_gamma: float = 0.0025, delayed: Optional[bool] = C.use_default,
                  cached: Optional[bool] = C.use_default, exp_avg_input: Optional[bool] = C.use_default,
                  gradient_clipping: C.str_or_fn = C.use_default, update_clipping: C.str_or_fn = C.use_default,  #

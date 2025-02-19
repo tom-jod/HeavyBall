@@ -222,14 +222,15 @@ def update_by_schedule_free(group, update, grad, param, z):
 @no_state
 def update_by_adopt(group, update, grad, param, exp_avg, exp_avg_sq):
     if group['step'] == 1:
-        utils.exp_avg_sq_(exp_avg_sq, update, 0, 1)
+        utils.scale_by_exp_avg_sq_(exp_avg_sq, update, 0, group['eps'])
         raise SkipUpdate
 
     if group['step'] == 2:
         update = utils.promote(update)
         easq = utils.promote(exp_avg_sq)
         [utils.set_(ea, u / easq_.sqrt().clamp_(min=group['eps'])) for ea, u, easq_ in zip(exp_avg, update, easq)]
-        utils.exp_avg_sq_(exp_avg_sq, update, utils.beta_debias(utils.get_beta2(group), group['step']), 1)
+        utils.scale_by_exp_avg_sq_(exp_avg_sq, update, utils.beta_debias(utils.get_beta2(group), group['step']),
+                                   group['eps'])
         raise SkipUpdate
 
     utils.fused_adopt_(param, update, grad, exp_avg_sq, exp_avg, utils.get_beta1(group), utils.get_beta2(group),
@@ -241,14 +242,15 @@ def update_by_adopt(group, update, grad, param, exp_avg, exp_avg_sq):
 @no_state
 def scale_by_adopt(group, update, grad, param, exp_avg, exp_avg_sq):
     if group['step'] == 1:
-        utils.exp_avg_sq_(exp_avg_sq, update, 0, 1)
+        utils.scale_by_exp_avg_sq_(exp_avg_sq, update, 0, group['eps'])
         raise SkipUpdate
 
     if group['step'] == 2:
         update = utils.promote(update)
         easq = utils.promote(exp_avg_sq)
         [utils.set_(ea, u / easq_.sqrt().clamp_(min=group['eps'])) for ea, u, easq_ in zip(exp_avg, update, easq)]
-        utils.exp_avg_sq_(exp_avg_sq, update, utils.beta_debias(utils.get_beta2(group), group['step']), 1)
+        utils.scale_by_exp_avg_sq_(exp_avg_sq, update, utils.beta_debias(utils.get_beta2(group), group['step']),
+                                   group['eps'])
         raise SkipUpdate
 
     return utils.adopt(update, exp_avg_sq, exp_avg, utils.get_beta1(group), utils.get_beta2(group), group['step'] - 2)
@@ -351,8 +353,8 @@ def scale_by_soap(group, update, grad, param, exp_avg, exp_avg_sq, Q, GG, inner:
                  group['eps'])
     precond = [utils.project(p, q, True) for p, q in zip(precond, Q)]
 
-    for u, q, gg, ea, ea_sq in zip(update, Q, GG, exp_avg, exp_avg_sq):
-        utils.update_preconditioner(u, q, gg, ea, ea_sq, group['max_precond_dim'], group['precondition_1d'],
+    for u, q, gg, ea in zip(update, Q, GG, exp_avg):
+        utils.update_preconditioner(u, q, gg, ea, group['max_precond_dim'], group['precondition_1d'],
                                     utils.beta_debias(group['shampoo_beta'], group['step']),
                                     group['is_preconditioning'])
     return precond
