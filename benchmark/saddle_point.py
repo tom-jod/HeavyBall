@@ -6,7 +6,7 @@ import matplotlib.colors
 import torch
 import torch.backends.opt_einsum
 import typer
-from image_descent import FunctionDescent2D
+from utils import Plotter
 from torch import nn
 
 from benchmark.utils import trial, loss_win_condition
@@ -52,7 +52,7 @@ def main(method: List[str] = typer.Option(['qr'], help='Eigenvector method to us
     offset = win_condition_multiplier * 10
 
     if show_image:
-        model = FunctionDescent2D(lambda *x: objective(*x).add(offset).log(), coords=coords, xlim=(-2, 2), ylim=(-2, 2), normalize=8,
+        model = Plotter(lambda *x: objective(*x).add(offset).log(), coords=coords, xlim=(-2, 2), ylim=(-2, 2), normalize=8,
                                   after_step=torch.exp)
     else:
         model = Model(coords, offset)

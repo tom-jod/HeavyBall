@@ -32,8 +32,8 @@ class Model(nn.Module):
         i1 = i1.transpose(0, 1)
         i0 = self.embed0(i0)
         i1 = self.embed1(i1)
-        _, state = self.enc(i0)
-        out, _ = self.dec(i1, state)
+        _, state = torch.compiler.disable()(self.enc)(i0)
+        out, _ = torch.compiler.disable()(self.dec)(i1, state)
         return self.proj(out.transpose(0, 1))
 
 

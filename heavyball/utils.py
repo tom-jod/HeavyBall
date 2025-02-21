@@ -265,7 +265,8 @@ def set_torch(benchmark_limit: int = 32):
     cudnn.benchmark_limit = benchmark_limit
     torch.use_deterministic_algorithms(False)
     torch.set_float32_matmul_precision("high")  # highest: FP32, high: TF32, medium: bf16
-    opt_einsum.set_flags(True, "optimal")
+    opt_einsum.enabled = True
+    opt_einsum.strategy = "dp"
 
 
     # Torch calls these for 2nd-order optimization in HeavyBall, but they are explicitly handled.

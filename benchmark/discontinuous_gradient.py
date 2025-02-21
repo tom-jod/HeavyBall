@@ -6,7 +6,7 @@ import matplotlib.colors
 import torch
 import torch.backends.opt_einsum
 import typer
-from image_descent import FunctionDescent2D
+from utils import Plotter
 from torch import nn
 
 from benchmark.utils import trial, loss_win_condition

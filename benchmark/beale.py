@@ -10,7 +10,7 @@ import torch
 import torch.backends.opt_einsum
 import typer
 from hyperopt import early_stop
-from image_descent import FunctionDescent2D
+from benchmark.utils import Plotter
 from torch import nn
 
 from benchmark.utils import trial, loss_win_condition
@@ -48,15 +48,12 @@ def main(method: List[str] = typer.Option(['qr'], help='Eigenvector method to us
     for path in pathlib.Path('.').glob('beale.png'):
         path.unlink()
 
-    img = None
     colors = list(matplotlib.colors.TABLEAU_COLORS.values())
-    stride = max(1, steps // 20)
     rng = random.Random(0x1239121)
     rng.shuffle(colors)
 
     if show_image:
-        model = FunctionDescent2D(lambda *x: objective(*x).log(), coords=coords, xlim=(-8, 2), ylim=(-8, 2), normalize=8,
-                                  after_step=torch.exp)
+        model = Plotter(Model(coords), x_limits=(-8, 2), y_limits=(-8, 2), should_normalize=True)
     else:
         model = Model(coords)
     model.double()
@@ -71,21 +68,8 @@ def main(method: List[str] = typer.Option(['qr'], help='Eigenvector method to us
     if not show_image:
         return
 
-    if img is None:
-        fig, ax = model.plot_image(cmap="gray", levels=20, return_fig=True, xlim=(-8, 2), ylim=(-8, 2))
-        ax.set_frame_on(False)
-        img = fig, ax
+    model.plot(save_path='beale.png')
 
-    fig, ax = img
-    c = colors[0]
-    ax.plot(*list(zip(*model.coords_history)), linewidth=1, color=c, zorder=2, label=f'{method[0]} {opt[0]}')
-    ax.scatter(*list(zip(*model.coords_history[::stride])), s=8, zorder=1, alpha=0.75, marker='x', color=c)
-    ax.scatter(*model.coords_history[-1], s=64, zorder=3, marker='x', color=c)
-
-    f = copy.deepcopy(fig)
-    f.legend()
-    f.savefig('beale.png', dpi=1000)
-    plt.close(fig)
 
 
 if __name__ == '__main__':

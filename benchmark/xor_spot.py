@@ -33,7 +33,7 @@ class Model(nn.Module):
     def forward(self, inp):
         inp = self.embed(inp.squeeze(-1).long())
         inp = inp[0] + inp[1]
-        out, _ = self.enc(inp.transpose(0, 1))
+        out, _ = torch.compiler.disable()(self.enc)(inp.transpose(0, 1))
         return self.proj(out[-1, :])
 
 

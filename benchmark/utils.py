@@ -311,6 +311,9 @@ def trial(model, data, loss_fn, win_condition, steps, opt, dtype, size, batch, w
           trials=10, failure_threshold=3, group=64, base_lr: float = 1e-3, return_best: bool = False):
     heavyball.utils.set_torch()
 
+    if isinstance(opt, list):
+        opt = opt[0]
+
     kwargs = {'caution': False, 'mars': False}
     if opt.startswith('cautious-'):
         opt = opt[len('cautious-'):]
