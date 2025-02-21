@@ -10,7 +10,7 @@ setuptools.setup(
     name='heavyball',
     license='BSD',
     description='Efficient optimizers',
-    version='1.6.0',
+    version='1.6.1',
     long_description=README,
     url='https://github.com/HomebrewML/HeavyBall',
     packages=setuptools.find_packages(),
