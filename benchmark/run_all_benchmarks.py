@@ -69,9 +69,9 @@ def run_benchmark(script, opt, steps, dtype, trials):
 
     total_runtime = time.time() - start_time
 
-    return {**base, 'success': success, 
-            'runtime': float(runtime or total_runtime), 
-            'loss': float(loss) if loss else float('inf'), 
+    return {**base, 'success': success,
+            'runtime': float(runtime or total_runtime),
+            'loss': float(loss) if loss else float('inf'),
             'attempts': attempts,
             'error': error if error else ''}
 
@@ -136,6 +136,27 @@ def main(opt: list[str] = typer.Option([], help='Optimizers'), steps: int = 100_
     benchmarks = [
         'beale.py',
         'rosenbrock.py',
+        'rastrigin.py',
+        'quadratic_varying_scale.py',
+        'quadratic_varying_target.py',
+        'noisy_matmul.py',
+        'xor_sequence.py',
+        'xor_digit.py',
+        'xor_spot.py',
+        'saddle_point.py',
+        'discontinuous_gradient.py',
+        'plateau_navigation.py',
+        'scale_invariant.py',
+        'momentum_utilization.py',
+        'batch_size_scaling.py',
+        'sparse_gradient.py',
+        'layer_wise_scale.py',
+        'gradient_delay.py',
+        'ill_conditioned.py',
+        'gradient_noise_scale.py',
+        'adversarial_gradient.py',
+        'dynamic_landscape.py',
+        'exploding_gradient.py'
     ]
 
     if mars:
@@ -148,7 +169,7 @@ def main(opt: list[str] = typer.Option([], help='Optimizers'), steps: int = 100_
     # Create task queue and result queue
     task_queue = multiprocessing.Queue()
     result_queue = multiprocessing.Queue()
-    
+
     # Create all tasks
     total_tasks = len(benchmarks) * len(opt)
     for script in benchmarks:
@@ -185,13 +206,14 @@ def main(opt: list[str] = typer.Option([], help='Optimizers'), steps: int = 100_
     # Collect results
     results = []
     completed = 0
-    
+
     try:
         while completed < total_tasks:
             result = result_queue.get()
             results.append(result)
             completed += 1
-            print(f"Progress: [{completed}/{total_tasks}] {result['name']}.py - {result['opt']}: {'✓' if result['success'] else '✗'}")
+            print(
+                f"Progress: [{completed}/{total_tasks}] {result['name']}.py - {result['opt']}: {'✓' if result['success'] else '✗'}")
             write_progress(results, opt, output)
 
     except KeyboardInterrupt:
@@ -200,7 +222,7 @@ def main(opt: list[str] = typer.Option([], help='Optimizers'), steps: int = 100_
         # Clean up
         for p in processes:
             p.terminate()
-        
+
         # Save final results
         if results:
             write_progress(results, opt, output)
