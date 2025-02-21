@@ -50,8 +50,10 @@ def main(method: List[str] = typer.Option(['qr'], help='Eigenvector method to us
         m, d, dim, o, wd = args
         
         model = ExplodingGradient(dim=dim)
-        data = None  # No external data needed
-        
+
+        def data():
+            return None, None
+
         # Win condition: loss should be close to 1.0 (exp(0) = 1)
         # Using 1.1 as threshold since perfect convergence is hard
         trial(model, data, None,

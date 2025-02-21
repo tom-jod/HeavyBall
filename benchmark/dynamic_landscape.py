@@ -52,8 +52,9 @@ def main(method: List[str] = typer.Option(['qr'], help='Eigenvector method to us
         m, d, dim, o, wd = args
         
         model = ShiftingSphere(dim=dim)
-        data = None  # No external data needed
-        
+        def data():
+            return None, None
+
         # Win condition: average squared error should be small (parameters close to target)
         trial(model, data, None,
               loss_win_condition(0.01 * win_condition_multiplier),
