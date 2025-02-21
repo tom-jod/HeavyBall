@@ -617,7 +617,8 @@ def init_preconditioner(grad, state, max_precond_dim, precondition_1d):
     state['GG'] = []  # Will hold all the preconditioner matrices (L and R in the paper).
     if grad.numel() > 1 and (grad.ndim > 1 or precondition_1d):
         for sh in grad.shape:
-            if sh > max_precond_dim:
+            if sh > max_precond_dim or sh == 1:
+                # via @francois-rozet: https://github.com/HomebrewML/HeavyBall/commit/8b86be04967e2d095136d5603724f488f2d46592#diff-a430393dd0a6ee393944a9ed16416115c175de2414cf4a96e647197697f265e9R621
                 state['GG'].append(None)
             else:
                 state['GG'].append(torch.zeros(sh, sh, device=grad.device, dtype=grad.dtype))
