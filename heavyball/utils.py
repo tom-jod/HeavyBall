@@ -426,12 +426,12 @@ def get_orthogonal_matrix_QR(GG: List[Tensor], Q: List[Tensor], exp_avg: Optiona
     out_str = ''.join([o if o in to_shampoo else i for i, o in zip(in_str, out_str)])
 
     subscripts = f'{in_str},{from_shampoo},{to_shampoo}->{out_str}'
-    print(subscripts, exp_avg.shape,[q.shape for q in Q if q is not None], [q.shape for q in new_qs if q is not None] )
     exp_avg_new = torch.einsum(subscripts, exp_avg, *[q for q in Q if q is not None], *[q for q in new_qs if q is not None])
     copy_stochastic_(exp_avg, exp_avg_new)
 
     for q, q_new in zip(Q, new_qs):
-        copy_stochastic_(q, q_new)
+        if q is not None:
+            copy_stochastic_(q, q_new)
 
 
 def get_orthogonal_matrix(mat):
