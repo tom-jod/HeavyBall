@@ -262,8 +262,8 @@ def set_torch(benchmark_limit: int = 32):
     cudnn.benchmark_limit = benchmark_limit
     torch.use_deterministic_algorithms(False)
     torch.set_float32_matmul_precision("high")  # highest: FP32, high: TF32, medium: bf16
-    opt_einsum.enabled = True
-    opt_einsum.strategy = "optimal"
+    opt_einsum.enabled = False
+    opt_einsum.strategy = "auto"
 
     # Torch calls these for 2nd-order optimization in HeavyBall, but they are explicitly handled.
     _ignore_warning(
@@ -376,7 +376,7 @@ def _compilable_scatter_set(target, source, index):
     target[:] = source.contiguous()[index].reshape_as(target)
 
 
-@decorator_knowngood
+#@decorator_knowngood
 def get_orthogonal_matrix_QR(GG: List[Tensor], Q: List[Tensor], exp_avg: Optional[Tensor] = None):
     """
     Computes the eigenbases of the preconditioner using one round of power iteration
@@ -396,6 +396,7 @@ def get_orthogonal_matrix_QR(GG: List[Tensor], Q: List[Tensor], exp_avg: Optiona
 
     for m, q in zip(GG, Q):
         if m is None:
+            new_qs.append(None)
             continue
 
         m = promote(m.data)
@@ -425,7 +426,8 @@ def get_orthogonal_matrix_QR(GG: List[Tensor], Q: List[Tensor], exp_avg: Optiona
     out_str = ''.join([o if o in to_shampoo else i for i, o in zip(in_str, out_str)])
 
     subscripts = f'{in_str},{from_shampoo},{to_shampoo}->{out_str}'
-    exp_avg_new = torch.einsum(subscripts, exp_avg, *[q for q in Q], *[q for q in new_qs])
+    print(subscripts, exp_avg.shape,[q.shape for q in Q if q is not None], [q.shape for q in new_qs if q is not None] )
+    exp_avg_new = torch.einsum(subscripts, exp_avg, *[q for q in Q if q is not None], *[q for q in new_qs if q is not None])
     copy_stochastic_(exp_avg, exp_avg_new)
 
     for q, q_new in zip(Q, new_qs):
