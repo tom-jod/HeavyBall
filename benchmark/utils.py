@@ -8,7 +8,7 @@ import time
 import warnings
 from datetime import datetime
 from typing import Union
-
+from torch import nn
 import heavyball.utils
 import hyperopt
 import numpy as np
@@ -131,6 +131,77 @@ class Validator:
 
 class Stop(Exception):
     pass
+
+
+class Plotter(nn.Module):
+    def __init__(self, objective_fn, x_limits=(-5, 5), y_limits=(-5, 5),
+                 resolution=300, transform=None, inverse_transform=None, should_normalize: bool = True):
+        super().__init__()
+        self.should_normalize = should_normalize
+        self.objective = objective_fn
+        self.initial = objective_fn.param.data.clone()
+        self.x_limits = x_limits
+        self.y_limits = y_limits
+        self.resolution = resolution
+        self.transform = transform if transform else lambda x: x
+        self.inverse_transform = inverse_transform if inverse_transform else lambda x: x
+
+        self.param = objective_fn.param
+
+        with torch.no_grad():
+            x = torch.linspace(x_limits[0], x_limits[1], resolution)
+            y = torch.linspace(y_limits[0], y_limits[1], resolution)
+            self.X, self.Y = torch.meshgrid(x, y, indexing='ij')
+            Z = torch.zeros_like(self.X)
+            for i in range(resolution):
+                for j in range(resolution):
+                    objective_fn.param.data[:] = torch.tensor([self.X[i,j].item(), self.Y[i,j].item()], device='cuda')
+                    Z[i,j] = self.transform(objective_fn())
+            objective_fn.param.data[:] = self.initial
+        self.Z = Z
+        
+        self.trajectory = [self.initial.detach().cpu().numpy()]
+    
+    def forward(self, *args):
+        value = self.objective(*args)
+        with torch.no_grad():
+            self.trajectory.append(self.param.cpu().detach().numpy())
+        return self.transform(value)
+    
+    def plot(self, title=None, save_path=None):
+        """Create contour plot with optimization trajectory.
+        
+        Args:
+            title: Optional title for the plot
+            save_path: Optional path to save the plot
+        """
+        import matplotlib.pyplot as plt
+        
+        plt.figure(figsize=(10, 8))
+        z = self.Z
+        if self.should_normalize:
+            z = z - z.min()
+            z = z / z.max()
+            z = z + 1e-8
+        plt.contourf(self.X.numpy(), self.Y.numpy(), z.log().numpy(), levels=1000)
+        
+        # Plot trajectory
+        trajectory = np.array(self.trajectory)
+        plt.plot(trajectory[:, 0], trajectory[:, 1], 'r.-', label='Optimization path')
+        plt.plot(trajectory[0, 0], trajectory[0, 1], 'go', label='Start')
+        plt.plot(trajectory[-1, 0], trajectory[-1, 1], 'ro', label='End')
+
+        plt.colorbar(label=f'Log({"Normalized" * self.should_normalize}ObjectiveValue)')
+        plt.xlabel('x')
+        plt.ylabel('y')
+        if title:
+            plt.title(title)
+        plt.legend()
+        plt.grid(True)
+        
+        if save_path:
+            plt.savefig(save_path)
+        plt.close()
 
 class Objective:
     def __init__(self, failure_threshold, model, opt, steps, group, data, loss_fn, win_condition, weight_decay,
