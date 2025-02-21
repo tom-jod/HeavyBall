@@ -67,7 +67,7 @@ def decorator_knowngood(func: Callable):
     return _fn
 
 
-einsum_base = string.ascii_lowercase + string.ascii_uppercase
+einsum_base = string.ascii_lowercase
 
 
 @decorator_knowngood
@@ -119,28 +119,29 @@ def dim_merger(grad, max_precond_dim, split: bool = False):
     but we want to merge conv kernels into fan-in or at least merge the kernel
     so, [128, 64, 3, 3] should result in [128, 576] or [128, 64, 9] instead of [73728] or [8192, 3, 3] the baseline
     would've done
+
+    By @francois-rozet (commit: 68cde41eaf7e73b4c46eacb6a944865dcc081f1d), re-commited due to faulty merge
     """
-    shape = grad.shape
     new_shape = []
-    curr_shape = 1
+    cum_size = 1
 
-    for sh in shape[1:][::-1]:
-        temp_shape = curr_shape * sh
-        if temp_shape > max_precond_dim:
-            if curr_shape > 1:
-                new_shape.append(curr_shape)
-                curr_shape = sh
+    for s in grad.shape[1:][::-1]:
+        temp_size = cum_size * s
+        if temp_size > max_precond_dim:
+            if cum_size > 1:
+                new_shape.append(cum_size)
+                cum_size = s
             else:
-                new_shape.append(sh)
-                curr_shape = 1
+                new_shape.append(s)
+                cum_size = 1
         else:
-            curr_shape = temp_shape
-    new_shape = [*shape[:1], *new_shape[::-1]]
+            cum_size = temp_size
 
-    if curr_shape > 1 or len(new_shape) == 0:
-        new_shape.append(curr_shape)
+    if cum_size > 1:
+        new_shape.append(cum_size)
 
-    new_grad = grad.reshape(new_shape)  # needs to be .reshape() due to channels_last
+    new_shape = [grad.shape[0], *new_shape[::-1]]
+    new_grad = grad.reshape(new_shape)
     if not split:
         return new_grad
 
@@ -559,20 +560,22 @@ def stochastic_multiply_(x: List[Tensor], y: List[Tensor]):
 
 
 @decorator
-def compute_ggt(grad, GG, max_precond_dim, precondition_1d, beta):
+def update_ggt(grad, GG, max_precond_dim, precondition_1d, beta):
+    """
+    Simplified by @francois-rozet in commit 704ccc4bab52429f945df421647ec82c54cdd65f
+    Re-commited due to faulty merge
+    """
     if grad.dim() == 1 and (not precondition_1d or grad.shape[0] > max_precond_dim):
         return
 
-    for idx, sh in enumerate(grad.shape):
-        if sh > max_precond_dim:
-            continue
-        if isinstance(GG[idx], list) and not GG[idx]:
+    for idx, m in enumerate(GG):
+        if not isinstance(m, Tensor):
             continue
         b = einsum_base[idx]
         g0 = einsum_base[:grad.dim()]
         g1 = g0.replace(b, b.upper())
         outer_product = torch.einsum(f'{g0},{g1}->{b + b.upper()}', grad, grad)
-        GG[idx].lerp_(outer_product, 1 - beta)
+        m.lerp_(outer_product, 1 - beta)
 
 
 def tree_apply(fn):
@@ -603,7 +606,7 @@ def update_preconditioner(grad, Q, GG, exp_avg, max_precond_dim, precondition_1d
     """
     Updates the preconditioner matrices and the eigenbases (L, R, Q_L, Q_R in the paper).
     """
-    compute_ggt(grad, GG, max_precond_dim, precondition_1d, beta)
+    update_ggt(grad, GG, max_precond_dim, precondition_1d, beta)
     if update_precond:
         get_orthogonal_matrix_QR(GG, Q, exp_avg)
 
@@ -613,14 +616,16 @@ def init_preconditioner(grad, state, max_precond_dim, precondition_1d):
     Initializes the preconditioner matrices (L and R in the paper).
     """
     state['GG'] = []  # Will hold all the preconditioner matrices (L and R in the paper).
-    if grad.ndim > 1 or precondition_1d:
+    if grad.numel() > 1 and (grad.ndim > 1 or precondition_1d):
         for sh in grad.shape:
             if sh > max_precond_dim:
-                state['GG'].append([])
+                state['GG'].append(None)
             else:
                 state['GG'].append(torch.zeros(sh, sh, device=grad.device, dtype=grad.dtype))
+    else:
+        state['GG'].append(None)
 
-    compute_ggt(grad, state['GG'], max_precond_dim, precondition_1d, 0)
+    update_ggt(grad, state['GG'], max_precond_dim, precondition_1d, 0)
     state['Q'] = get_orthogonal_matrix(state['GG'])
 
 
