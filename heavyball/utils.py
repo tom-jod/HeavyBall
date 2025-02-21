@@ -265,8 +265,8 @@ def set_torch(benchmark_limit: int = 32):
     cudnn.benchmark_limit = benchmark_limit
     torch.use_deterministic_algorithms(False)
     torch.set_float32_matmul_precision("high")  # highest: FP32, high: TF32, medium: bf16
-    opt_einsum.enabled = True
-    opt_einsum.strategy = "dp"
+    opt_einsum.set_flags(True, "optimal")
+
 
     # Torch calls these for 2nd-order optimization in HeavyBall, but they are explicitly handled.
     _ignore_warning(
@@ -398,7 +398,7 @@ def get_orthogonal_matrix_QR(GG: List[Tensor], Q: List[Tensor], exp_avg: Optiona
     new_qs = []
 
     for m, q in zip(GG, Q):
-        if len(m) == 0:
+        if m is None:
             continue
 
         m = promote(m.data)
@@ -420,11 +420,11 @@ def get_orthogonal_matrix_QR(GG: List[Tensor], Q: List[Tensor], exp_avg: Optiona
     in_str = einsum_base[:exp_avg.dim()]
     out_str = einsum_base[exp_avg.dim():2 * exp_avg.dim()]
 
-    from_shampoo = ",".join([o + i for m, i, o in zip(Q, in_str, in_str.upper()) if len(m) > 0])
+    from_shampoo = ",".join([o + i for m, i, o in zip(Q, in_str, in_str.upper()) if m is not None])
     if not from_shampoo:
         return
 
-    to_shampoo = ','.join([i + o for m, i, o in zip(new_qs, in_str.upper(), out_str) if len(m) > 0])
+    to_shampoo = ','.join([i + o for m, i, o in zip(new_qs, in_str.upper(), out_str) if m is not None])
     out_str = ''.join([o if o in to_shampoo else i for i, o in zip(in_str, out_str)])
 
     subscripts = f'{in_str},{from_shampoo},{to_shampoo}->{out_str}'
@@ -442,8 +442,8 @@ def get_orthogonal_matrix(mat):
 
     final = []
     for m in mat:
-        if len(m) == 0:
-            final.append([])
+        if m is None:
+            final.append(None)
             continue
 
         m = promote(m.data)
@@ -638,10 +638,10 @@ def project(grad, Q, back: bool):
     :return:
     """
     param = einsum_base[:grad.dim()]
-    preconditioners = ",".join([(g + g.upper())[::-1 if back else 1] for m, g in zip(Q, param) if len(m) > 0])
+    preconditioners = ",".join([(g + g.upper())[::-1 if back else 1] for m, g in zip(Q, param) if m is not None])
     if preconditioners:
         out = ''.join([c.upper() if c.upper() in preconditioners else c for c in param])
-        out = torch.einsum(f'{param},{preconditioners}->{out}', promote(grad), *[q for q in Q if len(q) > 0])
+        out = torch.einsum(f'{param},{preconditioners}->{out}', promote(grad), *[q for q in Q if q is not None])
         grad = out.to(grad.dtype)
     return grad
 
