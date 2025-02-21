@@ -5,14 +5,14 @@ with open('README.md') as f:
     README = f.read()
 
 setuptools.setup(
-    author="Lucas Nestler",
+    author="HeavyBall Authors",
     author_email="github.heavyball@nestler.sh",
     name='heavyball',
     license='BSD',
     description='Efficient optimizers',
     version='1.6.0',
     long_description=README,
-    url='https://github.com/clashluke/heavyball',
+    url='https://github.com/HomebrewML/HeavyBall',
     packages=setuptools.find_packages(),
     python_requires=">=3.7",
     long_description_content_type="text/markdown",
