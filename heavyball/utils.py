@@ -169,7 +169,7 @@ def _compilable_exp_avg_sq_(state: List[Tensor], grad: List[Tensor], beta2: Tens
     g32 = promote(grad)
     s32 = _lerp(state, torch._foreach_mul(g32, g32), beta2)
 
-    denom = [eps_sqrt(d) for d in s32]
+    denom = [eps_sqrt(d, eps) for d in s32]
 
     if out[0] is None:
         return denom
@@ -475,7 +475,7 @@ def _compilable_stochastic_lerp_(x: List[Tensor], y: List[Tensor], a: Union[floa
         y32 = promote(y_)
         if x32.dtype != y32.dtype:
             y32 = y32.to(x32.dtype)
-        copy_stochastic_(x_, x32.lerp(y32, a))
+        copy_stochastic_(x_, x32 * (1 - a) + y32 * a)
 
 
 def get_beta1(group):
@@ -972,7 +972,7 @@ def _fused_compilable_adopt_(y, update, grad, exp_avg_sq, exp_avg, beta1, beta2,
     _compilable_update_(y, u32, decay, lr, caution, g32)
 
     beta1 = beta_debias(beta1, step)
-    denom = [eps_sqrt(d) for d in exp_avg_sq32]
+    denom = [eps_sqrt(d, eps) for d in exp_avg_sq32]
     stochastic_lerp_(exp_avg, torch._foreach_div(g32, denom), 1 - beta1)
 
     beta2 = beta_debias(beta2, step + 1)
@@ -991,7 +991,7 @@ def _compilable_adopt_(grad, exp_avg_sq, exp_avg, beta1, beta2, step, eps):
     update = [e.clone() for e in exp_avg]
 
     beta1 = beta_debias(beta1, step)
-    denom = [eps_sqrt(d) for d in exp_avg_sq32]
+    denom = [eps_sqrt(d, eps) for d in exp_avg_sq32]
     stochastic_lerp_(exp_avg, torch._foreach_div(g32, denom), 1 - beta1)
 
     stochastic_lerp_(exp_avg_sq, torch._foreach_mul(g32, g32), 1 - beta2)
