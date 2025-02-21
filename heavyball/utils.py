@@ -3,7 +3,6 @@ import functools
 import gc
 import inspect
 import math
-import numpy as np
 import random
 import string
 import sys
@@ -11,15 +10,16 @@ import time
 import warnings
 from datetime import datetime
 from typing import List, Optional, Tuple, Callable, Union
+from unittest.mock import patch
 
 import hyperopt
+import numpy as np
 import torch
 from torch import Tensor
 from torch._dynamo import config
 from torch._dynamo.exc import TorchDynamoException
 from torch.backends import cudnn, opt_einsum
 from torch.utils._pytree import tree_map
-from unittest.mock import patch
 
 config.cache_size_limit = 2 ** 16
 
@@ -407,9 +407,8 @@ def get_orthogonal_matrix_QR(GG: List[Tensor], Q: List[Tensor], exp_avg: Optiona
         est_eig = torch.einsum('ij,ij->j', q_old, tmp)
         sort_idx = torch.argsort(est_eig, descending=True)
 
-        q_new, _ = torch.linalg.qr(tmp[:, sort_idx])
-        q_new = q_new[:, sort_idx]
-        new_qs.append(q_new)
+        tmp[:, sort_idx], _ = torch.linalg.qr(tmp[:, sort_idx])
+        new_qs.append(tmp)
 
     if exp_avg is None:
         for q, q_new in zip(Q, new_qs):
@@ -424,7 +423,7 @@ def get_orthogonal_matrix_QR(GG: List[Tensor], Q: List[Tensor], exp_avg: Optiona
     if not from_shampoo:
         return
 
-    to_shampoo =  ','.join([i + o for m, i, o in zip(new_qs, in_str.upper(), out_str) if len(m) > 0])
+    to_shampoo = ','.join([i + o for m, i, o in zip(new_qs, in_str.upper(), out_str) if len(m) > 0])
     out_str = ''.join([o if o in to_shampoo else i for i, o in zip(in_str, out_str)])
 
     subscripts = f'{in_str},{from_shampoo},{to_shampoo}->{out_str}'
@@ -576,6 +575,14 @@ def compute_ggt(grad, GG, max_precond_dim, precondition_1d, beta):
         GG[idx].lerp_(outer_product, 1 - beta)
 
 
+def tree_apply(fn):
+    def _fn(*args):
+        return tree_map(fn, *args)
+
+    return _fn
+
+
+@tree_apply
 def promote(x):
     if isinstance(x, torch.dtype) and x in (torch.bfloat16, torch.float16):
         return torch.float32
@@ -948,7 +955,8 @@ def _fused_compilable_laprop_(y: List[Tensor], exp_avg: List[Tensor], exp_avg_sq
 
 
 def fused_laprop_(y: List[Tensor], exp_avg: List[Tensor], exp_avg_sq: List[Tensor], update: List[Tensor],
-                  grad: List[Tensor], beta1: float, beta2: float, step: int, lr: float, decay: float, caution: bool, eps: float = 1e-8):
+                  grad: List[Tensor], beta1: float, beta2: float, step: int, lr: float, decay: float, caution: bool,
+                  eps: float = 1e-8):
     exp_avg, exp_avg_sq, grad, y = list_guard(exp_avg, exp_avg_sq, grad, y)
     beta1, beta2, step, lr, eps = scalar_guard(beta1, beta2, step, lr, eps, exp_avg[0])
     _fused_compilable_laprop_(y, exp_avg, exp_avg_sq, update, grad, beta1, beta2, step, lr, decay, caution, eps)
