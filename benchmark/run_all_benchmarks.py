@@ -136,27 +136,6 @@ def main(opt: list[str] = typer.Option([], help='Optimizers'), steps: int = 100_
     benchmarks = [
         'beale.py',
         'rosenbrock.py',
-        'rastrigin.py',
-        'quadratic_varying_scale.py',
-        'quadratic_varying_target.py',
-        'noisy_matmul.py',
-        'xor_sequence.py',
-        'xor_digit.py',
-        'xor_spot.py',
-        'saddle_point.py',
-        'discontinuous_gradient.py',
-        'plateau_navigation.py',
-        'scale_invariant.py',
-        'momentum_utilization.py',
-        'batch_size_scaling.py',
-        'sparse_gradient.py',
-        'layer_wise_scale.py',
-        'gradient_delay.py',
-        'ill_conditioned.py',
-        'gradient_noise_scale.py',
-        'adversarial_gradient.py',
-        'dynamic_landscape.py',
-        'exploding_gradient.py'
     ]
 
     if mars:
