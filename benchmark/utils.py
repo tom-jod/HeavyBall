@@ -1,19 +1,20 @@
 import copy
+import functools
 import gc
 import inspect
-from multiprocessing import Value
 import random
 import sys
 import time
 import warnings
 from datetime import datetime
+from multiprocessing import Value
 from typing import Union
-from torch import nn
+
 import heavyball.utils
 import hyperopt
 import numpy as np
 import torch
-import functools
+from torch import nn
 from torch._dynamo import config
 
 config.cache_size_limit = 2 ** 16
@@ -31,6 +32,7 @@ def get_optim(optim, params, **kwargs):
     o = optim(params, **{k: v for k, v in args.items() if k in signature.parameters})
     return o
 
+
 class FailureCounter:
     def __init__(self, mapping, broadcast: int = 1):
         self.mapping = mapping
@@ -38,7 +40,8 @@ class FailureCounter:
         max_consecutive_failures, minimal_improvement = zip(*mapping.items())
         self.max_consecutive_failures = torch.tensor(max_consecutive_failures, dtype=torch.float64, device='cuda')
         self.minimal_improvement = torch.tensor(minimal_improvement, dtype=torch.float64, device='cuda')
-        self.consecutive_failures = torch.zeros(len(minimal_improvement), dtype=torch.int64, device='cuda').repeat(broadcast)
+        self.consecutive_failures = torch.zeros(len(minimal_improvement), dtype=torch.int64, device='cuda').repeat(
+            broadcast)
 
     def compare(self, inp, other):
         old_state = inp.reshape(1, -1, 1)  # vertical
@@ -53,9 +56,8 @@ class FailureCounter:
     def __call__(self, comparison, failure_scale: float = 1):
         failed = torch.any(comparison, axis=tuple(range(1, comparison.ndim)))
         self.consecutive_failures.copy_(torch.where(failed, self.consecutive_failures + 1, 0))
-        return torch.any(self.consecutive_failures >= (self.max_consecutive_failures.view(-1, 1) * failure_scale).flatten())
-
-
+        return torch.any(
+            self.consecutive_failures >= (self.max_consecutive_failures.view(-1, 1) * failure_scale).flatten())
 
 
 class Validator:
@@ -82,7 +84,6 @@ class Validator:
         self.seen_until = np.zeros((), dtype=np.int64)  # seen_until has to be shared
         self.global_avg_failures = FailureCounter(global_avg_mapping, steps)
 
-
     def new(self):
         new = copy.copy(self)
         new.ema_failures = new.ema_failures.new()
@@ -102,7 +103,9 @@ class Validator:
     def _global_min(self):
         loss = self.ema_states[self.ema_index]
         comparison = self.global_min_failures.compare(loss, self.global_min_loss).view(-1, 1)
-        global_failed = self.global_min_failures(comparison, torch.arange(1, 1 + self.global_min_loss.size(0), device='cuda').view(1, -1).clamp(min=self.global_warmup))
+        global_failed = self.global_min_failures(comparison,
+                                                 torch.arange(1, 1 + self.global_min_loss.size(0), device='cuda').view(
+                                                     1, -1).clamp(min=self.global_warmup))
 
         loss_slice = self.global_min_loss[self.step - 1:]
         loss_slice.copy_(torch.where(torch.logical_and(loss < loss_slice, torch.isfinite(loss)), loss, loss_slice))
@@ -116,7 +119,10 @@ class Validator:
 
         comparison = self.global_avg_failures.compare(loss, self.global_avg_loss).view(-1, 1)
         comparison[self.seen_until - 1:].fill_(False)
-        return self.global_avg_failures(comparison, torch.arange(1, 1 + self.global_avg_loss.size(0), device='cuda').view(1, -1).clamp(min=self.global_warmup))
+        return self.global_avg_failures(comparison,
+                                        torch.arange(1, 1 + self.global_avg_loss.size(0), device='cuda').view(1,
+                                                                                                              -1).clamp(
+                                            min=self.global_warmup))
 
     def _local_convergence(self):
         comparison = self.ema_failures.compare(self.ema_states, self.ema_states)
@@ -129,13 +135,14 @@ class Validator:
         outputs = [self._global_min(), self._global_avg(), self._local_convergence()]
         return functools.reduce(torch.logical_or, outputs)
 
+
 class Stop(Exception):
     pass
 
 
 class Plotter(nn.Module):
-    def __init__(self, objective_fn, x_limits=(-5, 5), y_limits=(-5, 5),
-                 resolution=300, transform=None, inverse_transform=None, should_normalize: bool = True):
+    def __init__(self, objective_fn, x_limits=(-5, 5), y_limits=(-5, 5), resolution=300, transform=None,
+                 inverse_transform=None, should_normalize: bool = True):
         super().__init__()
         self.should_normalize = should_normalize
         self.objective = objective_fn
@@ -155,19 +162,19 @@ class Plotter(nn.Module):
             Z = torch.zeros_like(self.X)
             for i in range(resolution):
                 for j in range(resolution):
-                    objective_fn.param.data[:] = torch.tensor([self.X[i,j].item(), self.Y[i,j].item()], device='cuda')
-                    Z[i,j] = self.transform(objective_fn())
+                    objective_fn.param.data[:] = torch.tensor([self.X[i, j].item(), self.Y[i, j].item()], device='cuda')
+                    Z[i, j] = self.transform(objective_fn())
             objective_fn.param.data[:] = self.initial
         self.Z = Z
-        
+
         self.trajectory = [self.initial.detach().cpu().numpy()]
-    
+
     def forward(self, *args):
         value = self.objective(*args)
         with torch.no_grad():
             self.trajectory.append(self.param.cpu().detach().numpy())
         return self.transform(value)
-    
+
     def plot(self, title=None, save_path=None):
         """Create contour plot with optimization trajectory.
         
@@ -176,7 +183,7 @@ class Plotter(nn.Module):
             save_path: Optional path to save the plot
         """
         import matplotlib.pyplot as plt
-        
+
         plt.figure(figsize=(10, 8))
         z = self.Z
         if self.should_normalize:
@@ -184,7 +191,7 @@ class Plotter(nn.Module):
             z = z / z.max()
             z = z + 1e-8
         plt.contourf(self.X.numpy(), self.Y.numpy(), z.log().numpy(), levels=1000)
-        
+
         # Plot trajectory
         trajectory = np.array(self.trajectory)
         plt.plot(trajectory[:, 0], trajectory[:, 1], 'r.-', label='Optimization path')
@@ -198,10 +205,11 @@ class Plotter(nn.Module):
             plt.title(title)
         plt.legend()
         plt.grid(True)
-        
+
         if save_path:
             plt.savefig(save_path)
         plt.close()
+
 
 class Objective:
     def __init__(self, failure_threshold, model, opt, steps, group, data, loss_fn, win_condition, weight_decay,
@@ -223,15 +231,14 @@ class Objective:
 
         self.validator = Validator(
             {32768: 1e-7, 16384: 1e-6, 8192: 1e-5, 4096: 1e-4, 1024: 1e-3, 512: 1e-2, 256: 0, 128: -1e-4, 64: -1e-3,
-             32: -0.01, 16: -0.1, 8: -0.33, 4: -0.5, 2: -0.75, 1: -0.99},
-             {2: 0},  {6: 0},
-             steps)  # same loss as best after 3x as many steps; 6x higher loss at same step - for every per-step minimum
+             32: -0.01, 16: -0.1, 8: -0.33, 4: -0.5, 2: -0.75, 1: -0.99}, {2: 0}, {6: 0},
+            steps)  # same loss as best after 3x as many steps; 6x higher loss at same step - for every per-step minimum
         self.m = None
         self.attempt = 0
         self.best_loss = None
         self.best_at = 0
         self.avg = None
-
+        self.use_cudnn = True
 
     def _inner(self, params):
         params = {'lr': params[0], 'betas': (1 - params[1], 1 - params[2]), 'shampoo_beta': 1 - params[3], 'eps': 1e-8,
@@ -250,10 +257,17 @@ class Objective:
                 inp, tgt = self.data()
 
                 def _closure():
-                    loss = self.m() if inp is None else self.m(inp)
-                    if self.loss_fn is not None:
-                        loss = self.loss_fn(loss, tgt)
-                    loss.backward()
+                    with torch.backends.cudnn.flags(enabled=self.use_cudnn):
+                        try:
+                            loss = self.m() if inp is None else self.m(inp)
+                            if self.loss_fn is not None:
+                                loss = self.loss_fn(loss, tgt)
+                            loss.backward()
+                        except NotImplementedError:
+                            if not self.use_cudnn:
+                                raise
+                            self.use_cudnn = False
+                            return _closure()
                     return loss
 
                 loss = o.step(_closure)
@@ -299,6 +313,7 @@ def loss_win_condition(target):
 
 def param_norm_win_condition(target, offset):
     target = torch.full((), target, device='cuda')
+
     def win(model, loss):
         with torch.no_grad():
             norm = model.param.add(offset).square().mean().sqrt()
@@ -354,14 +369,14 @@ def trial(model, data, loss_fn, win_condition, steps, opt, dtype, size, batch, w
                                             hyperopt.hp.loguniform('1mbeta1', np.log(1e-3), np.log(1)),  #
                                             hyperopt.hp.loguniform('1mbeta2', np.log(1e-5), np.log(1)),  #
                                             hyperopt.hp.loguniform('1mshampoo_beta', np.log(1e-4), np.log(1))),  #
-                            max_evals=trials, algo=hyperopt.atpe.suggest, early_stop_fn=lambda x: _win_condition(obj.m, x),
-                            return_argmin=True, show_progressbar=True)
+                            max_evals=trials, algo=hyperopt.atpe.suggest,
+                            early_stop_fn=lambda x: _win_condition(obj.m, x), return_argmin=True, show_progressbar=True)
     except Stop:
         out = {'lr': 0, '1mbeta1': 0, '1mbeta2': 0, '1mshampoo_beta': 0}
     finally:
         sys.stdout = stdout
     torch.cuda.synchronize()
-    
+
     end_time = time.time()
     if did_win:
         print("Successfully found the minimum.")
