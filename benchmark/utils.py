@@ -258,19 +258,20 @@ class Objective:
 
                 def _closure():
                     with torch.backends.cudnn.flags(enabled=self.use_cudnn):
-                        try:
-                            loss = self.m() if inp is None else self.m(inp)
-                            if self.loss_fn is not None:
-                                loss = self.loss_fn(loss, tgt)
-                            loss.backward()
-                        except NotImplementedError:
-                            if not self.use_cudnn:
-                                raise
-                            self.use_cudnn = False
-                            return _closure()
+                        loss = self.m() if inp is None else self.m(inp)
+                        if self.loss_fn is not None:
+                            loss = self.loss_fn(loss, tgt)
+                        loss.backward()
                     return loss
 
-                loss = o.step(_closure)
+                try:
+                    loss = o.step(_closure)
+                except NotImplementedError:
+                    if not self.use_cudnn:
+                        raise
+                    self.use_cudnn = False
+                    loss = o.step(_closure)
+
                 o.zero_grad()
 
                 with torch.no_grad():
