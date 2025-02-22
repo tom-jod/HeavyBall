@@ -366,7 +366,8 @@ def trial(model, data, loss_fn, win_condition, steps, opt, dtype, size, batch, w
     start_time = time.time()
     stdout, sys.stdout = sys.stdout, sys.stderr
     try:
-        out = hyperopt.fmin(obj.objective, (hyperopt.hp.loguniform('lr', np.log(1e-7), np.log(10)),  #
+        # LR=1000 seems way too high, but some problems get solved in one step with it, so it'd be unfair to exclude it
+        out = hyperopt.fmin(obj.objective, (hyperopt.hp.loguniform('lr', np.log(1e-7), np.log(1000)),  #
                                             hyperopt.hp.loguniform('1mbeta1', np.log(1e-3), np.log(1)),  #
                                             hyperopt.hp.loguniform('1mbeta2', np.log(1e-5), np.log(1)),  #
                                             hyperopt.hp.loguniform('1mshampoo_beta', np.log(1e-4), np.log(1))),  #

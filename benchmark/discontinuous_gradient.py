@@ -9,7 +9,7 @@ import typer
 from utils import Plotter
 from torch import nn
 
-from benchmark.utils import trial, loss_win_condition
+from benchmark.utils import trial, param_norm_win_condition
 from heavyball.utils import set_torch
 
 app = typer.Typer(pretty_exceptions_enable=False)
@@ -22,7 +22,7 @@ def objective(x):
 
 
 class Model(nn.Module):
-    def __init__(self, size=10):
+    def __init__(self, size=1024):
         super().__init__()
         self.param = nn.Parameter(torch.randn(size))
 
@@ -41,7 +41,7 @@ def main(method: List[str] = typer.Option(['qr'], help='Eigenvector method to us
     def data():
         return None, None
 
-    trial(model, data, None, loss_win_condition(win_condition_multiplier * 1e-6), steps, opt[0], dtype[0], 1, 1,
+    trial(model, data, None, param_norm_win_condition(win_condition_multiplier * 1e-4, 0), steps, opt[0], dtype[0], 1, 1,
           weight_decay, method[0], 1, 1, failure_threshold=3, base_lr=1e-3, trials=trials)
 
 

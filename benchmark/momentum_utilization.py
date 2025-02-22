@@ -15,7 +15,7 @@ set_torch()
 
 
 class Model(nn.Module):
-    def __init__(self, size=64):
+    def __init__(self, size=1024):
         super().__init__()
         self.param = nn.Parameter(torch.randn(size))
         self.register_buffer('t', torch.zeros(1))

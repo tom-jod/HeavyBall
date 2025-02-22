@@ -39,8 +39,8 @@ class Model(nn.Module):
 
 @app.command()
 def main(method: List[str] = typer.Option(['qr'], help='Eigenvector method to use (for SOAP)'),
-        dtype: List[str] = typer.Option(['float32'], help='Data type to use'), length: int = 16, size: int = 32,
-        depth: int = 1, batch: int = 128, steps: int = 100, weight_decay: float = 0,
+        dtype: List[str] = typer.Option(['float32'], help='Data type to use'), length: int = 14, size: int = 16,
+        depth: int = 1, batch: int = 256, steps: int = 100, weight_decay: float = 0,
         opt: List[str] = typer.Option(['ForeachSOAP'], help='Optimizers to use'), win_condition_multiplier: float = 1,
         trials: int = 10):
     dtype = [getattr(torch, d) for d in dtype]

@@ -5,7 +5,7 @@ import torch.backends.opt_einsum
 import typer
 from torch import nn
 
-from benchmark.utils import trial, loss_win_condition
+from benchmark.utils import trial, param_norm_win_condition
 from heavyball.utils import set_torch
 
 app = typer.Typer(pretty_exceptions_enable=False)
@@ -22,7 +22,7 @@ class Model(nn.Module):
         """Test optimizer's robustness to adversarial gradient patterns."""
         self.step += 1
         # Create an oscillating adversarial component
-        direction = torch.sin(self.step * torch.pi / 10)
+        direction = torch.sin(self.step * torch.pi / 10) * self.adversarial_scale
         # Main objective plus adversarial component
         return self.param.square().mean() + direction * self.param.mean()
 
@@ -39,7 +39,7 @@ def main(method: List[str] = typer.Option(['qr'], help='Eigenvector method to us
         return None, None
 
     # More lenient condition due to adversarial component
-    trial(model, data, None, loss_win_condition(win_condition_multiplier * 1e-4), steps, opt[0], dtype[0], 1, 1,
+    trial(model, data, None, param_norm_win_condition(win_condition_multiplier * 1e-5, 0), steps, opt[0], dtype[0], 1, 1,
           weight_decay, method[0], 1, 1, failure_threshold=7, base_lr=1e-3, trials=trials)  # More attempts for adversarial case
 
 

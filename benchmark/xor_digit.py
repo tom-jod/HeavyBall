@@ -36,10 +36,10 @@ class Model(nn.Module):
 def main(
     method: List[str] = typer.Option(['qr'], help='Eigenvector method to use (for SOAP)'),
     dtype: List[str] = typer.Option(['float32'], help='Data type to use'),
-    length: int = 8,
-    size: int = 32,
+    length: int = 32,
+    size: int = 16,
     depth: int = 1,
-    batch: int = 128,
+    batch: int = 256,
     steps: int = 10,
     weight_decay: float = 0,
     opt: List[str] = typer.Option(['ForeachSOAP'], help='Optimizers to use'),

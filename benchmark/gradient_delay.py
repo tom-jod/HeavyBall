@@ -14,7 +14,7 @@ set_torch()
 
 
 class Model(nn.Module):
-    def __init__(self, num_params=10, param_size=100):
+    def __init__(self, num_params=16, param_size=256):
         super().__init__()
         self.params = nn.ParameterList([
             nn.Parameter(torch.randn(param_size)) for _ in range(num_params)

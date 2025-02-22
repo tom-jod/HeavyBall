@@ -16,16 +16,16 @@ class Model(nn.Module):
     def __init__(self, size=1024):
         super().__init__()
         # Simulate different layer scales in deep networks
-        self.layer1 = nn.Parameter(torch.randn(size) * 1e-3)  # Small gradients
+        self.layer1 = nn.Parameter(torch.randn(size))  # Small gradients
         self.layer2 = nn.Parameter(torch.randn(size))         # Medium gradients
-        self.layer3 = nn.Parameter(torch.randn(size) * 1e3)   # Large gradients
+        self.layer3 = nn.Parameter(torch.randn(size))   # Large gradients
 
     def forward(self):
         """Test optimizer's ability to handle different gradient scales across layers."""
         # Each layer contributes equally to the loss but has very different scales
-        return (self.layer1.square().mean() + 
+        return (self.layer1.square().mean() * 1e-3 +
                 self.layer2.square().mean() + 
-                self.layer3.square().mean()) / 3
+                self.layer3.square().mean() * 1e3) / 3
 
 
 @app.command()

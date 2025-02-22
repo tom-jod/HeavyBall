@@ -13,7 +13,7 @@ set_torch()
 
 
 class Model(nn.Module):
-    def __init__(self, size=2 ** 10, sparsity=2 ** -5):
+    def __init__(self, size=2 ** 12, sparsity=2 ** -6):
         super().__init__()
         self.param = nn.Parameter(torch.randn(size))
         self.sparsity = sparsity

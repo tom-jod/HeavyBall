@@ -15,7 +15,7 @@ from typing import List
 import torch
 import torch.nn as nn
 import typer
-from benchmark.utils import loss_win_condition, trial
+from benchmark.utils import param_norm_win_condition, trial
 from heavyball.utils import set_torch
 
 app = typer.Typer(pretty_exceptions_enable=False)
@@ -23,7 +23,7 @@ set_torch()
 
 
 class ShiftingSphere(nn.Module):
-    def __init__(self, dim=1000):
+    def __init__(self, dim):
         super().__init__()
         self.param = nn.Parameter(torch.randn(dim))
         self.phase = 0
@@ -38,7 +38,7 @@ class ShiftingSphere(nn.Module):
 
 @app.command()
 def main(method: List[str] = typer.Option(['qr'], help='Eigenvector method to use (for SOAP)'),
-         dtype: List[str] = typer.Option(["float32"], help='Data type to use'), dim: int = 1000, steps: int = 500,
+         dtype: List[str] = typer.Option(["float32"], help='Data type to use'), dim: int = 16384, steps: int = 500,
          weight_decay: float = 0, opt: List[str] = typer.Option(['adamw'], help='Optimizers to use'),
          win_condition_multiplier: float = 1.0, trials: int = 3):
     """Run dynamic landscape benchmark with specified parameters."""
@@ -47,14 +47,14 @@ def main(method: List[str] = typer.Option(['qr'], help='Eigenvector method to us
     for args in itertools.product(method, dtype, [dim], opt, [weight_decay]):
         m, d, dim, o, wd = args
 
-        model = ShiftingSphere(dim=dim)
+        model = ShiftingSphere(dim)
 
         def data():
             return None, None
 
         # Win condition: average squared error should be small (parameters close to target)
-        trial(model, data, None, loss_win_condition(0.01 * win_condition_multiplier), steps, [o], [d], 1, 1, wd, m, 1,
-              1, base_lr=0.1, trials=trials)
+        trial(model, data, None, param_norm_win_condition(0.01 * win_condition_multiplier, 0), steps, [o], [d], 1, 1,
+              wd, m, 1, 1, base_lr=0.1, trials=trials)
 
 
 if __name__ == '__main__':

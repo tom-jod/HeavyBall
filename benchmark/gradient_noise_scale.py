@@ -13,7 +13,7 @@ set_torch()
 
 
 class Model(nn.Module):
-    def __init__(self, size=1024):
+    def __init__(self, size=4096):
         super().__init__()
         self.param = nn.Parameter(torch.randn(size))
         self.register_buffer('step', torch.zeros(1))

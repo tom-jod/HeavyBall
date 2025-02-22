@@ -20,7 +20,7 @@ def objective(x):
 
 
 class Model(nn.Module):
-    def __init__(self, size=64):
+    def __init__(self, size=1024):
         super().__init__()
         # Initialize with different scales
         scales = torch.logspace(-3, 3, size)
