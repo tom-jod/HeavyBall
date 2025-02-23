@@ -1,16 +1,11 @@
 # main.py
-import os
-import pathlib
+import multiprocessing
 import re
-import sys
-import io
-from datetime import datetime
-import trace
 import traceback
+from datetime import datetime
+
 import numpy as np
 import typer
-import multiprocessing
-from concurrent.futures import as_completed
 
 app = typer.Typer()
 
@@ -146,6 +141,8 @@ def main(opt: list[str] = typer.Option([], help='Optimizers'), steps: int = 100_
         'saddle_point.py',
         'saddle_point_0init.py',
         'discontinuous_gradient.py',
+        'wide_linear.py',
+        'minimax.py',
         'plateau_navigation.py',
         'scale_invariant.py',
         'momentum_utilization.py',
