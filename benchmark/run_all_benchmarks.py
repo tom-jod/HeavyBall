@@ -144,6 +144,7 @@ def main(opt: list[str] = typer.Option([], help='Optimizers'), steps: int = 100_
         'xor_digit.py',
         'xor_spot.py',
         'saddle_point.py',
+        'saddle_point_0init.py',
         'discontinuous_gradient.py',
         'plateau_navigation.py',
         'scale_invariant.py',

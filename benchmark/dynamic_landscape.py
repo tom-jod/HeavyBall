@@ -15,7 +15,7 @@ from typing import List
 import torch
 import torch.nn as nn
 import typer
-from benchmark.utils import param_norm_win_condition, trial
+from benchmark.utils import loss_win_condition, trial
 from heavyball.utils import set_torch
 
 app = typer.Typer(pretty_exceptions_enable=False)
@@ -53,7 +53,7 @@ def main(method: List[str] = typer.Option(['qr'], help='Eigenvector method to us
             return None, None
 
         # Win condition: average squared error should be small (parameters close to target)
-        trial(model, data, None, param_norm_win_condition(0.01 * win_condition_multiplier, 0), steps, [o], [d], 1, 1,
+        trial(model, data, None, loss_win_condition(0.01 * win_condition_multiplier, 0), steps, [o], [d], 1, 1,
               wd, m, 1, 1, base_lr=0.1, trials=trials)
 
 

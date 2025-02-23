@@ -36,8 +36,8 @@ class Model(nn.Module):
 def main(
     method: List[str] = typer.Option(['qr'], help='Eigenvector method to use (for SOAP)'),
     dtype: List[str] = typer.Option(['float32'], help='Data type to use'),
-    length: int = 32,
-    size: int = 16,
+    length: int = 64,
+    size: int = 64,
     depth: int = 1,
     batch: int = 256,
     steps: int = 10,

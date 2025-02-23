@@ -322,6 +322,14 @@ def param_norm_win_condition(target, offset):
 
     return win
 
+def param0_win_condition(target):
+    target = torch.full((), target, device='cuda')
+
+    def win(model, loss):
+        with torch.no_grad():
+            return (model.param[0] < target).item(), {}
+
+    return win
 
 def trial(model, data, loss_fn, win_condition, steps, opt, dtype, size, batch, weight_decay, method, length, depth,
           trials=10, failure_threshold=3, group=64, base_lr: float = 1e-3, return_best: bool = False):
