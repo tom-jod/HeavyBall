@@ -376,7 +376,7 @@ def _compilable_scatter_set(target, source, index):
     target[:] = source.contiguous()[index].reshape_as(target)
 
 
-#@decorator_knowngood
+# @decorator_knowngood
 def get_orthogonal_matrix_QR(GG: List[Tensor], Q: List[Tensor], exp_avg: Optional[Tensor] = None):
     """
     Computes the eigenbases of the preconditioner using one round of power iteration
@@ -426,7 +426,8 @@ def get_orthogonal_matrix_QR(GG: List[Tensor], Q: List[Tensor], exp_avg: Optiona
     out_str = ''.join([o if o in to_shampoo else i for i, o in zip(in_str, out_str)])
 
     subscripts = f'{in_str},{from_shampoo},{to_shampoo}->{out_str}'
-    exp_avg_new = torch.einsum(subscripts, exp_avg, *[q for q in Q if q is not None], *[q for q in new_qs if q is not None])
+    exp_avg_new = torch.einsum(subscripts, exp_avg, *[q for q in Q if q is not None],
+                               *[q for q in new_qs if q is not None])
     copy_stochastic_(exp_avg, exp_avg_new)
 
     for q, q_new in zip(Q, new_qs):
@@ -434,7 +435,7 @@ def get_orthogonal_matrix_QR(GG: List[Tensor], Q: List[Tensor], exp_avg: Optiona
             copy_stochastic_(q, q_new)
 
 
-def get_orthogonal_matrix(mat):
+def get_orthogonal_matrix(mat, max_eps: float = 1e-3, min_eps: float = 1e-30):
     """
     Computes the eigenbases of the preconditioner using torch.linalg.eigh decomposition.
     """
@@ -448,23 +449,29 @@ def get_orthogonal_matrix(mat):
         m = promote(m.data)
 
         device, dtype = m.device, m.dtype
-        for modifier in (None, torch.double, 'cpu'):
-            if modifier is not None:
-                m = m.to(modifier)
+        eps = min_eps
+        while True:
             try:
-                eigval, eigvec = torch.linalg.eigh(m + 1e-30 * torch.eye(m.shape[0], device=m.device, dtype=m.dtype))
+                eye = torch.eye(m.shape[0], device=m.device, dtype=m.dtype)
+                eigval, eigvec = torch.linalg.eigh(m + eps * eye)
                 eigvec = eigvec.to(device=device, dtype=dtype)
                 break
             except torch.OutOfMemoryError:
-                pass
+                if m.device.type == 'cpu':
+                    raise
+                else:
+                    m = m.cpu()
             except RuntimeError:  # failed to compute eigenvalues
-                continue
+                if m.dtype != torch.double:
+                    m = m.double()
+                elif eps < max_eps:
+                    eps = eps ** (2 / 3)
+                else:
+                    raise
             clean()
-        else:
-            raise RuntimeError("Failed to compute eigenvalues.")
 
+        eigvec = eigvec.to(device=m.device, dtype=m.dtype)
         eigvec = torch.flip(eigvec, [1])
-
         final.append(eigvec)
 
     return final

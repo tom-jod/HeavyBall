@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "heavyball"
 description = "Efficient Optimizers"
-version = "1.6.1"
+version = "1.6.2"
 authors = [
   {name = "HeavyBall Authors", email = "github.heavyball@nestler.sh"}
 ]
