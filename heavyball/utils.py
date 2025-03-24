@@ -17,26 +17,11 @@ from torch.utils._pytree import tree_map
 
 config.cache_size_limit = 2**16
 
-np.warnings = warnings
-
 compile_mode = "max-autotune-no-cudagraphs"
 dynamic = False
 compile_mode_recommended_to_none = None
 zeroth_power_mode = "qr"  # 'qr' is baseline, 'newtonschulz' converges better and faster
 tiny_bf16 = torch.finfo(torch.bfloat16).tiny
-
-base_args = {
-    "betas": (0.9, 0.999),
-    "precondition_frequency": 1,
-    "merge_dims": False,
-    "warmup_steps": 100,
-    "max_precond_dim": 2**16,
-    "beta": 0.9,
-    "max_size_triangular": 2**16,
-    "split": False,
-    "eps": 1e-8,
-    "weight_decay": 1e-4,
-}
 
 
 def decorator(func):
@@ -286,14 +271,13 @@ def _ignore_warning(msg):
     warnings.filterwarnings("ignore", f".*{msg}.*")
 
 
-def set_torch(benchmark_limit: int = 32):
+def set_torch(benchmark_limit: int = 32, einsum_strategy: str = "auto"):
     cudnn.benchmark = True
     cudnn.deterministic = False
     cudnn.benchmark_limit = benchmark_limit
     torch.use_deterministic_algorithms(False)
     torch.set_float32_matmul_precision("high")  # highest: FP32, high: TF32, medium: bf16
-    opt_einsum.enabled = False
-    opt_einsum.strategy = "auto"
+    opt_einsum.set_flags(True, einsum_strategy)
 
     # Torch calls these for 2nd-order optimization in HeavyBall, but they are explicitly handled.
     _ignore_warning(
