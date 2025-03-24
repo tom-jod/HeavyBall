@@ -24,9 +24,7 @@ class Model(nn.Module):
     def forward(self):
         """Test optimizer's ability to handle different batch sizes and noise scales."""
         batch_size = self.rng.choice(self.batch_sizes)
-        generator = torch.Generator(device=self.param.device).manual_seed(
-            self.rng.randint(0, 2**31)
-        )
+        generator = torch.Generator(device=self.param.device).manual_seed(self.rng.randint(0, 2**31))
         noise = torch.randn(self.param.shape, generator=generator, device=self.param.device)
         scale = self.param.norm() / (noise.norm() + 1e-6)
         noise *= scale.detach() / math.sqrt(batch_size)

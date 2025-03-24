@@ -115,9 +115,7 @@ def main(
         zorder=2,
         label=f"{method[0]} {opt[0]}",
     )
-    ax.scatter(
-        *list(zip(*model.coords_history[::stride])), s=8, zorder=1, alpha=0.75, marker="x", color=c
-    )
+    ax.scatter(*list(zip(*model.coords_history[::stride])), s=8, zorder=1, alpha=0.75, marker="x", color=c)
     ax.scatter(*model.coords_history[-1], s=64, zorder=3, marker="x", color=c)
 
     fig.legend()

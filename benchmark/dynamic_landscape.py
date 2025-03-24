@@ -32,9 +32,7 @@ class ShiftingSphere(nn.Module):
 
     def forward(self):
         self.phase += self.frequency
-        target = torch.linspace(
-            0, 2 * math.pi, len(self.param), device=self.param.device, dtype=self.param.dtype
-        )
+        target = torch.linspace(0, 2 * math.pi, len(self.param), device=self.param.device, dtype=self.param.dtype)
         target = torch.sin(target + self.phase)
         return (self.param - target).square().mean()
 

@@ -58,11 +58,7 @@ class CircleDataset(BaseDataset):
         x2 = torch.stack([r2 * torch.cos(theta2), r2 * torch.sin(theta2)], dim=1)
 
         X = torch.cat([x1, x2], dim=0).float()
-        y = (
-            torch.cat([torch.zeros(self.n_samples // 2), torch.ones(self.n_samples // 2)])
-            .reshape(-1)
-            .long()
-        )
+        y = torch.cat([torch.zeros(self.n_samples // 2), torch.ones(self.n_samples // 2)]).reshape(-1).long()
 
         return X, y
 
@@ -134,9 +130,7 @@ def plot_decision_boundary(model, loader, ax, resolution, device="cuda"):
     x_min, x_max = X[:, 0].min() - margin, X[:, 0].max() + margin
     y_min, y_max = X[:, 1].min() - margin, X[:, 1].max() + margin
 
-    xx, yy = np.meshgrid(
-        np.linspace(x_min, x_max, resolution), np.linspace(y_min, y_max, resolution)
-    )
+    xx, yy = np.meshgrid(np.linspace(x_min, x_max, resolution), np.linspace(y_min, y_max, resolution))
 
     grid = torch.FloatTensor(np.c_[xx.ravel(), yy.ravel()]).to(device)
 
@@ -154,9 +148,7 @@ def plot_decision_boundary(model, loader, ax, resolution, device="cuda"):
     boundaries1 = torch.cat(boundaries1, dim=0).numpy()
     boundaries2 = torch.cat(boundaries2, dim=0).numpy()
 
-    ax.scatter(
-        X[:, 0], X[:, 1], c=y.squeeze(), cmap=plt.cm.RdYlBu, alpha=0.6, label="Training Data"
-    )
+    ax.scatter(X[:, 0], X[:, 1], c=y.squeeze(), cmap=plt.cm.RdYlBu, alpha=0.6, label="Training Data")
 
     # First layer (blue)
     for i in range(boundaries1.shape[1]):

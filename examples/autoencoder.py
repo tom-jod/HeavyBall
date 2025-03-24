@@ -116,12 +116,8 @@ def main(epochs: int, batch: int):
     transform = v2.Compose([v2.ToImage(), v2.ToDtype(torch.float32), RandomPad(4)])
     trainset = MNIST(root="./data", train=True, download=True, transform=transform)
     testset = MNIST(root="./data", train=False, download=True, transform=transform)
-    dataloader = DataLoader(
-        trainset, batch_size=batch, shuffle=True, num_workers=8, drop_last=True, pin_memory=True
-    )
-    testloader = DataLoader(
-        testset, batch_size=batch * 8, shuffle=False, num_workers=1, pin_memory=True
-    )
+    dataloader = DataLoader(trainset, batch_size=batch, shuffle=True, num_workers=8, drop_last=True, pin_memory=True)
+    testloader = DataLoader(testset, batch_size=batch * 8, shuffle=False, num_workers=1, pin_memory=True)
 
     for epoch in range(epochs):
         total_loss = 0

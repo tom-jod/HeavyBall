@@ -20,9 +20,7 @@ class Model(nn.Module):
         self.param1 = nn.Parameter(torch.randn((size,)))
 
     def forward(self, inp):
-        return (
-            self.param0 @ self.param1 + (self.param0 @ self.param0 + self.param1 @ self.param1) / 2
-        )
+        return self.param0 @ self.param1 + (self.param0 @ self.param0 + self.param1 @ self.param1) / 2
 
 
 @app.command()

@@ -23,9 +23,7 @@ class Model(nn.Module):
     def forward(self):
         """Test optimizer's ability to handle different gradient scales across layers."""
         # Each layer contributes equally to the loss but has very different scales
-        return (
-            self.layer1.square().mean() + self.layer2.square().mean() + self.layer3.square().mean()
-        ) / 3
+        return (self.layer1.square().mean() + self.layer2.square().mean() + self.layer3.square().mean()) / 3
 
 
 @app.command()

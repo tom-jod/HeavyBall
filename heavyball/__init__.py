@@ -27,9 +27,7 @@ class ForeachAdamW(C.BaseOpt):
         defaults = locals()
         defaults.pop("self")
         params = defaults.pop("params")
-        super().__init__(
-            params, defaults, foreach, gradient_clipping, update_clipping, palm, C.update_by_adam
-        )
+        super().__init__(params, defaults, foreach, gradient_clipping, update_clipping, palm, C.update_by_adam)
 
 
 class ForeachRMSprop(C.BaseOpt):
@@ -133,9 +131,7 @@ class ForeachADOPT(C.BaseOpt):
         defaults = locals()
         defaults.pop("self")
         params = defaults.pop("params")
-        super().__init__(
-            params, defaults, foreach, gradient_clipping, update_clipping, palm, C.update_by_adopt
-        )
+        super().__init__(params, defaults, foreach, gradient_clipping, update_clipping, palm, C.update_by_adopt)
 
 
 class ForeachMuon(C.BaseOpt):
@@ -195,9 +191,7 @@ class ForeachLaProp(C.BaseOpt):
         defaults = locals()
         defaults.pop("self")
         params = defaults.pop("params")
-        super().__init__(
-            params, defaults, foreach, gradient_clipping, update_clipping, palm, C.update_by_laprop
-        )
+        super().__init__(params, defaults, foreach, gradient_clipping, update_clipping, palm, C.update_by_laprop)
 
 
 class MuonLaProp(C.BaseOpt):
@@ -285,9 +279,7 @@ class ForeachSOAP(C.BaseOpt):
 
         if use_precond_schedule:
             del defaults["precondition_frequency"]
-            self.precond_schedule = utils.get_soap_precond_schedule(
-                defaults.pop("precond_scheduler")
-            )
+            self.precond_schedule = utils.get_soap_precond_schedule(defaults.pop("precond_scheduler"))
         else:
             del defaults["precond_scheduler"]
             self.precond_schedule = 1 / defaults.pop("precondition_frequency")
@@ -387,9 +379,7 @@ class ForeachSOLP(C.BaseOpt):
 
         if use_precond_schedule:
             del defaults["precondition_frequency"]
-            self.precond_schedule = utils.get_soap_precond_schedule(
-                defaults.pop("precond_scheduler")
-            )
+            self.precond_schedule = utils.get_soap_precond_schedule(defaults.pop("precond_scheduler"))
         else:
             del defaults["precond_scheduler"]
             self.precond_schedule = 1 / defaults.pop("precondition_frequency")
@@ -531,8 +521,7 @@ class ForeachPSGDKron(C.BaseOpt):
         defaults = locals()
         defaults.pop("self")
         self.precond_schedule = (
-            defaults.pop("preconditioner_update_probability")
-            or utils.precond_update_prob_schedule()
+            defaults.pop("preconditioner_update_probability") or utils.precond_update_prob_schedule()
         )
         params = defaults.pop("params")
 
@@ -549,9 +538,7 @@ class ForeachPSGDKron(C.BaseOpt):
             update_clipping,
             False,  #
             *(C.exp_avg,) * exp_avg_input,  #
-            functools.partial(
-                C.scale_by_delayed_psgd if delayed else C.scale_by_psgd, cached=cached
-            ),
+            functools.partial(C.scale_by_delayed_psgd if delayed else C.scale_by_psgd, cached=cached),
         )
 
 

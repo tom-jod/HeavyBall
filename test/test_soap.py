@@ -24,9 +24,7 @@ def init_preconditioner(
         if not precondition_1d or grad.shape[0] > max_precond_dim:
             state["GG"].append([])
         else:
-            state["GG"].append(
-                torch.zeros(grad.shape[0], grad.shape[0], device=grad.device, dtype=grad.dtype)
-            )
+            state["GG"].append(torch.zeros(grad.shape[0], grad.shape[0], device=grad.device, dtype=grad.dtype))
     else:
         if merge_dims:
             grad = dim_merger(grad, max_precond_dim)
@@ -66,9 +64,7 @@ def project(grad, state, merge_dims=False, max_precond_dim=10000):
     return grad
 
 
-def update_preconditioner(
-    grad, state, max_precond_dim=10000, merge_dims=False, precondition_1d=False
-):
+def update_preconditioner(grad, state, max_precond_dim=10000, merge_dims=False, precondition_1d=False):
     """
     Updates the preconditioner matrices and the eigenbases (L, R, Q_L, Q_R in the paper).
     """
@@ -151,9 +147,7 @@ def get_orthogonal_matrix(mat):
         try:
             _, Q = torch.linalg.eigh(m + 1e-30 * torch.eye(m.shape[0], device=m.device))
         except Exception:
-            _, Q = torch.linalg.eigh(
-                m.to(torch.float64) + 1e-30 * torch.eye(m.shape[0], device=m.device)
-            )
+            _, Q = torch.linalg.eigh(m.to(torch.float64) + 1e-30 * torch.eye(m.shape[0], device=m.device))
             Q = Q.to(m.dtype)
         Q = torch.flip(Q, [1])
 
@@ -248,12 +242,8 @@ def _init(size, max_precond, merge_dims, precondition_1d, beta, precondition_fre
     return grad, ref_state, new_state
 
 
-def _updated(
-    size, max_precond, merge_dims, precondition_1d, beta, iterations, precondition_frequency=1
-):
-    grad, ref_state, new_state = _init(
-        size, max_precond, merge_dims, precondition_1d, beta, precondition_frequency
-    )
+def _updated(size, max_precond, merge_dims, precondition_1d, beta, iterations, precondition_frequency=1):
+    grad, ref_state, new_state = _init(size, max_precond, merge_dims, precondition_1d, beta, precondition_frequency)
     for _ in range(iterations):
         ref_state["step"] += 1
         new_state["step"] += 1
@@ -324,9 +314,7 @@ def test_ggt(size, max_precond, merge_dims, precondition_1d, beta, iterations: i
 @pytest.mark.parametrize("beta", [0.5, 0.9, 0.99])
 @torch.no_grad()
 def test_update(size, max_precond, merge_dims, precondition_1d, beta, iterations: int = 5):
-    for grad, ref_state, new_state in _updated(
-        size, max_precond, merge_dims, precondition_1d, beta, iterations
-    ):
+    for grad, ref_state, new_state in _updated(size, max_precond, merge_dims, precondition_1d, beta, iterations):
         _check(ref_state, new_state)
 
 
@@ -338,12 +326,8 @@ def test_update(size, max_precond, merge_dims, precondition_1d, beta, iterations
 @pytest.mark.parametrize("back", [True, False])
 @torch.no_grad()
 def test_project(size, max_precond, merge_dims, precondition_1d, beta, back, iterations: int = 5):
-    for grad, ref_state, new_state in _updated(
-        size, max_precond, merge_dims, precondition_1d, beta, iterations
-    ):
-        proj_ref = (project_back if back else project)(
-            grad.clone(), ref_state, merge_dims, max_precond
-        )
+    for grad, ref_state, new_state in _updated(size, max_precond, merge_dims, precondition_1d, beta, iterations):
+        proj_ref = (project_back if back else project)(grad.clone(), ref_state, merge_dims, max_precond)
         proj_new = utils.project(grad.clone(), ref_state["Q"], merge_dims, max_precond, back)
 
         assert ref_state["step"] and torch.allclose(proj_ref.contiguous(), proj_new.contiguous())

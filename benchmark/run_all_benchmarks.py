@@ -91,9 +91,7 @@ def opt_to_config(opt):
 
 def write_progress(results, opt, output):
     with open(output, "w") as f:
-        f.write(
-            f"# Benchmark Results\nGenerated: {datetime.now()}\nLast updated: {datetime.now()}\n\n"
-        )
+        f.write(f"# Benchmark Results\nGenerated: {datetime.now()}\nLast updated: {datetime.now()}\n\n")
         f.write("## Summary (In Progress)\n\n")
         f.write("| Optimizer | Caution | Mars | Success | Runtime | Average Attempts |\n")
         f.write("|-----------|---|---|---------|----------|------|\n")
@@ -103,22 +101,14 @@ def write_progress(results, opt, output):
             if not opt_results:
                 continue
             success = sum(r["success"] for r in opt_results)
-            runtime = (
-                np.mean([r["runtime"] for r in opt_results if r["success"]]) if success else 0
-            )
-            attempts = (
-                np.mean([r["attempts"] for r in opt_results if r["success"]]) if success else 0
-            )
+            runtime = np.mean([r["runtime"] for r in opt_results if r["success"]]) if success else 0
+            attempts = np.mean([r["attempts"] for r in opt_results if r["success"]]) if success else 0
 
             o, caution, mars = opt_to_config(o)
-            f.write(
-                f"| {o} | {caution} | {mars} | {success}/{len(opt_results)} | {runtime:.2f}s | {attempts:.1f} |\n"
-            )
+            f.write(f"| {o} | {caution} | {mars} | {success}/{len(opt_results)} | {runtime:.2f}s | {attempts:.1f} |\n")
 
         f.write("\n## Details\n\n")
-        f.write(
-            "| Benchmark | Optimizer | Cautious | Mars | Success | Runtime | Loss | Attempts | \n"
-        )
+        f.write("| Benchmark | Optimizer | Cautious | Mars | Success | Runtime | Loss | Attempts | \n")
         f.write("|-----------|-----------|---------|---|---|----------|------|---|\n")
 
         for r in sorted(results, key=lambda x: (x["name"], x["opt"])):
@@ -128,9 +118,7 @@ def write_progress(results, opt, output):
             attempts = f"{r['attempts']:d}"
 
             opt, caution, mars = opt_to_config(r["opt"])
-            f.write(
-                f"| {r['name']} | {opt} | {caution} | {mars} | {mark} | {runtime} | {loss} | {attempts} | \n"
-            )
+            f.write(f"| {r['name']} | {opt} | {caution} | {mars} | {mark} | {runtime} | {loss} | {attempts} | \n")
 
         if any(not r["success"] for r in results):
             f.write("\n## Errors\n\n")

@@ -21,9 +21,7 @@ class Model(nn.Module):
 
     def forward(self, inp):
         y = None
-        y0 = (
-            self.param.view(1, -1).expand(inp.size(0), -1) + self.offset
-        )  # offset, so weight decay doesnt help
+        y0 = self.param.view(1, -1).expand(inp.size(0), -1) + self.offset  # offset, so weight decay doesnt help
         for i in inp.unbind(1):
             y = torch.einsum("bi,bik->bk", y0, i)
             y0 = F.leaky_relu(y, 0.1)

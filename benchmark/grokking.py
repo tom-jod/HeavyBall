@@ -55,9 +55,7 @@ class ModuloDataset(torch.utils.data.Dataset):
 
     def __getitem__(self, idx):
         generator = torch.Generator()
-        generator.manual_seed(
-            random.Random(min(idx + self.min_idx, self.max_idx)).randint(0, 2**32)
-        )
+        generator.manual_seed(random.Random(min(idx + self.min_idx, self.max_idx)).randint(0, 2**32))
         x = torch.randint(0, self.p, (self.batch_size, self.numbers), generator=generator)
         y = (x.sum(dim=-1) % self.p).long()
         return x, y
@@ -98,9 +96,7 @@ def plot_results(train_losses, test_accs, steps_to_grok=None, save_path=None):
     ax2.grid(True)
 
     if steps_to_grok is not None:
-        ax2.axvline(
-            x=steps_to_grok, color="g", linestyle="--", label=f"Grokking Step ({steps_to_grok})"
-        )
+        ax2.axvline(x=steps_to_grok, color="g", linestyle="--", label=f"Grokking Step ({steps_to_grok})")
 
     ax1.legend()
     ax2.legend()
@@ -212,9 +208,7 @@ def main(
 
         # Get optimizer class
         optimizer_class = getattr(heavyball, o)
-        optimizer = get_optim(
-            optimizer_class, model.parameters(), lr=lr, weight_decay=weight_decay
-        )
+        optimizer = get_optim(optimizer_class, model.parameters(), lr=lr, weight_decay=weight_decay)
 
         loss_hist = torch.empty(steps)
 

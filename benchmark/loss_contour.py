@@ -91,9 +91,7 @@ def generate_two_moons_torch(n_samples=1000, noise=0.1, random_state=None):
     X2 = torch.stack([1 - torch.cos(theta2), 1 - torch.sin(theta2) - 0.5], dim=1)
 
     X = torch.cat([X1, X2], dim=0)
-    y = torch.cat(
-        [torch.zeros(half_samples, device=device), torch.ones(half_samples, device=device)], dim=0
-    )
+    y = torch.cat([torch.zeros(half_samples, device=device), torch.ones(half_samples, device=device)], dim=0)
 
     X += noise * torch.randn(n_samples, 2, device=device)
 
@@ -122,9 +120,7 @@ def train_and_generate_frames(
     optimizers = {
         "ForeachSOAP": heavyball.ForeachSOAP(model.parameters(), lr=lr),
         "PaLMForeachSOAP": heavyball.PaLMForeachSOAP(model.parameters(), lr=lr),
-        "PrecondScheduleForeachSOAP": heavyball.PrecondScheduleForeachSOAP(
-            model.parameters(), lr=lr
-        ),
+        "PrecondScheduleForeachSOAP": heavyball.PrecondScheduleForeachSOAP(model.parameters(), lr=lr),
     }
     criterion = nn.BCEWithLogitsLoss()
 
@@ -159,9 +155,7 @@ def train_and_generate_frames(
                     plt.figure(figsize=(10, 8))
                     plt.contourf(xx.cpu(), yy.cpu(), Z.cpu(), levels=20)
                     plt.colorbar(label="Model Output")
-                    plt.scatter(
-                        X_train[:, 0].cpu(), X_train[:, 1].cpu(), c=y_train.cpu(), cmap="coolwarm"
-                    )
+                    plt.scatter(X_train[:, 0].cpu(), X_train[:, 1].cpu(), c=y_train.cpu(), cmap="coolwarm")
                     plt.title(f"{optimizer_name} - Epoch {epoch}, Loss: {loss.item():.4f}")
                     plt.savefig(f"frames/{optimizer_name}_epoch_{epoch:05d}.png")
                     plt.close()
@@ -176,9 +170,7 @@ if __name__ == "__main__":
         [X[:, 0].max().item() + 1, X[:, 1].max().item() + 1],
     ])
 
-    model = torch.compile(
-        MLP(in_shape=2, out_shape=1, width=2, depth=32), mode="max-autotune-no-cudagraphs"
-    ).to(device)
+    model = torch.compile(MLP(in_shape=2, out_shape=1, width=2, depth=32), mode="max-autotune-no-cudagraphs").to(device)
 
     epochs = 100
     lr = 1e-4

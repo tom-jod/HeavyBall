@@ -35,9 +35,7 @@ def test_foreach(opt, size, depth: int, iterations: int = 8192, outer_iterations
         losses.append([])
 
         for i in range(outer_iterations):
-            model = nn.Sequential(*[
-                nn.Linear(size, size, bias=False) for _ in range(depth)
-            ]).cuda()
+            model = nn.Sequential(*[nn.Linear(size, size, bias=False) for _ in range(depth)]).cuda()
             o = get_optim(opt, model.parameters(), lr=1e-3, stochastic_schedule=stochastic)
 
             for _ in range(iterations):

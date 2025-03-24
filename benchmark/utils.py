@@ -46,15 +46,11 @@ class FailureCounter:
         self.mapping = mapping
         self.broadcast = broadcast
         max_consecutive_failures, minimal_improvement = zip(*mapping.items())
-        self.max_consecutive_failures = torch.tensor(
-            max_consecutive_failures, dtype=torch.float64, device="cuda"
+        self.max_consecutive_failures = torch.tensor(max_consecutive_failures, dtype=torch.float64, device="cuda")
+        self.minimal_improvement = torch.tensor(minimal_improvement, dtype=torch.float64, device="cuda")
+        self.consecutive_failures = torch.zeros(len(minimal_improvement), dtype=torch.int64, device="cuda").repeat(
+            broadcast
         )
-        self.minimal_improvement = torch.tensor(
-            minimal_improvement, dtype=torch.float64, device="cuda"
-        )
-        self.consecutive_failures = torch.zeros(
-            len(minimal_improvement), dtype=torch.int64, device="cuda"
-        ).repeat(broadcast)
 
     def compare(self, inp, other):
         old_state = inp.reshape(1, -1, 1)  # vertical
@@ -70,8 +66,7 @@ class FailureCounter:
         failed = torch.any(comparison, axis=tuple(range(1, comparison.ndim)))
         self.consecutive_failures.copy_(torch.where(failed, self.consecutive_failures + 1, 0))
         return torch.any(
-            self.consecutive_failures
-            >= (self.max_consecutive_failures.view(-1, 1) * failure_scale).flatten()
+            self.consecutive_failures >= (self.max_consecutive_failures.view(-1, 1) * failure_scale).flatten()
         )
 
 
@@ -87,15 +82,11 @@ class Validator:
 
         self.ema_states = torch.zeros((self.emas,), dtype=torch.float64, device="cuda")
         es = self.ema_start + 1
-        self.update_factor = 2.0 ** (
-            -torch.arange(es, 20 + es, dtype=torch.float64, device="cuda")
-        )
+        self.update_factor = 2.0 ** (-torch.arange(es, 20 + es, dtype=torch.float64, device="cuda"))
         self.ema_failures = FailureCounter(ema_mapping)
         self.triu_indices = torch.triu_indices(self.emas, self.emas, offset=1)
 
-        self.global_min_loss = torch.tensor(
-            (float("inf"),) * steps, dtype=torch.float64, device="cuda"
-        )
+        self.global_min_loss = torch.tensor((float("inf"),) * steps, dtype=torch.float64, device="cuda")
         self.global_min_failures = FailureCounter(global_min_mapping, steps)
 
         self.global_avg_loss = torch.zeros_like(self.global_min_loss)
@@ -124,17 +115,11 @@ class Validator:
         comparison = self.global_min_failures.compare(loss, self.global_min_loss).view(-1, 1)
         global_failed = self.global_min_failures(
             comparison,
-            torch.arange(1, 1 + self.global_min_loss.size(0), device="cuda")
-            .view(1, -1)
-            .clamp(min=self.global_warmup),
+            torch.arange(1, 1 + self.global_min_loss.size(0), device="cuda").view(1, -1).clamp(min=self.global_warmup),
         )
 
         loss_slice = self.global_min_loss[self.step - 1 :]
-        loss_slice.copy_(
-            torch.where(
-                torch.logical_and(loss < loss_slice, torch.isfinite(loss)), loss, loss_slice
-            )
-        )
+        loss_slice.copy_(torch.where(torch.logical_and(loss < loss_slice, torch.isfinite(loss)), loss, loss_slice))
         return global_failed
 
     def _global_avg(self):
@@ -147,9 +132,7 @@ class Validator:
         comparison[self.seen_until - 1 :].fill_(False)
         return self.global_avg_failures(
             comparison,
-            torch.arange(1, 1 + self.global_avg_loss.size(0), device="cuda")
-            .view(1, -1)
-            .clamp(min=self.global_warmup),
+            torch.arange(1, 1 + self.global_avg_loss.size(0), device="cuda").view(1, -1).clamp(min=self.global_warmup),
         )
 
     def _local_convergence(self):
@@ -198,9 +181,7 @@ class Plotter(nn.Module):
             Z = torch.zeros_like(self.X)
             for i in range(resolution):
                 for j in range(resolution):
-                    objective_fn.param.data[:] = torch.tensor(
-                        [self.X[i, j].item(), self.Y[i, j].item()], device="cuda"
-                    )
+                    objective_fn.param.data[:] = torch.tensor([self.X[i, j].item(), self.Y[i, j].item()], device="cuda")
                     Z[i, j] = self.transform(objective_fn())
             objective_fn.param.data[:] = self.initial
         self.Z = Z
@@ -317,9 +298,7 @@ class Objective:
             "precond_lr": params[3],  # we never have both precond_lr and shampoo_beta
         }
         self.m = copy.deepcopy(self.model)
-        o = get_optim(
-            self.opt, self.m.parameters(), **params, weight_decay=self.weight_decay, **self.kwargs
-        )
+        o = get_optim(self.opt, self.m.parameters(), **params, weight_decay=self.weight_decay, **self.kwargs)
         torch_hist = torch.empty(self.group, dtype=torch.float64, device="cuda")
         validator = self.validator.new()
 
@@ -368,9 +347,7 @@ class Objective:
             self.best_loss = loss
             self.best_at = self.attempt
             self.avg = np.log(np.array(params))
-        if (
-            self.best_at * 4 < self.attempt and self.attempt - self.best_at > 50
-        ):  # no improvement in a while
+        if self.best_at * 4 < self.attempt and self.attempt - self.best_at > 50:  # no improvement in a while
             raise Stop
         return target
 

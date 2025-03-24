@@ -25,6 +25,19 @@ compile_mode_recommended_to_none = None
 zeroth_power_mode = "qr"  # 'qr' is baseline, 'newtonschulz' converges better and faster
 tiny_bf16 = torch.finfo(torch.bfloat16).tiny
 
+base_args = {
+    "betas": (0.9, 0.999),
+    "precondition_frequency": 1,
+    "merge_dims": False,
+    "warmup_steps": 100,
+    "max_precond_dim": 2**16,
+    "beta": 0.9,
+    "max_size_triangular": 2**16,
+    "split": False,
+    "eps": 1e-8,
+    "weight_decay": 1e-4,
+}
+
 
 def decorator(func):
     compiled = None
@@ -35,9 +48,7 @@ def decorator(func):
             return func(*args, **kwargs)
         nonlocal compiled
         if compiled is None:
-            compiled = torch.compile(
-                fullgraph=True, dynamic=dynamic, mode=compile_mode_recommended_to_none
-            )(func)
+            compiled = torch.compile(fullgraph=True, dynamic=dynamic, mode=compile_mode_recommended_to_none)(func)
         return compiled(*args, **kwargs)
 
     return _fn
@@ -182,11 +193,7 @@ def eps_sqrt(item, eps):
 
 @decorator_knowngood
 def _compilable_exp_avg_sq_(
-    state: List[Tensor],
-    grad: List[Tensor],
-    beta2: Tensor,
-    eps: Tensor,
-    out: List[Optional[Tensor]],
+    state: List[Tensor], grad: List[Tensor], beta2: Tensor, eps: Tensor, out: List[Optional[Tensor]]
 ):
     g32 = promote(grad)
     s32 = _lerp(state, torch._foreach_mul(g32, g32), beta2)
@@ -207,9 +214,7 @@ def exp_avg_sq_(state, grad, beta2, eps, out=None):
 
 
 @decorator_knowngood
-def _compilable_scale_by_exp_avg_sq_(
-    state: List[Tensor], grad: List[Tensor], beta2: Tensor, eps: Tensor
-):
+def _compilable_scale_by_exp_avg_sq_(state: List[Tensor], grad: List[Tensor], beta2: Tensor, eps: Tensor):
     g32 = promote(grad)
     denom = _compilable_exp_avg_sq_(state, g32, beta2, eps, [None])
     out = torch._foreach_div(g32, denom)
@@ -237,9 +242,7 @@ def scale_by_exp_avg_(state, grad, beta):
 
 
 @decorator_knowngood
-def _compilable_agc_(
-    parameters: List[Tensor], gradients: List[Tensor], clip_val: float, minimum: float, eps: float
-):
+def _compilable_agc_(parameters: List[Tensor], gradients: List[Tensor], clip_val: float, minimum: float, eps: float):
     p32, g32 = [list(map(promote, x)) for x in (parameters, gradients)]
     p_norm = torch._foreach_norm(p32)
     g_norm = torch._foreach_norm(g32)
@@ -253,11 +256,7 @@ def _compilable_agc_(
 
 
 def adaptive_gradient_clipping_(
-    parameters: List[Tensor],
-    gradients: List[Tensor],
-    clip_val: float,
-    minimum: float = 1e-3,
-    eps: float = 1e-8,
+    parameters: List[Tensor], gradients: List[Tensor], clip_val: float, minimum: float = 1e-3, eps: float = 1e-8
 ):
     if clip_val <= 0:
         return gradients
@@ -309,9 +308,7 @@ def set_torch(benchmark_limit: int = 32):
 def zeropower_via_newtonschulz5(G, steps=5, eps=1e-7):
     assert len(G.shape) == 2
     a, b, c = (3.4445, -4.7750, 2.0315)
-    X = G.to(
-        torch.bfloat16 if G.dtype != torch.float64 else G.dtype
-    )  # Preserve float64 if present
+    X = G.to(torch.bfloat16 if G.dtype != torch.float64 else G.dtype)  # Preserve float64 if present
     X /= X.norm() + eps  # ensure top singular value <= 1
     if G.size(0) > G.size(1):
         X = X.T
@@ -322,6 +319,15 @@ def zeropower_via_newtonschulz5(G, steps=5, eps=1e-7):
     if G.size(0) > G.size(1):
         X = X.T
     return X.to(G.dtype)
+
+
+def ortho(x):
+    if zeroth_power_mode == "qr":
+        return torch.linalg.qr(x).Q
+    if zeroth_power_mode == "svd":
+        u, _s, v = torch.linalg.svd(x)
+        return u @ v.T
+    raise NotImplementedError(f"Unknown zeroth_power_mode: {zeroth_power_mode}")
 
 
 @decorator_knowngood
@@ -448,17 +454,12 @@ def get_orthogonal_matrix_QR(GG: List[Tensor], Q: List[Tensor], exp_avg: Optiona
     if not from_shampoo:
         return
 
-    to_shampoo = ",".join([
-        i + o for m, i, o in zip(new_qs, in_str.upper(), out_str) if m is not None
-    ])
+    to_shampoo = ",".join([i + o for m, i, o in zip(new_qs, in_str.upper(), out_str) if m is not None])
     out_str = "".join([o if o in to_shampoo else i for i, o in zip(in_str, out_str)])
 
     subscripts = f"{in_str},{from_shampoo},{to_shampoo}->{out_str}"
     exp_avg_new = torch.einsum(
-        subscripts,
-        exp_avg,
-        *[q for q in Q if q is not None],
-        *[q for q in new_qs if q is not None],
+        subscripts, exp_avg, *[q for q in Q if q is not None], *[q for q in new_qs if q is not None]
     )
     copy_stochastic_(exp_avg, exp_avg_new)
 
@@ -467,7 +468,7 @@ def get_orthogonal_matrix_QR(GG: List[Tensor], Q: List[Tensor], exp_avg: Optiona
             copy_stochastic_(q, q_new)
 
 
-def get_orthogonal_matrix(mat):
+def get_orthogonal_matrix(mat, max_eps: float = 1e-3, min_eps: float = 1e-30):
     """
     Computes the eigenbases of the preconditioner using torch.linalg.eigh decomposition.
     """
@@ -481,25 +482,29 @@ def get_orthogonal_matrix(mat):
         m = promote(m.data)
 
         device, dtype = m.device, m.dtype
-        for modifier in (None, torch.double, "cpu"):
-            if modifier is not None:
-                m = m.to(modifier)
+        eps = min_eps
+        while True:
             try:
-                _eigval, eigvec = torch.linalg.eigh(
-                    m + 1e-30 * torch.eye(m.shape[0], device=m.device, dtype=m.dtype)
-                )
+                eye = torch.eye(m.shape[0], device=m.device, dtype=m.dtype)
+                _eigval, eigvec = torch.linalg.eigh(m + eps * eye)
                 eigvec = eigvec.to(device=device, dtype=dtype)
                 break
             except torch.OutOfMemoryError:
-                pass
+                if m.device.type == "cpu":
+                    raise
+                else:
+                    m = m.cpu()
             except RuntimeError:  # failed to compute eigenvalues
-                continue
+                if m.dtype != torch.double:
+                    m = m.double()
+                elif eps < max_eps:
+                    eps = eps ** (2 / 3)
+                else:
+                    raise
             clean()
-        else:
-            raise RuntimeError("Failed to compute eigenvalues.")
 
+        eigvec = eigvec.to(device=m.device, dtype=m.dtype)
         eigvec = torch.flip(eigvec, [1])
-
         final.append(eigvec)
 
     return final
@@ -569,9 +574,7 @@ def scalar_guard(*args):
 
 
 @decorator_knowngood
-def _compilable_stochastic_add_(
-    x: List[Tensor], y: List[Tensor], alpha: Union[float, int, Tensor]
-):
+def _compilable_stochastic_add_(x: List[Tensor], y: List[Tensor], alpha: Union[float, int, Tensor]):
     for x_, y_ in zip(x, y):
         x32 = promote(x_)
         y32 = promote(y_)
@@ -640,9 +643,7 @@ def min_dtype(xs: List[Tensor]):
     return torch.float32
 
 
-def update_preconditioner(
-    grad, Q, GG, exp_avg, max_precond_dim, precondition_1d, beta, update_precond
-):
+def update_preconditioner(grad, Q, GG, exp_avg, max_precond_dim, precondition_1d, beta, update_precond):
     """
     Updates the preconditioner matrices and the eigenbases (L, R, Q_L, Q_R in the paper).
     """
@@ -679,14 +680,10 @@ def project(grad, Q, back: bool):
     :return:
     """
     param = einsum_base[: grad.dim()]
-    preconditioners = ",".join([
-        (g + g.upper())[:: -1 if back else 1] for m, g in zip(Q, param) if m is not None
-    ])
+    preconditioners = ",".join([(g + g.upper())[:: -1 if back else 1] for m, g in zip(Q, param) if m is not None])
     if preconditioners:
         out = "".join([c.upper() if c.upper() in preconditioners else c for c in param])
-        out = torch.einsum(
-            f"{param},{preconditioners}->{out}", promote(grad), *[q for q in Q if q is not None]
-        )
+        out = torch.einsum(f"{param},{preconditioners}->{out}", promote(grad), *[q for q in Q if q is not None])
         grad = out.to(grad.dtype)
     return grad
 
@@ -806,9 +803,7 @@ class StatefulOptimizer(torch.optim.Optimizer):
 
                 for p in active_p:
                     if "param_ema" not in self.state_(p):
-                        self.state_(p)["param_ema"] = torch.zeros_like(
-                            p.data, memory_format=torch.preserve_format
-                        )
+                        self.state_(p)["param_ema"] = torch.zeros_like(p.data, memory_format=torch.preserve_format)
 
                 y, param_ema = zip(*[(p.data, self.state_(p)["param_ema"]) for p in active_p])
                 torch._foreach_lerp_(param_ema, y, weight=beta_debias(1 - self.ema_decay, k + 1))
@@ -860,9 +855,7 @@ class StatefulOptimizer(torch.optim.Optimizer):
 
             grads = []
             for group in self.param_groups:
-                for p, g in self.split_p_and_g_in_group(
-                    group, skip_none=True, should_promote=False
-                ):
+                for p, g in self.split_p_and_g_in_group(group, skip_none=True, should_promote=False):
                     grads.append(g)
                     p.vector = torch.randn_like(p)
                     p.orig = p.data.clone()
@@ -876,9 +869,7 @@ class StatefulOptimizer(torch.optim.Optimizer):
                 closure()
 
             for group in self.param_groups:
-                for p, g in self.split_p_and_g_in_group(
-                    group, skip_none=True, should_promote=False
-                ):
+                for p, g in self.split_p_and_g_in_group(group, skip_none=True, should_promote=False):
                     p.grad = grads.pop(0)
                     stochastic_add_(g, p.grad, -1)
                     p.hessian_vector = g
@@ -886,9 +877,7 @@ class StatefulOptimizer(torch.optim.Optimizer):
                     del p.orig
         else:
             for group in self.param_groups:
-                for p, g in self.split_p_and_g_in_group(
-                    group, skip_none=True, should_promote=False
-                ):
+                for p, g in self.split_p_and_g_in_group(group, skip_none=True, should_promote=False):
                     p.grad = g
             params, grads = zip(*[
                 x
@@ -910,9 +899,7 @@ class StatefulOptimizer(torch.optim.Optimizer):
         if self.precond_schedule is None:
             self._is_preconditioning = False
         else:
-            self._is_preconditioning = psgd_should_update(
-                self._inner_group, self.precond_schedule, self._precond_rng
-            )
+            self._is_preconditioning = psgd_should_update(self._inner_group, self.precond_schedule, self._precond_rng)
         loss = self._handle_closure(closure)
 
         # we assume that parameters are constant and that there are no excessive recompiles
@@ -1017,9 +1004,7 @@ def fused_adam_(
 ):
     y, exp_avg, exp_avg_sq, grad = list_guard(y, exp_avg, exp_avg_sq, grad)
     beta1, beta2, step, lr = scalar_guard(beta1, beta2, step, lr, y[0])
-    _fused_compilable_adam_(
-        y, exp_avg, exp_avg_sq, update, grad, beta1, beta2, step, decay, lr, eps, caution
-    )
+    _fused_compilable_adam_(y, exp_avg, exp_avg_sq, update, grad, beta1, beta2, step, decay, lr, eps, caution)
 
 
 @decorator_knowngood
@@ -1098,15 +1083,11 @@ def fused_laprop_(
 ):
     exp_avg, exp_avg_sq, grad, y = list_guard(exp_avg, exp_avg_sq, grad, y)
     beta1, beta2, step, lr, eps = scalar_guard(beta1, beta2, step, lr, eps, exp_avg[0])
-    _fused_compilable_laprop_(
-        y, exp_avg, exp_avg_sq, update, grad, beta1, beta2, step, lr, decay, caution, eps
-    )
+    _fused_compilable_laprop_(y, exp_avg, exp_avg_sq, update, grad, beta1, beta2, step, lr, decay, caution, eps)
 
 
 @decorator_knowngood
-def _fused_compilable_adopt_(
-    y, update, grad, exp_avg_sq, exp_avg, beta1, beta2, step, lr, eps, decay, caution
-):
+def _fused_compilable_adopt_(y, update, grad, exp_avg_sq, exp_avg, beta1, beta2, step, lr, eps, decay, caution):
     u32, g32, exp_avg_sq32 = [list(map(promote, x)) for x in [update, grad, exp_avg_sq]]
     _compilable_update_(y, u32, decay, lr, caution, g32)
 
@@ -1118,14 +1099,10 @@ def _fused_compilable_adopt_(
     stochastic_lerp_(exp_avg_sq, torch._foreach_mul(g32, g32), 1 - beta2)
 
 
-def fused_adopt_(
-    y, update, grad, exp_avg_sq, exp_avg, beta1, beta2, step, lr, eps, decay, caution
-):
+def fused_adopt_(y, update, grad, exp_avg_sq, exp_avg, beta1, beta2, step, lr, eps, decay, caution):
     exp_avg, exp_avg_sq, grad, y = list_guard(exp_avg, exp_avg_sq, grad, y)
     beta1, beta2, step, lr = scalar_guard(beta1, beta2, step, lr, exp_avg[0])
-    _fused_compilable_adopt_(
-        y, update, grad, exp_avg_sq, exp_avg, beta1, beta2, step, lr, eps, decay, caution
-    )
+    _fused_compilable_adopt_(y, update, grad, exp_avg_sq, exp_avg, beta1, beta2, step, lr, eps, decay, caution)
 
 
 @decorator_knowngood
@@ -1171,23 +1148,14 @@ def _compilable_copy_stochastic_(target: Tensor, source: Tensor):
 
 
 def copy_stochastic_(target: Tensor, source: Tensor):
-    if target.dtype == torch.bfloat16 and source.dtype in (
-        torch.float16,
-        torch.float32,
-        torch.float64,
-    ):
+    if target.dtype == torch.bfloat16 and source.dtype in (torch.float16, torch.float32, torch.float64):
         _compilable_copy_stochastic_(target, source.float())
     set_(target, source)
 
 
 @decorator_knowngood
 def _compilable_update_(
-    p: List[Tensor],
-    u: List[Tensor],
-    decay: Tensor,
-    lr: Tensor,
-    caution: bool,
-    g: List[Optional[Tensor]],
+    p: List[Tensor], u: List[Tensor], decay: Tensor, lr: Tensor, caution: bool, g: List[Optional[Tensor]]
 ):
     for u_, g_, p_ in zip(u, g, p):  # lr is data-dependent -> can't compile a foreach
         u_ = promote(u_.view_as(p_))
@@ -1199,12 +1167,7 @@ def _compilable_update_(
 
 
 def update_param_(
-    param: List[Tensor],
-    update: List[Tensor],
-    lr: float,
-    decay: float,
-    caution: bool = False,
-    grad: List[Tensor] = None,
+    param: List[Tensor], update: List[Tensor], lr: float, decay: float, caution: bool = False, grad: List[Tensor] = None
 ):
     param, update, grad = list_guard(param, update, grad)
     lr = scalar_guard(lr, param[0])
@@ -1232,9 +1195,7 @@ def get_soap_precond_schedule(precond_scheduler):
 
 
 def _max_idx(x: List[int]):
-    return (
-        len(x) - 1 - np.argmax(x[::-1])
-    )  # we want to start counting from the back, as torch is fan-out/fan-in
+    return len(x) - 1 - np.argmax(x[::-1])  # we want to start counting from the back, as torch is fan-out/fan-in
 
 
 def init_Q_exprs(t, scale, max_size, min_ndim_triangular, memory_save_mode, dtype=None):
@@ -1287,9 +1248,7 @@ def init_Q_exprs(t, scale, max_size, min_ndim_triangular, memory_save_mode, dtyp
             piece1A.append(letters[i])
             piece2A = piece2A + letters[i]
             piece3A = piece3A + letters[i]
-            piece1 = "".join([
-                (letters[i + 13] if j == i else letters[j]) for j in range(len(shape))
-            ])
+            piece1 = "".join([(letters[i + 13] if j == i else letters[j]) for j in range(len(shape))])
             subscripts = piece1 + "," + piece1 + "->" + letters[i + 13]
             exprGs.append(subscripts)
             piece1P.append(letters[i + 13])
@@ -1302,12 +1261,8 @@ def init_Q_exprs(t, scale, max_size, min_ndim_triangular, memory_save_mode, dtyp
             piece1A.append(letters[i] + letters[i + 13])
             piece2A = piece2A + letters[i + 13]
             piece3A = piece3A + letters[i]
-            piece1 = "".join([
-                (letters[i + 13] if j == i else letters[j]) for j in range(len(shape))
-            ])
-            piece2 = "".join([
-                (letters[i + 26] if j == i else letters[j]) for j in range(len(shape))
-            ])
+            piece1 = "".join([(letters[i + 13] if j == i else letters[j]) for j in range(len(shape))])
+            piece2 = "".join([(letters[i + 26] if j == i else letters[j]) for j in range(len(shape))])
             subscripts = piece1 + "," + piece2 + "->" + letters[i + 13] + letters[i + 26]
             exprGs.append(subscripts)
             a, b, c = (letters[i], letters[i + 13], letters[i + 26])
@@ -1345,9 +1300,9 @@ def psgd_calc_A_and_conjB(exprA, G, Q, V=None):
         if q.dim() <= 1:
             conjB /= q
         else:
-            conjB = torch.linalg.solve_triangular(
-                q, conjB.reshape(-1, q.size(0)), upper=True, left=False
-            ).reshape_as(conjB)
+            conjB = torch.linalg.solve_triangular(q, conjB.reshape(-1, q.size(0)), upper=True, left=False).reshape_as(
+                conjB
+            )
         if i < order - 1:
             conjB = torch.transpose(conjB, i, order - 1)
     return A, conjB
@@ -1598,10 +1553,7 @@ def warn_once(msg):
 
 
 def psgd_should_update(
-    group,
-    prob: Union[float, callable],
-    rng: Optional[random.Random] = None,
-    name: str = "cumulative_prob",
+    group, prob: Union[float, callable], rng: Optional[random.Random] = None, name: str = "cumulative_prob"
 ):
     group[f"{name}_prob_step"] = group.get(f"{name}_prob_step", 0) + 1
     if not isinstance(prob, float):
@@ -1615,12 +1567,7 @@ def psgd_should_update(
 
 @decorator_knowngood
 def precond_grad_cached_(
-    expr: str,
-    ea: Tensor,
-    *cached_q: Tensor,
-    caution: bool = False,
-    grad: Optional[Tensor] = None,
-    cast: bool = True,
+    expr: str, ea: Tensor, *cached_q: Tensor, caution: bool = False, grad: Optional[Tensor] = None, cast: bool = True
 ):
     if caution:
         ea = _compilable_cautioning(grad, ea)
@@ -1634,24 +1581,18 @@ def precond_grad_cached_(
 
 
 @decorator_knowngood
-def _compilable_fused_precond_grad_cached_(
-    expr: str, ea: Tensor, param, lr, grad, decay, caution, *cached_q: Tensor
-):
+def _compilable_fused_precond_grad_cached_(expr: str, ea: Tensor, param, lr, grad, decay, caution, *cached_q: Tensor):
     precond = precond_grad_cached_(expr, ea, *cached_q, caution=caution, grad=grad, cast=False)
     update_param_(param, precond, lr, decay, caution=False)
 
 
-def fused_precond_grad_cached_(
-    expr: str, ea: Tensor, param, lr, grad, decay, caution, *cached_q: Tensor
-):
+def fused_precond_grad_cached_(expr: str, ea: Tensor, param, lr, grad, decay, caution, *cached_q: Tensor):
     lr = scalar_guard(lr, param[0])
     _compilable_fused_precond_grad_cached_(expr, ea, param, lr, grad, decay, caution, *cached_q)
 
 
 @decorator_knowngood
-def psgd_precond_grad(
-    expr: str, ea: Tensor, *preconds: Tensor, caution: bool = False, grad: Optional[Tensor] = None
-):
+def psgd_precond_grad(expr: str, ea: Tensor, *preconds: Tensor, caution: bool = False, grad: Optional[Tensor] = None):
     if caution:
         ea = _compilable_cautioning(grad, ea)
     md = min_dtype(list(preconds) + [ea])
@@ -1662,16 +1603,12 @@ def psgd_precond_grad(
 
 
 @decorator_knowngood
-def _compilable_fused_psgd_precond_grad(
-    expr: str, ea: Tensor, param, lr, grad, decay, caution, *preconds: Tensor
-):
+def _compilable_fused_psgd_precond_grad(expr: str, ea: Tensor, param, lr, grad, decay, caution, *preconds: Tensor):
     precond = psgd_precond_grad(expr, ea, *preconds, caution=caution, grad=grad)
     update_param_(param, precond, lr, decay, caution=False, grad=grad)
 
 
-def fused_psgd_precond_grad(
-    expr: str, ea: Tensor, param, lr, grad, decay, caution, *preconds: Tensor
-):
+def fused_psgd_precond_grad(expr: str, ea: Tensor, param, lr, grad, decay, caution, *preconds: Tensor):
     lr = scalar_guard(lr, param[0])
     _compilable_fused_psgd_precond_grad(expr, ea, param, lr, grad, decay, caution, *preconds)
 
@@ -1691,9 +1628,7 @@ def mars_correction(g, old_g, beta1, gamma):
 
 
 @decorator_knowngood
-def _compilable_orthogonalization(
-    weight: List[Tensor], grad: List[Tensor], eps: Tensor, graft: bool = True
-):
+def _compilable_orthogonalization(weight: List[Tensor], grad: List[Tensor], eps: Tensor, graft: bool = True):
     """
     Implements OrthoGrad from "Grokking at the Edge of Numerical Stability" (https://arxiv.org/abs/2501.04697)
     """
@@ -1757,9 +1692,7 @@ def merge_group(group, *tensors):
             out,
             dim_merger(
                 t,
-                group["max_size_triangular"]
-                if "max_size_triangular" in group
-                else group["max_precond_dim"],
+                group["max_size_triangular"] if "max_size_triangular" in group else group["max_precond_dim"],
                 group.get("split", False),
             ),
         )
@@ -1789,8 +1722,7 @@ def fused_hook(parameters, optimizer, *args, **kwargs):
     o = optimizer(parameters, *args, **kwargs)
     step_fn = o.step
     o.step = functools.partial(
-        warn_once,
-        msg="You're trying to call `step` on a fused optimizer. This will not do anything.",
+        warn_once, msg="You're trying to call `step` on a fused optimizer. This will not do anything."
     )
 
     def _step(p: Tensor):

@@ -16,10 +16,7 @@ class Model(nn.Module):
     def __init__(self, size, powers, target_mult):
         super().__init__()
         self.target = nn.Buffer(
-            torch.arange(powers * size).view(size, powers).transpose(0, 1).float()
-            * target_mult
-            / powers
-            / size
+            torch.arange(powers * size).view(size, powers).transpose(0, 1).float() * target_mult / powers / size
         )
         self.param = nn.Parameter(torch.rand(powers, size) * 2)
         self.register_buffer("scale", torch.arange(powers).float().add(1))

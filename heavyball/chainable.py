@@ -51,9 +51,7 @@ class FunctionTransform:
 
 
 def _zero_guard(state, key, ref, dtype):
-    return _guard_in_state(
-        state, key, lambda: torch.zeros_like(ref, dtype=dtype, memory_format=torch.preserve_format)
-    )
+    return _guard_in_state(state, key, lambda: torch.zeros_like(ref, dtype=dtype, memory_format=torch.preserve_format))
 
 
 def _storage_dtype(group):
@@ -68,9 +66,7 @@ class ZeroGuard(FunctionTransform):
 
     def __call__(self, state, group, update, grad, param, *args, **kwargs):
         vars = [
-            [
-                _zero_guard(state(p), self.val_name(name), p, _storage_dtype(group)) for p in param
-            ]  #
+            [_zero_guard(state(p), self.val_name(name), p, _storage_dtype(group)) for p in param]  #
             for name in self.names
         ]
         return self.fn(state, group, update, grad, param, *args, *vars, **kwargs)
@@ -85,10 +81,7 @@ class CopyGuard(FunctionTransform):
     def __call__(self, state, group, update, grad, param, *args, **kwargs):
         val = [update, grad, param, *args][self.index]
         vars = [
-            [
-                _guard_in_state(state(p), self.val_name(name), lambda: torch.clone(v))
-                for p, v in zip(param, val)
-            ]  #
+            [_guard_in_state(state(p), self.val_name(name), lambda: torch.clone(v)) for p, v in zip(param, val)]  #
             for name in self.names
         ]
         return self.fn(state, group, update, grad, param, *args, *vars, **kwargs)
@@ -106,13 +99,8 @@ class GeneralGuard(FunctionTransform):  # We can't guard against reuse in the ge
         skip_update = False
         for p, g, u in zip(param, grad, update):
             st = state(p)
-            skip_update |= _inplace_guard_(
-                st, self.names, lambda: self.init_fn(st, group, u, g, p, **kwargs)
-            )
-            vars.append([
-                st[name] if isinstance(name, str) else st.get(name[0], name[1])
-                for name in self.names
-            ])
+            skip_update |= _inplace_guard_(st, self.names, lambda: self.init_fn(st, group, u, g, p, **kwargs))
+            vars.append([st[name] if isinstance(name, str) else st.get(name[0], name[1]) for name in self.names])
         if skip_update and self.skip_first:
             raise SkipUpdate
         return self.fn(state, group, update, grad, param, *args, *zip(*vars), **kwargs)
@@ -165,9 +153,7 @@ class SkipUpdate(ValueError):
 @zero_guard("exp_avg")
 @no_state
 def exp_avg(group, update, grad, param, exp_avg):
-    return utils.scale_by_exp_avg_(
-        exp_avg, update, utils.beta_debias(utils.get_beta1(group), group["step"])
-    )
+    return utils.scale_by_exp_avg_(exp_avg, update, utils.beta_debias(utils.get_beta1(group), group["step"]))
 
 
 @zero_guard("exp_avg")
@@ -239,9 +225,7 @@ def update_by_adam(group, update, grad, param, exp_avg, exp_avg_sq):
 @zero_guard("exp_avg", "exp_avg_sq")
 @no_state
 def scale_by_laprop(group, update, grad, param, exp_avg, exp_avg_sq):
-    return utils.laprop_(
-        exp_avg, exp_avg_sq, update, utils.get_beta1(group), utils.get_beta2(group), group["step"]
-    )
+    return utils.laprop_(exp_avg, exp_avg_sq, update, utils.get_beta1(group), utils.get_beta2(group), group["step"])
 
 
 @zero_guard("exp_avg", "exp_avg_sq")
@@ -298,10 +282,7 @@ def update_by_adopt(group, update, grad, param, exp_avg, exp_avg_sq):
     if group["step"] == 2:
         update = utils.promote(update)
         easq = utils.promote(exp_avg_sq)
-        [
-            utils.set_(ea, u / easq_.sqrt().clamp_(min=group["eps"]))
-            for ea, u, easq_ in zip(exp_avg, update, easq)
-        ]
+        [utils.set_(ea, u / easq_.sqrt().clamp_(min=group["eps"])) for ea, u, easq_ in zip(exp_avg, update, easq)]
         utils.scale_by_exp_avg_sq_(
             exp_avg_sq,
             update,
@@ -337,10 +318,7 @@ def scale_by_adopt(group, update, grad, param, exp_avg, exp_avg_sq):
     if group["step"] == 2:
         update = utils.promote(update)
         easq = utils.promote(exp_avg_sq)
-        [
-            utils.set_(ea, u / easq_.sqrt().clamp_(min=group["eps"]))
-            for ea, u, easq_ in zip(exp_avg, update, easq)
-        ]
+        [utils.set_(ea, u / easq_.sqrt().clamp_(min=group["eps"])) for ea, u, easq_ in zip(exp_avg, update, easq)]
         utils.scale_by_exp_avg_sq_(
             exp_avg_sq,
             update,
@@ -363,9 +341,7 @@ def _init_soap(state, group, update, grad, param, inner: str = ""):
     utils.init_preconditioner(grad, state, group["max_precond_dim"], group["precondition_1d"])
 
 
-def _init_psgd(
-    state, group, update, grad, param, cached: bool = False, prob: Optional[callable] = None
-):
+def _init_psgd(state, group, update, grad, param, cached: bool = False, prob: Optional[callable] = None):
     Q, state["exprs"] = utils.init_Q_exprs(
         grad,
         group["precond_init_scale"],
@@ -390,9 +366,7 @@ def _init_psgd(
     state["cache_expr"] = expr
 
 
-def precond_schedule(
-    group, prob: Union[callable, float, None] = None, name: str = "cumulative_prob"
-):
+def precond_schedule(group, prob: Union[callable, float, None] = None, name: str = "cumulative_prob"):
     step = group["step"]
     if "precondition_frequency" in group:
         return step > 0 and step % group["precondition_frequency"] == 0
@@ -409,9 +383,7 @@ def precond_schedule(
 
 
 @no_state_no_foreach
-def orthogonalize_update(
-    group, update, grad, param, scale_mode: str = "scale"
-):  # explore scale_mode="graft"
+def orthogonalize_update(group, update, grad, param, scale_mode: str = "scale"):  # explore scale_mode="graft"
     if update.dim() == 1:
         return update
     original_shape = update.shape
@@ -488,9 +460,7 @@ def scale_by_soap(group, update, grad, param, exp_avg, exp_avg_sq, Q, GG, inner:
     return precond
 
 
-def _update_psgd_precond(
-    cached, Q_cache, group, param, grad, Q_mat, Q, exprs, prob: Optional[callable] = None
-):
+def _update_psgd_precond(cached, Q_cache, group, param, grad, Q_mat, Q, exprs, prob: Optional[callable] = None):
     if prob is None:
         prob = utils.precond_update_prob_schedule()
 
@@ -522,9 +492,7 @@ def _update_psgd_precond(
         float_prob = prob(group.get(f"cumulative_prob_{id(Q)}_prob_step", 1))
     group["is_cached"] = should_use_cache = cached and float_prob < 0.5
 
-    if (
-        should_use_cache
-    ):  # caching adds extra ops and is not worth the overhead when we precondition at every step
+    if should_use_cache:  # caching adds extra ops and is not worth the overhead when we precondition at every step
         return _update_psgd_cache(cached, Q_cache, Q_mat)
     return Q_mat
 
@@ -543,9 +511,7 @@ def _update_psgd_cache(cached, Q_cache, q):
 
 def _cached_psgd_precond_grad(group, cache_expr, exprs, update, Q_mat, Q_cache, grad):
     if group.get("is_cached", False):
-        out = utils.precond_grad_cached_(
-            cache_expr, update, *Q_cache, caution=group["caution"], grad=grad
-        )
+        out = utils.precond_grad_cached_(cache_expr, update, *Q_cache, caution=group["caution"], grad=grad)
     out = utils.psgd_precond_grad(exprs[-1], update, *Q_mat, caution=group["caution"], grad=grad)
     group["caution"] = False  # we already cautioned here - shouldn't do it again
     return out
@@ -576,9 +542,7 @@ def _fused_cached_psgd_precond_grad(group, grad, param, cache_expr, exprs, updat
         )
 
 
-@general_guard(
-    "Q", "exprs", ("Q_cache", None), ("cache_expr", None), init_fn=_init_psgd, skip_first=False
-)
+@general_guard("Q", "exprs", ("Q_cache", None), ("cache_expr", None), init_fn=_init_psgd, skip_first=False)
 @no_state_no_foreach
 def scale_by_psgd(
     group,
@@ -608,9 +572,7 @@ def scale_by_psgd(
     return _cached_psgd_precond_grad(group, cache_expr, exprs, update, Q_mat, Q_cache, grad)
 
 
-@general_guard(
-    "Q", "exprs", ("Q_cache", None), ("cache_expr", None), init_fn=_init_psgd, skip_first=False
-)
+@general_guard("Q", "exprs", ("Q_cache", None), ("cache_expr", None), init_fn=_init_psgd, skip_first=False)
 @no_state_no_foreach
 def scale_by_delayed_psgd(
     group,
@@ -640,9 +602,7 @@ def scale_by_delayed_psgd(
     return precond
 
 
-@general_guard(
-    "Q", "exprs", ("Q_cache", None), ("cache_expr", None), init_fn=_init_psgd, skip_first=False
-)
+@general_guard("Q", "exprs", ("Q_cache", None), ("cache_expr", None), init_fn=_init_psgd, skip_first=False)
 @no_state_no_foreach
 def update_by_psgd(
     group,
@@ -668,9 +628,7 @@ def update_by_psgd(
         exprs,
         prob,
     )
-    _fused_cached_psgd_precond_grad(
-        group, update, param, cache_expr, exprs, update, Q_mat, Q_cache
-    )
+    _fused_cached_psgd_precond_grad(group, update, param, cache_expr, exprs, update, Q_mat, Q_cache)
     raise SkipUpdate
 
 
@@ -679,9 +637,7 @@ def sign(group, update, grad, param, graft: bool = True):
     return utils.sign_(update, graft)
 
 
-@general_guard(
-    "Q", "exprs", ("Q_cache", None), ("cache_expr", None), init_fn=_init_psgd, skip_first=False
-)
+@general_guard("Q", "exprs", ("Q_cache", None), ("cache_expr", None), init_fn=_init_psgd, skip_first=False)
 @no_state_no_foreach
 def update_by_delayed_psgd(
     group,
@@ -696,9 +652,7 @@ def update_by_delayed_psgd(
     prob: Optional[callable] = None,
 ):
     Q_mat = utils.line_to_triu(Q) if group["store_triu_as_line"] else Q
-    _fused_cached_psgd_precond_grad(
-        group, update, param, cache_expr, exprs, update, Q_mat, Q_cache
-    )
+    _fused_cached_psgd_precond_grad(group, update, param, cache_expr, exprs, update, Q_mat, Q_cache)
     _ = _update_psgd_precond(
         cached,
         Q_cache,
@@ -744,9 +698,7 @@ def chain(state: Union[callable, dict], group, grad, param, *fns):
     update = [torch.clone(g, memory_format=torch.preserve_format) for g in grad]
     update, skip_update = _inner_chain(state, group, update, grad, param, *fns)
     if not skip_update and update is not None:
-        utils.update_param_(
-            param, update, group["lr"], group["weight_decay"], caution=group["caution"], grad=grad
-        )
+        utils.update_param_(param, update, group["lr"], group["weight_decay"], caution=group["caution"], grad=grad)
 
 
 def create_branch(branches: List[List[callable]], merge_fn: callable):
@@ -754,9 +706,7 @@ def create_branch(branches: List[List[callable]], merge_fn: callable):
         outputs = []
         for branch in branches:
             branch_update = [torch.clone(u, memory_format=torch.preserve_format) for u in update]
-            branch_update, skip_update = _inner_chain(
-                state, group, branch_update, grad, param, *branch
-            )
+            branch_update, skip_update = _inner_chain(state, group, branch_update, grad, param, *branch)
             if skip_update:
                 raise ValueError("Branches should not skip updates")
             outputs.append(branch_update)
@@ -784,11 +734,7 @@ class ChainOpt(utils.StatefulOptimizer):
 
         caution = group["caution"]
 
-        vals = list(
-            self.split_p_and_g_in_group(
-                group, should_promote=self.promote, beta1=utils.get_beta1(group)
-            )
-        )
+        vals = list(self.split_p_and_g_in_group(group, should_promote=self.promote, beta1=utils.get_beta1(group)))
 
         if not vals:
             return
@@ -805,9 +751,7 @@ class ChainOpt(utils.StatefulOptimizer):
             break
 
         group["step"] = state["step"] = step = step + 1
-        group["prev_lr"] = group["lr"] = (
-            group["base_lr"] * step / max(step, group["warmup_steps"] + 1)
-        )
+        group["prev_lr"] = group["lr"] = group["base_lr"] * step / max(step, group["warmup_steps"] + 1)
 
         if not group["foreach"] or len(p) == 1:
             for param, grad in zip(p, g):
@@ -902,9 +846,7 @@ class BaseOpt(ChainOpt):
         promote: bool = use_default,
     ):
         if not fns:
-            raise ValueError(
-                "No functions provided. If that's on purpose (SGD-like), use `identity`"
-            )
+            raise ValueError("No functions provided. If that's on purpose (SGD-like), use `identity`")
 
         args, kwargs = None, None
         fn = fns[-1]

@@ -142,9 +142,7 @@ def create_visual_matrix(success_matrix, attempts_matrix, runtime_matrix, loss_m
     normalized_attempts = pd.DataFrame(index=success_matrix.index, columns=success_matrix.columns)
 
     for idx in success_matrix.index:
-        normalized_attempts.loc[idx] = normalize_row_attempts(
-            attempts_matrix.loc[idx], success_matrix.loc[idx]
-        )
+        normalized_attempts.loc[idx] = normalize_row_attempts(attempts_matrix.loc[idx], success_matrix.loc[idx])
 
     # Calculate best performers per benchmark
     best_performers = pd.DataFrame(index=success_matrix.index, columns=success_matrix.columns)
@@ -247,9 +245,7 @@ def create_visual_matrix(success_matrix, attempts_matrix, runtime_matrix, loss_m
     # Format axis labels
     main_ax.set_xticks(range(len(success_matrix.columns)))
     main_ax.set_yticks(range(len(success_matrix.index)))
-    main_ax.set_xticklabels(
-        success_matrix.columns, rotation=45, ha="right", fontsize=10, fontweight="bold"
-    )
+    main_ax.set_xticklabels(success_matrix.columns, rotation=45, ha="right", fontsize=10, fontweight="bold")
     main_ax.set_yticklabels(success_matrix.index, fontsize=10, fontweight="bold")
 
     # Create statistics panels
@@ -319,9 +315,7 @@ def create_visual_matrix(success_matrix, attempts_matrix, runtime_matrix, loss_m
         score = score - su * 1e12  # only count successful runs
         avg_best[runtime_matrix.columns[score.argmin()]] += 1
     avg_best /= avg_best.sum() / 100
-    create_stats_panel(
-        stats_ax4, "Best Optimizer% (↑)", avg_best.sort_values(ascending=True), cmap=plt.cm.YlGn
-    )
+    create_stats_panel(stats_ax4, "Best Optimizer% (↑)", avg_best.sort_values(ascending=True), cmap=plt.cm.YlGn)
 
     # Add title and subtitle
     plt.suptitle("Optimizer Performance Matrix", y=0.98, fontsize=16, fontweight="bold")
@@ -348,9 +342,7 @@ def main(file: str = "benchmark_results.md"):
     _fig = create_visual_matrix(success_matrix, attempts_matrix, runtime_matrix, loss_matrix)
 
     # Save with high quality
-    plt.savefig(
-        "benchmark_matrix.png", dpi=300, bbox_inches="tight", facecolor="white", pad_inches=0.5
-    )
+    plt.savefig("benchmark_matrix.png", dpi=300, bbox_inches="tight", facecolor="white", pad_inches=0.5)
     plt.close()
 
     # Print text summary

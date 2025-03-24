@@ -58,9 +58,7 @@ def main(
 ):
     dtype = [getattr(torch, d) for d in dtype]
 
-    for args in itertools.product(
-        method, dtype, [(length, size, depth, batch)], opt, [weight_decay]
-    ):
+    for args in itertools.product(method, dtype, [(length, size, depth, batch)], opt, [weight_decay]):
         m, d, (l, s, dp, b), o, wd = args
 
         model = Model(s, dp).cuda()

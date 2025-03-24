@@ -16,9 +16,7 @@ class Model(nn.Module):
     def __init__(self, size):
         super().__init__()
         self.param = nn.Parameter(torch.randn(size))
-        self.register_buffer(
-            "target", F.normalize(torch.arange(size).float().add(1).square(), dim=0)
-        )
+        self.register_buffer("target", F.normalize(torch.arange(size).float().add(1).square(), dim=0))
 
     def forward(self):
         return (self.param - self.target).square().mean()

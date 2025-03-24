@@ -62,7 +62,5 @@ def test_foreach(opt, size, depth: int, iterations: int = 4096, outer_iterations
 
     for p0, p1 in zip(*peaks):
         assert p0 > p1
-    for l0, l1 in zip(
-        *losses
-    ):  # increase error tolerance for PSGD, as we have different RNGs -> expected differences
+    for l0, l1 in zip(*losses):  # increase error tolerance for PSGD, as we have different RNGs -> expected differences
         assert torch.allclose(l0, l1, rtol=0.01 if isinstance(opt, PSGDBase) else 1e-5)
