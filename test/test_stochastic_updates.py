@@ -1,10 +1,11 @@
-import heavyball
-import heavyball.utils
 import pytest
 import torch
-from benchmark.utils import get_optim
-from heavyball.utils import clean, set_torch, PSGDBase
 from torch import nn
+
+import heavyball
+import heavyball.utils
+from benchmark.utils import get_optim
+from heavyball.utils import PSGDBase, clean, set_torch
 
 
 def get_memory():
@@ -22,13 +23,13 @@ def test_foreach(opt, size, depth: int, iterations: int = 8192, outer_iterations
 
     opt = getattr(heavyball, opt)
     if not issubclass(opt, PSGDBase):
-        raise pytest.skip('Only PSGD is supported')
+        raise pytest.skip("Only PSGD is supported")
 
     peaks = []
     losses = []
 
     for stochastic in [False, True]:
-        print('stochastic', stochastic)
+        print("stochastic", stochastic)
         torch.manual_seed(0x2131290)
         peaks.append([])
         losses.append([])
@@ -38,7 +39,7 @@ def test_foreach(opt, size, depth: int, iterations: int = 8192, outer_iterations
             o = get_optim(opt, model.parameters(), lr=1e-3, stochastic_schedule=stochastic)
 
             for _ in range(iterations):
-                loss = model(torch.randn((128, size), device-'cuda')).square().mean()
+                loss = model(torch.randn((128, size), device="cuda")).square().mean()
                 loss.backward()
                 o.step()
                 o.zero_grad()
