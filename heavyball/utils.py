@@ -1293,16 +1293,12 @@ def dampen_grad(g: Tensor, damp: float = 2**-13):
 
 
 def psgd_calc_A_and_conjB(exprA, G, Q, V=None):
-    eps = scalar_guard(math.sqrt(torch.finfo(G.dtype).eps), G)
-    eps *= G.norm() / G.numel()
-    G = G + torch.randn_like(G) * eps
-    md = min_dtype(Q + [G])
-    A = torch.einsum(exprA, *[q.to(md) for q in Q], G.to(md)).to(G.dtype)
     order = G.dim()
     if V is None:
-        conjB = torch.randn(G.shape[1:] + G.shape[:1], dtype=promote(G.dtype), device=G.device)
-    else:
-        conjB = V.permute(*range(1, order), 0).to(promote(G.dtype))
+        V, G = dampen_grad(G)
+    conjB = V.permute(*range(1, order), 0).to(promote(G.dtype))
+    md = min_dtype(Q + [G])
+    A = torch.einsum(exprA, *[q.to(md) for q in Q], G.to(md)).to(G.dtype)
     Q = [promote(q) for q in Q]
     for i, q in enumerate(Q):
         if q.dim() <= 1:
