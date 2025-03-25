@@ -1163,22 +1163,15 @@ def update_param_(
     _compilable_update_(param, update, decay, lr, caution, grad)
 
 
-def precond_schedule(step, precond_scheduler, rng):
+def precond_schedule(step, precond_scheduler):
     precond_prob = max(step, 1) ** precond_scheduler[0]
     precond_prob = math.log10(precond_prob)
     precond_prob = precond_prob ** precond_scheduler[1] + 1
-    precond_prob = 1 / precond_prob
-    update_precond = rng.random() < precond_prob
-    return update_precond
+    return 1 / precond_prob
 
 
 def get_soap_precond_schedule(precond_scheduler):
-    rng = random.Random(0x12312)
-
-    def _inner(step):
-        return precond_schedule(step, precond_scheduler, rng)
-
-    return _inner
+    return functools.partial(precond_schedule, precond_scheduler=precond_scheduler)
 
 
 def _max_idx(x: List[int]):
