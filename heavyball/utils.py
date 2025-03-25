@@ -843,7 +843,8 @@ class StatefulOptimizer(torch.optim.Optimizer):
                     grads.append(g)
                     p.vector = torch.randn_like(p)
                     p.orig = p.data.clone()
-                    stochastic_add_(p.data, p.vector, tiny_bf16)
+                    # scale taken from https://github.com/lixilinx/psgd_torch/blob/1943e66596111e78157ca1b72b31c1dfdf0653ef/preconditioned_stochastic_gradient_descent.py#L2161
+                    stochastic_add_(p.data, p.vector, torch.finfo(p.dtype).eps ** 0.5)
         else:
             with torch.enable_grad():
                 loss = modify_closure(closure)
@@ -852,6 +853,8 @@ class StatefulOptimizer(torch.optim.Optimizer):
             with torch.enable_grad():
                 closure()
 
+            # we don't subtract the vector here again to avoid accumulating error from (x + eps - eps + eps - eps)
+            # this costs more memory, but the imprecision seems too severe to use the other method
             for group in self.param_groups:
                 for p, g in self.split_p_and_g_in_group(group, skip_none=True, should_promote=False):
                     p.grad = grads.pop(0)
