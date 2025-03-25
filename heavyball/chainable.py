@@ -348,6 +348,8 @@ def _init_psgd(state, group, update, grad, param, cached: bool = False, prob: Op
         group["max_size_triangular"],
         group["min_ndim_triangular"],
         group["memory_save_mode"],
+        getattr(param, "hessian_vector", None),
+        getattr(param, "vector", None),
         dtype=getattr(torch, group["q_dtype"]),
     )
     state["Q"] = utils.triu_to_line(Q) if group["store_triu_as_line"] else Q

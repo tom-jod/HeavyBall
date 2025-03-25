@@ -515,7 +515,7 @@ class ForeachPSGDKron(C.BaseOpt):
         gradient_clipping: C.str_or_fn = C.use_default,
         update_clipping: C.str_or_fn = C.use_default,  #
         # expert parameters
-        precond_init_scale=1.0,
+        precond_init_scale=None,
         precond_lr=0.1,
     ):
         defaults = locals()

@@ -843,7 +843,8 @@ class StatefulOptimizer(torch.optim.Optimizer):
                     grads.append(g)
                     p.vector = torch.randn_like(p)
                     p.orig = p.data.clone()
-                    stochastic_add_(p.data, p.vector, tiny_bf16)
+                    # scale taken from https://github.com/lixilinx/psgd_torch/blob/1943e66596111e78157ca1b72b31c1dfdf0653ef/preconditioned_stochastic_gradient_descent.py#L2161
+                    stochastic_add_(p.data, p.vector, torch.finfo(p.dtype).eps ** 0.5)
         else:
             with torch.enable_grad():
                 loss = modify_closure(closure)
@@ -852,6 +853,8 @@ class StatefulOptimizer(torch.optim.Optimizer):
             with torch.enable_grad():
                 closure()
 
+            # we don't subtract the vector here again to avoid accumulating error from (x + eps - eps + eps - eps)
+            # this costs more memory, but the imprecision seems too severe to use the other method
             for group in self.param_groups:
                 for p, g in self.split_p_and_g_in_group(group, skip_none=True, should_promote=False):
                     p.grad = grads.pop(0)
@@ -1160,38 +1163,52 @@ def update_param_(
     _compilable_update_(param, update, decay, lr, caution, grad)
 
 
-def precond_schedule(step, precond_scheduler, rng):
+def precond_schedule(step, precond_scheduler):
     precond_prob = max(step, 1) ** precond_scheduler[0]
     precond_prob = math.log10(precond_prob)
     precond_prob = precond_prob ** precond_scheduler[1] + 1
-    precond_prob = 1 / precond_prob
-    update_precond = rng.random() < precond_prob
-    return update_precond
+    return 1 / precond_prob
 
 
 def get_soap_precond_schedule(precond_scheduler):
-    rng = random.Random(0x12312)
-
-    def _inner(step):
-        return precond_schedule(step, precond_scheduler, rng)
-
-    return _inner
+    return functools.partial(precond_schedule, precond_scheduler=precond_scheduler)
 
 
 def _max_idx(x: List[int]):
     return len(x) - 1 - np.argmax(x[::-1])  # we want to start counting from the back, as torch is fan-out/fan-in
 
 
-def init_Q_exprs(t, scale, max_size, min_ndim_triangular, memory_save_mode, dtype=None):
-    """For a scalar or tensor t, we initialize its preconditioner Q and
-    reusable einsum expressions for updating Q and preconditioning gradient.
+@decorator_knowngood
+def mean_root(x: torch.Tensor, pow: float):
+    return stochastic_round_(x, x.float().pow(pow).mean().pow(-1 / pow / 2))
+
+
+@decorator_knowngood
+def divided_root(x, y, pow0, pow1):
+    mean_x = x.float().pow(pow0).mean().pow(1 / pow0 / 2)
+    mean_y = y.float().pow(pow1).mean().pow(-1 / pow1 / 2)
+    return stochastic_round_(x, mean_x * mean_y)  # multiply here, as we already divide in pow -1
+
+
+def init_Q_exprs(grad, scale, max_size, min_ndim_triangular, memory_save_mode, hessian_vector, vector, dtype=None):
     """
+    For a scalar or tensor `grad`, we initialize its preconditioner Q and
+    reusable einsum expressions for updating Q and preconditioning gradient.
+
+    precond init scale computation from
+    https://github.com/lixilinx/psgd_torch/blob/1943e66596111e78157ca1b72b31c1dfdf0653ef/preconditioned_stochastic_gradient_descent.py#L2208-L2227
+    """
+    if scale is None:
+        if hessian_vector is None:
+            scale = mean_root(grad, 4)
+        else:
+            scale = divided_root(vector, hessian_vector, 2, 4)
     letters = string.ascii_lowercase + string.ascii_uppercase
-    dtype = dtype if dtype is not None else t.dtype
-    shape = t.shape
+    dtype = dtype if dtype is not None else grad.dtype
+    shape = grad.shape
 
     if len(shape) == 0:  # scalar
-        Q = [scale * torch.ones_like(t, dtype=dtype)]
+        Q = [scale * torch.ones_like(grad, dtype=dtype)]
         exprA = ",->"
         exprGs = [",->"]
         exprP = ",,->"
@@ -1199,7 +1216,7 @@ def init_Q_exprs(t, scale, max_size, min_ndim_triangular, memory_save_mode, dtyp
 
     # Tensor
     if len(shape) > 13:
-        raise ValueError(f"Got tensor with dim {len(t.shape)}; Einstein runs out of letters!")
+        raise ValueError(f"Got tensor with dim {len(grad.shape)}; Einstein runs out of letters!")
 
     scale = scale ** (1 / len(shape))
 
@@ -1227,7 +1244,7 @@ def init_Q_exprs(t, scale, max_size, min_ndim_triangular, memory_save_mode, dtyp
     for i, (size, dim_d) in enumerate(zip(shape, dim_diag)):
         if size == 1 or size > max_size or len(shape) < min_ndim_triangular or dim_d:
             # use diagonal matrix as preconditioner for this dim
-            Q.append(scale * torch.ones(size, dtype=promote(dtype), device=t.device))
+            Q.append(scale * torch.ones(size, dtype=promote(dtype), device=grad.device))
 
             piece1A.append(letters[i])
             piece2A = piece2A + letters[i]
@@ -1241,7 +1258,7 @@ def init_Q_exprs(t, scale, max_size, min_ndim_triangular, memory_save_mode, dtyp
             piece4P = piece4P + letters[i + 13]
         else:
             # use triangular matrix as preconditioner for this dim
-            Q.append(scale * torch.eye(size, dtype=dtype, device=t.device))
+            Q.append(scale * torch.eye(size, dtype=dtype, device=grad.device))
             piece1A.append(letters[i] + letters[i + 13])
             piece2A = piece2A + letters[i + 13]
             piece3A = piece3A + letters[i]
@@ -1268,17 +1285,20 @@ def psgd_balance_Q(Q_in):
     torch._foreach_mul_(Q_in, list(norms))
 
 
+@decorator_knowngood
+def dampen_grad(g: Tensor, damp: float = 2**-13):
+    # https://github.com/lixilinx/psgd_torch/blob/1943e66596111e78157ca1b72b31c1dfdf0653ef/preconditioned_stochastic_gradient_descent.py#L50
+    v = torch.randn_like(g)
+    return v, g + damp * g.abs().mean() * v
+
+
 def psgd_calc_A_and_conjB(exprA, G, Q, V=None):
-    eps = scalar_guard(math.sqrt(torch.finfo(G.dtype).eps), G)
-    eps *= G.norm() / G.numel()
-    G = G + torch.randn_like(G) * eps
-    md = min_dtype(Q + [G])
-    A = torch.einsum(exprA, *[q.to(md) for q in Q], G.to(md)).to(G.dtype)
     order = G.dim()
     if V is None:
-        conjB = torch.randn(G.shape[1:] + G.shape[:1], dtype=promote(G.dtype), device=G.device)
-    else:
-        conjB = V.permute(*range(1, order), 0).to(promote(G.dtype))
+        V, G = dampen_grad(G)
+    conjB = V.permute(*range(1, order), 0).to(promote(G.dtype))
+    md = min_dtype(Q + [G])
+    A = torch.einsum(exprA, *[q.to(md) for q in Q], G.to(md)).to(G.dtype)
     Q = [promote(q) for q in Q]
     for i, q in enumerate(Q):
         if q.dim() <= 1:
