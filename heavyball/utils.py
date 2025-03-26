@@ -713,6 +713,7 @@ class StatefulOptimizer(torch.optim.Optimizer):
     finite_differences: bool = False
     fallback_to_finite_differences: bool = True
     _fallback_enabled: bool = False
+    hvp_interval: int = 1  # grad is faster initially, hvp later
 
     def __init__(self, params, defaults, foreach: bool = True, use_ema: bool = False):
         super().__init__(params, {**defaults, "foreach": foreach})
@@ -884,7 +885,8 @@ class StatefulOptimizer(torch.optim.Optimizer):
                 raise ValueError("Hessian approximation requires a closure.")
             return None
 
-        if not hessian_approx:
+        step = self._inner_group["total_hvp_steps"] = self._inner_group.get("total_hvp_steps", 0) + 1
+        if not hessian_approx or step % self.hvp_interval == 0:
             with torch.enable_grad():
                 loss = closure()
             return loss

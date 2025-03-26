@@ -565,6 +565,10 @@ class ForeachCachedNewtonPSGD(ForeachCachedPSGDKron):
     hessian_approx = True
 
 
+class NewtonHybrid2PSGDKron(ForeachCachedNewtonPSGD):
+    hvp_interval = 2
+
+
 class ForeachPSGDLRA(C.BaseOpt):
     """
     Originally from Evan Walters and Omead Pooladzandi, 2024
@@ -641,6 +645,10 @@ class ForeachNewtonPSGDLRA(ForeachPSGDLRA):
     hessian_approx = True
 
 
+class NewtonHybrid2PSGDLRA(ForeachNewtonPSGDLRA):
+    hvp_interval = 2
+
+
 PalmForEachSoap = PaLMForeachSOAP
 PaLMSOAP = PaLMForeachSOAP
 PaLMSFAdamW = PaLMForeachSFAdamW
@@ -705,4 +713,6 @@ __all__ = [
     "DelayedPSGD",
     "PSGDLRA",
     "NewtonPSGDLRA",
+    "NewtonHybrid2PSGDLRA",
+    "NewtonHybrid2PSGDKron",
 ]
