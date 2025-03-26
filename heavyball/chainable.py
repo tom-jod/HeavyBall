@@ -3,6 +3,7 @@ import random
 from typing import List, Literal, Optional, Union
 
 import torch
+from torch import Tensor
 
 from . import utils
 
@@ -341,10 +342,11 @@ def _init_soap(state, group, update, grad, param, inner: str = ""):
     utils.init_preconditioner(grad, state, group["max_precond_dim"], group["precondition_1d"])
 
 
-def _init_psgd(state, group, update, grad, param, cached: bool = False, prob: Optional[callable] = None):
+def _init_psgd_kron(state, group, update, grad, param, cached: bool = False, prob: Optional[callable] = None):
     Q, state["exprs"] = utils.init_Q_exprs(
         grad,
         group["precond_init_scale"],
+        group["precond_init_scale_scale"],
         group["max_size_triangular"],
         group["min_ndim_triangular"],
         group["memory_save_mode"],
@@ -366,6 +368,19 @@ def _init_psgd(state, group, update, grad, param, cached: bool = False, prob: Op
     expr = f"{expr},{grad_expr}->{out_expr}"
 
     state["cache_expr"] = expr
+
+
+def _init_psgd_lra(state, group, update, grad, param, cached: bool = False, prob: Optional[callable] = None):
+    state["U"], state["V"], state["d"] = utils.init_lra(
+        grad,
+        group["precond_init_scale"],
+        group["precond_init_scale_scale"],
+        group["rank"],
+        getattr(param, "hessian_vector", None),
+        getattr(param, "vector", None),
+        dtype=getattr(torch, group["q_dtype"]),
+    )
+    group["preconditioning_step"] = 0
 
 
 def precond_schedule(group, prob: Union[callable, float, None] = None, name: str = "cumulative_prob"):
@@ -545,7 +560,48 @@ def _fused_cached_psgd_precond_grad(group, grad, param, cache_expr, exprs, updat
         )
 
 
-@general_guard("Q", "exprs", ("Q_cache", None), ("cache_expr", None), init_fn=_init_psgd, skip_first=False)
+def _update_lra(
+    group, U: List[Tensor], V: List[Tensor], d: List[Tensor], params: List[Tensor], grads: List[Tensor], delayed: bool
+):
+    if hasattr(params[0], "hessian_vector") and params[0].hessian_vector is not None:
+        vector = utils.flatten([p.vector for p in params])
+        hessian_vector = utils.flatten([p.hessian_vector for p in params])
+    else:
+        vector, hessian_vector = utils.dampen_multiple(grads)
+    return utils.update_lra_precond_(U, V, d, vector, hessian_vector, group["eps"], group["precond_lr"], delayed)
+
+
+@general_guard("U", "V", "d", init_fn=_init_psgd_lra, skip_first=False)
+@no_state
+def scale_by_psgd_lra(group, update, grad, param, U, V, d):
+    u, v, d = _update_lra(group, U, V, d, param, update if group["momentum_into_precond_update"] else grad, False)
+    return utils.extract_from_flat_update(param, utils.lra_precond(u, v, d, utils.flatten(update)))
+
+
+@general_guard("U", "V", "d", init_fn=_init_psgd_lra, skip_first=False)
+@no_state
+def update_by_psgd_lra(group, update, grad, param, U, V, d):
+    u, v, d = _update_lra(group, U, V, d, param, update if group["momentum_into_precond_update"] else grad, False)
+    utils.apply_lra_update(param, update, u, v, d)
+    raise SkipUpdate
+
+
+@general_guard("U", "V", "d", init_fn=_init_psgd_lra, skip_first=False)
+@no_state
+def scale_by_delayed_psgd_lra(group, update, grad, param, U, V, d):
+    u, v, d = _update_lra(group, U, V, d, param, update if group["momentum_into_precond_update"] else grad, True)
+    return utils.extract_from_flat_update(param, utils.lra_precond(u, v, d, utils.flatten(update)))
+
+
+@general_guard("U", "V", "d", init_fn=_init_psgd_lra, skip_first=False)
+@no_state
+def update_by_delayed_psgd_lra(group, update, grad, param, U, V, d):
+    u, v, d = _update_lra(group, U, V, d, param, update if group["momentum_into_precond_update"] else grad, True)
+    utils.apply_lra_update(param, update, u, v, d)
+    raise SkipUpdate
+
+
+@general_guard("Q", "exprs", ("Q_cache", None), ("cache_expr", None), init_fn=_init_psgd_kron, skip_first=False)
 @no_state_no_foreach
 def scale_by_psgd(
     group,
@@ -575,7 +631,7 @@ def scale_by_psgd(
     return _cached_psgd_precond_grad(group, cache_expr, exprs, update, Q_mat, Q_cache, grad)
 
 
-@general_guard("Q", "exprs", ("Q_cache", None), ("cache_expr", None), init_fn=_init_psgd, skip_first=False)
+@general_guard("Q", "exprs", ("Q_cache", None), ("cache_expr", None), init_fn=_init_psgd_kron, skip_first=False)
 @no_state_no_foreach
 def scale_by_delayed_psgd(
     group,
@@ -605,7 +661,7 @@ def scale_by_delayed_psgd(
     return precond
 
 
-@general_guard("Q", "exprs", ("Q_cache", None), ("cache_expr", None), init_fn=_init_psgd, skip_first=False)
+@general_guard("Q", "exprs", ("Q_cache", None), ("cache_expr", None), init_fn=_init_psgd_kron, skip_first=False)
 @no_state_no_foreach
 def update_by_psgd(
     group,
@@ -640,7 +696,7 @@ def sign(group, update, grad, param, graft: bool = True):
     return utils.sign_(update, graft)
 
 
-@general_guard("Q", "exprs", ("Q_cache", None), ("cache_expr", None), init_fn=_init_psgd, skip_first=False)
+@general_guard("Q", "exprs", ("Q_cache", None), ("cache_expr", None), init_fn=_init_psgd_kron, skip_first=False)
 @no_state_no_foreach
 def update_by_delayed_psgd(
     group,
@@ -794,16 +850,20 @@ def default(a, b):
 _scale_to_update_map = {
     scale_by_delayed_psgd.get_fn(): update_by_delayed_psgd,  #
     scale_by_psgd.get_fn(): update_by_psgd,  #
+    scale_by_psgd_lra.get_fn(): update_by_psgd_lra,  #
+    scale_by_delayed_psgd_lra.get_fn(): update_by_delayed_psgd_lra,  #
     scale_by_adam.get_fn(): update_by_adam,  #
     scale_by_laprop.get_fn(): update_by_laprop,  #
-    scale_by_adopt.get_fn(): update_by_adopt,
+    scale_by_adopt.get_fn(): update_by_adopt,  #
 }
 _scale_to_update_map_inv = {
     update_by_delayed_psgd.get_fn(): scale_by_delayed_psgd,  #
     update_by_psgd.get_fn(): scale_by_psgd,  #
+    update_by_psgd_lra.get_fn(): scale_by_psgd_lra,  #
+    update_by_delayed_psgd_lra.get_fn(): scale_by_delayed_psgd_lra,  #
     update_by_adam.get_fn(): scale_by_adam,  #
     update_by_laprop.get_fn(): scale_by_laprop,  #
-    update_by_adopt.get_fn(): scale_by_adopt,
+    update_by_adopt.get_fn(): scale_by_adopt,  #
 }
 
 

@@ -1190,7 +1190,32 @@ def divided_root(x, y, pow0, pow1):
     return stochastic_round_(x, mean_x * mean_y)  # multiply here, as we already divide in pow -1
 
 
-def init_Q_exprs(grad, scale, max_size, min_ndim_triangular, memory_save_mode, hessian_vector, vector, dtype=None):
+def precond_init_scale(scale, scale_scale, grad, hessian_vector, vector):
+    if scale is not None:
+        warn_once(
+            "It's recommended to use precond_init_scale=None (default since 1.7.x), which uses advanced heuristics."
+        )
+        if scale_scale is not None:
+            warn_once(
+                "precond_init_scale_scale multiplies the precond_init_scale by a constant factor. With a fixed precond_init_scale, you should explicitly multiply it into the precond_init_scale."
+            )
+        return scale
+    if hessian_vector is None:
+        return mean_root(grad, 4) * scale_scale
+    return divided_root(vector, hessian_vector, 2, 4) * scale_scale
+
+
+def init_lra(grad, scale, scale_scale, rank, hessian_vector, vector, dtype=None):
+    scale = precond_init_scale(scale, scale_scale, grad, hessian_vector, vector)
+    U = torch.randn((*grad.shape, rank), dtype=dtype, device=grad.device)
+    V = torch.randn((*grad.shape, rank), dtype=dtype, device=grad.device)
+    d = torch.full_like(grad, scale, dtype=dtype, device=grad.device)
+    return U, V, d
+
+
+def init_Q_exprs(
+    grad, scale, scale_scale, max_size, min_ndim_triangular, memory_save_mode, hessian_vector, vector, dtype=None
+):
     """
     For a scalar or tensor `grad`, we initialize its preconditioner Q and
     reusable einsum expressions for updating Q and preconditioning gradient.
@@ -1198,11 +1223,7 @@ def init_Q_exprs(grad, scale, max_size, min_ndim_triangular, memory_save_mode, h
     precond init scale computation from
     https://github.com/lixilinx/psgd_torch/blob/1943e66596111e78157ca1b72b31c1dfdf0653ef/preconditioned_stochastic_gradient_descent.py#L2208-L2227
     """
-    if scale is None:
-        if hessian_vector is None:
-            scale = mean_root(grad, 4)
-        else:
-            scale = divided_root(vector, hessian_vector, 2, 4)
+    scale = precond_init_scale(scale, scale_scale, grad, hessian_vector, vector)
     letters = string.ascii_lowercase + string.ascii_uppercase
     dtype = dtype if dtype is not None else grad.dtype
     shape = grad.shape
@@ -1285,11 +1306,149 @@ def psgd_balance_Q(Q_in):
     torch._foreach_mul_(Q_in, list(norms))
 
 
+@decorator
+def psgd_balance_lra(U: Tensor, V: Tensor):
+    u_norm = promote(torch.linalg.vector_norm(U))
+    v_norm = promote(torch.linalg.vector_norm(V))
+    scale = (u_norm / v_norm) ** 0.5
+    U.div_(scale)
+    V.mul_(scale)
+
+
+@decorator
+def low_rank_mm(U: Tensor, V: Tensor, x: Tensor) -> Tensor:
+    return x + torch.einsum("br,gr,g->b", U, V, x)
+
+
+def update_lra_precond_(
+    U: List[Tensor],
+    V: List[Tensor],
+    d: List[Tensor],
+    vector: Tensor,
+    hessian_vector: Tensor,
+    eps: float,
+    step: float,
+    delayed: bool,
+):
+    """
+    Adapted from https://github.com/lixilinx/psgd_torch/blob/6dbea94915679d08a289928e6431b6ce07931aaf/preconditioned_stochastic_gradient_descent.py#L657
+    """
+    eps = scalar_guard(eps, vector)
+    U_orig, V_orig, d_orig = U, V, d
+    U, V, d = flatten(U), flatten(V), flatten(d)
+    Qh = low_rank_mm(U, V, d * hessian_vector)
+    Ph = d * low_rank_mm(V, U, Qh)
+    rank = U.size(1)
+
+    VtU = torch.einsum("br,bn->rn", V, U)  # (rank, rank)
+    I = torch.eye(rank, dtype=VtU.dtype, device=VtU.device)
+    IpVtU = I + VtU
+    invQtv = vector / d
+
+    # LU factorization to reuse computation
+    LU, pivots = torch.linalg.lu_factor(IpVtU)
+    invQtv = invQtv - V.mm(torch.linalg.lu_solve(LU, pivots, U.t().mm(invQtv), adjoint=True))
+    invPv = invQtv - U.mm(torch.linalg.lu_solve(LU, pivots, V.t().mm(invQtv)))
+    invPv = invPv / d
+
+    nablaD = Ph * hessian_vector - vector * invPv
+    divisor = (Ph.square() + vector.square()) * (hessian_vector.square() + invPv.square())
+    divisor = divisor.add(eps).sqrt().max()
+    d_step = step / divisor
+
+    apply_flat_add(d_orig, d * nablaD, -d_step)
+
+    a, b = Qh, invQtv
+
+    precond_u = random.random() < 0.5  # update either U or V, not both at the same time
+    precond = V if precond_u else U
+    atV = torch.einsum("bo,br->or", a, precond)  # o == one
+    btV = torch.einsum("bo,br->or", b, precond)
+    atVVt = torch.einsum("or,br->ob", atV, precond)
+    btVVt = torch.einsum("or,br->ob", btV, precond)
+    precond_step = step / (a.norm() * atVVt.norm() + b.norm() * btVVt.norm() + eps)
+    if precond_u:
+        a = torch.einsum("bo,or,rg->bg", a, atV, IpVtU)
+        b = torch.einsum("bo,or,rg->bg", b, btV, IpVtU)
+    else:
+        a = a + torch.einsum("br,or->bo", V, atV)
+        b = b + torch.einsum("br,ob->bo", V, btV)
+        a = torch.einsum("bo,or->br", a, atV)
+        b = torch.einsum("br,or->br", b, btV)
+    apply_flat_add(U_orig if precond_u else V_orig, b - a, precond_step)
+
+    if not delayed:
+        stochastic_add_([d], [d * nablaD], -d_step)
+        stochastic_add_([U if precond_u else V], [b - a], precond_step)
+    return U, V, d
+
+
+def lra_precond(U, V, d, g):
+    """
+    As-is from https://github.com/lixilinx/psgd_torch/blob/6dbea94915679d08a289928e6431b6ce07931aaf/preconditioned_stochastic_gradient_descent.py#L744
+    """
+    g = low_rank_mm(U, V, d.flatten() * g)
+    return d * low_rank_mm(V, U, g)
+
+
 @decorator_knowngood
 def dampen_grad(g: Tensor, damp: float = 2**-13):
     # https://github.com/lixilinx/psgd_torch/blob/1943e66596111e78157ca1b72b31c1dfdf0653ef/preconditioned_stochastic_gradient_descent.py#L50
     v = torch.randn_like(g)
     return v, g + damp * g.abs().mean() * v
+
+
+@decorator_knowngood
+def apply_lra_update(params: List[Tensor], update: Tensor, U: Tensor, V: Tensor, d: Tensor):
+    update = lra_precond(U, V, d, update)
+    start = 0
+    for p in params:
+        size = p.numel()
+        copy_stochastic_(p, update[start : start + size])
+        start += size
+
+
+@decorator_knowngood
+def apply_flat_update(params: List[Tensor], update: Tensor):
+    start = 0
+    for p in params:
+        size = p.numel()
+        copy_stochastic_(p, update[start : start + size])
+        start += size
+
+
+@decorator_knowngood
+def apply_flat_add(params: List[Tensor], update: Tensor, alpha: Tensor):
+    start = 0
+    for p in params:
+        size = p.numel()
+        stochastic_add_([p], [update[start : start + size]], alpha)
+        start += size
+
+
+@decorator_knowngood
+def extract_from_flat_update(params: List[Tensor], update: Tensor):
+    start = 0
+    outputs = []
+    for p in params:
+        size = p.numel()
+        outputs.append(update[start : start + size])
+        start += size
+    return outputs
+
+
+def flatten(x: List[Tensor]) -> Tensor:
+    return torch.cat([i.flatten(0, -2) for i in x], 0)
+
+
+def dampen_multiple(g: List[Tensor], damp: float = 2**-13):
+    vs = []
+    gs = []
+    for g_ in g:
+        v, g = dampen_grad(g_, damp)
+        vs.append(v)
+        gs.append(g)
+    return flatten(vs), flatten(gs)
 
 
 def psgd_calc_A_and_conjB(exprA, G, Q, V=None):
