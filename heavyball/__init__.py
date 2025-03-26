@@ -543,67 +543,6 @@ class ForeachPSGDKron(C.BaseOpt):
         )
 
 
-class ForeachPSGDLRA(C.BaseOpt):
-    """
-    Originally from Evan Walters and Omead Pooladzandi, 2024
-    Modified under Creative Commons Attribution 4.0 International
-    Source available at https://github.com/evanatyourservice/kron_torch/blob/97a2b5ee8a1a4c29e4780bbf6c521e545189eff9/kron_torch/kron.py
-    """
-
-    delayed: bool = False
-    cached: bool = False
-    exp_avg_input: bool = True
-
-    def __init__(
-        self,
-        params,
-        lr=0.001,
-        beta=0.9,
-        weight_decay=0.0,
-        preconditioner_update_probability=None,
-        momentum_into_precond_update=True,
-        warmup_steps: int = 0,
-        foreach: bool = True,
-        q_dtype="float32",
-        stochastic_schedule: bool = False,
-        storage_dtype: str = "float32",
-        mars: bool = False,
-        caution: bool = False,
-        mars_gamma: float = 0.0025,
-        delayed: Optional[bool] = C.use_default,
-        cached: Optional[bool] = C.use_default,
-        exp_avg_input: Optional[bool] = C.use_default,
-        gradient_clipping: C.str_or_fn = C.use_default,
-        update_clipping: C.str_or_fn = C.use_default,  #
-        # expert parameters
-        precond_init_scale=None,
-        precond_init_scale_scale=1,
-        precond_lr=0.1,
-    ):
-        defaults = locals()
-        defaults.pop("self")
-        self.precond_schedule = (
-            defaults.pop("preconditioner_update_probability") or utils.precond_update_prob_schedule()
-        )
-        params = defaults.pop("params")
-
-        delayed = C.default(delayed, self.delayed)
-        cached = C.default(cached, self.cached)
-        exp_avg_input = C.default(exp_avg_input, self.exp_avg_input)
-        update_clipping = C.default(update_clipping, utils.trust_region_clip_)
-
-        super().__init__(
-            params,
-            defaults,
-            foreach,
-            gradient_clipping,
-            update_clipping,
-            False,  #
-            *(C.exp_avg,) * exp_avg_input,  #
-            functools.partial(C.scale_by_delayed_psgd if delayed else C.scale_by_psgd, cached=cached),
-        )
-
-
 class ForeachPurePSGD(ForeachPSGDKron):
     exp_avg_input: bool = False
 
@@ -625,6 +564,74 @@ class ForeachCachedNewtonPSGD(ForeachCachedPSGDKron):
     hessian_approx = True
 
 
+class ForeachPSGDLRA(C.BaseOpt):
+    """
+    Originally from Evan Walters and Omead Pooladzandi, 2024
+    Modified under Creative Commons Attribution 4.0 International
+    Source available at https://github.com/evanatyourservice/kron_torch/blob/97a2b5ee8a1a4c29e4780bbf6c521e545189eff9/kron_torch/kron.py
+    """
+
+    delayed: bool = False
+    exp_avg_input: bool = True
+
+    def __init__(
+        self,
+        params,
+        lr=0.001,
+        beta=0.9,
+        weight_decay=0.0,
+        preconditioner_update_probability=None,
+        momentum_into_precond_update=True,
+        rank: int = 4,
+        warmup_steps: int = 0,
+        foreach: bool = True,
+        q_dtype="float32",
+        stochastic_schedule: bool = False,
+        storage_dtype: str = "float32",
+        mars: bool = False,
+        caution: bool = False,
+        mars_gamma: float = 0.0025,
+        delayed: Optional[bool] = C.use_default,
+        exp_avg_input: Optional[bool] = C.use_default,
+        gradient_clipping: C.str_or_fn = C.use_default,
+        update_clipping: C.str_or_fn = C.use_default,
+        eps: float = 1e-8,  #
+        # expert parameters
+        precond_init_scale=None,
+        precond_init_scale_scale=1,
+        precond_lr=0.1,
+    ):
+        defaults = locals()
+        defaults.pop("self")
+        self.precond_schedule = (
+            defaults.pop("preconditioner_update_probability") or utils.precond_update_prob_schedule()
+        )
+        params = defaults.pop("params")
+
+        delayed = C.default(delayed, self.delayed)
+        exp_avg_input = C.default(exp_avg_input, self.exp_avg_input)
+        update_clipping = C.default(update_clipping, utils.trust_region_clip_)
+
+        super().__init__(
+            params,
+            defaults,
+            foreach,
+            gradient_clipping,
+            update_clipping,
+            False,  #
+            *(C.exp_avg,) * exp_avg_input,  #
+            C.scale_by_delayed_psgd_lra if delayed else C.scale_by_psgd_lra,
+        )
+
+
+class ForeachDelayedPSGDLRA(ForeachPSGDLRA):
+    delayed: bool = True
+
+
+class ForeachNewtonPSGDLRA(ForeachPSGDLRA):
+    hessian_approx = True
+
+
 PalmForEachSoap = PaLMForeachSOAP
 PaLMSOAP = PaLMForeachSOAP
 PaLMSFAdamW = PaLMForeachSFAdamW
@@ -643,6 +650,9 @@ CachedPSGDKron = ForeachCachedPSGDKron
 CachedDelayedPSGDKron = ForeachCachedDelayedPSGDKron
 Muon = ForeachMuon
 SignLaProp = ForeachSignLaProp
+DelayedPSGDLRA = ForeachDelayedPSGDLRA
+PSGDLRA = ForeachPSGDLRA
+NewtonPSGDLRA = ForeachNewtonPSGDLRA
 
 __all__ = [
     "Muon",
@@ -662,7 +672,11 @@ __all__ = [
     "PrecondSchedulePaLMSOAP",
     "RMSprop",
     "MuonLaProp",
-    "ForeachSignLaProp",  #
+    "ForeachSignLaProp",
+    "ForeachDelayedPSGDLRA",
+    "ForeachPSGDLRA",
+    "ForeachPSGDLRA",
+    "ForeachNewtonPSGDLRA",  #
     "ForeachAdamW",
     "ForeachSFAdamW",
     "ForeachLaProp",
@@ -679,4 +693,7 @@ __all__ = [
     "OrthoLaProp",
     "LaPropOrtho",
     "SignLaProp",
+    "DelayedPSGD",
+    "PSGDLRA",
+    "NewtonPSGDLRA",
 ]

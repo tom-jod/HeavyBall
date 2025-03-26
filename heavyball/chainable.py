@@ -563,6 +563,9 @@ def _fused_cached_psgd_precond_grad(group, grad, param, cache_expr, exprs, updat
 def _update_lra(
     group, U: List[Tensor], V: List[Tensor], d: List[Tensor], params: List[Tensor], grads: List[Tensor], delayed: bool
 ):
+    if not group["is_preconditioning"]:
+        return utils.flatten(U, 1), utils.flatten(V, 1), utils.flatten(d)
+
     if hasattr(params[0], "hessian_vector") and params[0].hessian_vector is not None:
         vector = utils.flatten([p.vector for p in params])
         hessian_vector = utils.flatten([p.hessian_vector for p in params])

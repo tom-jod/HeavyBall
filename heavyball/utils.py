@@ -1317,7 +1317,8 @@ def psgd_balance_lra(U: Tensor, V: Tensor):
 
 @decorator
 def low_rank_mm(U: Tensor, V: Tensor, x: Tensor) -> Tensor:
-    return x + torch.einsum("br,gr,g->b", U, V, x)
+    dtype = min_dtype([U, V, x])
+    return x + torch.einsum("br,gr,g->b", U.to(dtype), V.to(dtype), x.to(dtype)).to(x.dtype)
 
 
 def update_lra_precond_(
@@ -1333,9 +1334,15 @@ def update_lra_precond_(
     """
     Adapted from https://github.com/lixilinx/psgd_torch/blob/6dbea94915679d08a289928e6431b6ce07931aaf/preconditioned_stochastic_gradient_descent.py#L657
     """
-    eps = scalar_guard(eps, vector)
     U_orig, V_orig, d_orig = U, V, d
-    U, V, d = flatten(U), flatten(V), flatten(d)
+
+    U, V, d = flatten(U, 1), flatten(V, 1), flatten(d)
+
+    dtype = min_dtype([U, V, vector, hessian_vector])
+    U, V, vector, hessian_vector = U.to(dtype), V.to(dtype), vector.to(dtype), hessian_vector.to(dtype)
+
+    eps = scalar_guard(eps, vector)
+
     Qh = low_rank_mm(U, V, d * hessian_vector)
     Ph = d * low_rank_mm(V, U, Qh)
     rank = U.size(1)
@@ -1347,8 +1354,8 @@ def update_lra_precond_(
 
     # LU factorization to reuse computation
     LU, pivots = torch.linalg.lu_factor(IpVtU)
-    invQtv = invQtv - V.mm(torch.linalg.lu_solve(LU, pivots, U.t().mm(invQtv), adjoint=True))
-    invPv = invQtv - U.mm(torch.linalg.lu_solve(LU, pivots, V.t().mm(invQtv)))
+    invQtv = invQtv - V @ torch.linalg.lu_solve(LU, pivots, (U.T @ invQtv).view(-1, 1), adjoint=True).flatten()
+    invPv = invQtv - U @ torch.linalg.lu_solve(LU, pivots, (V.T @ invQtv).view(-1, 1)).flatten()
     invPv = invPv / d
 
     nablaD = Ph * hessian_vector - vector * invPv
@@ -1362,32 +1369,32 @@ def update_lra_precond_(
 
     precond_u = random.random() < 0.5  # update either U or V, not both at the same time
     precond = V if precond_u else U
-    atV = torch.einsum("bo,br->or", a, precond)  # o == one
-    btV = torch.einsum("bo,br->or", b, precond)
-    atVVt = torch.einsum("or,br->ob", atV, precond)
-    btVVt = torch.einsum("or,br->ob", btV, precond)
+    atV = torch.einsum("b,br->r", a, precond)  # o == one
+    btV = torch.einsum("b,br->r", b, precond)
+    atVVt = torch.einsum("r,br->b", atV, precond)
+    btVVt = torch.einsum("r,br->b", btV, precond)
     precond_step = step / (a.norm() * atVVt.norm() + b.norm() * btVVt.norm() + eps)
     if precond_u:
-        a = torch.einsum("bo,or,rg->bg", a, atV, IpVtU)
-        b = torch.einsum("bo,or,rg->bg", b, btV, IpVtU)
+        a = torch.einsum("b,r,rg->bg", a, atV, IpVtU)
+        b = torch.einsum("b,r,rg->bg", b, btV, IpVtU)
     else:
-        a = a + torch.einsum("br,or->bo", V, atV)
-        b = b + torch.einsum("br,ob->bo", V, btV)
-        a = torch.einsum("bo,or->br", a, atV)
-        b = torch.einsum("br,or->br", b, btV)
+        a = a + torch.einsum("br,r->b", V, atV)
+        b = b + torch.einsum("br,r->b", V, btV)
+        a = torch.einsum("b,r->br", a, atV)
+        b = torch.einsum("b,r->br", b, btV)
     apply_flat_add(U_orig if precond_u else V_orig, b - a, precond_step)
 
     if not delayed:
         stochastic_add_([d], [d * nablaD], -d_step)
         stochastic_add_([U if precond_u else V], [b - a], precond_step)
-    return U, V, d
+    return U.to(U_orig[0].dtype), V.to(V_orig[0].dtype), d.to(d_orig[0].dtype)
 
 
 def lra_precond(U, V, d, g):
     """
     As-is from https://github.com/lixilinx/psgd_torch/blob/6dbea94915679d08a289928e6431b6ce07931aaf/preconditioned_stochastic_gradient_descent.py#L744
     """
-    g = low_rank_mm(U, V, d.flatten() * g)
+    g = low_rank_mm(U, V, d * g)
     return d * low_rank_mm(V, U, g)
 
 
@@ -1437,8 +1444,8 @@ def extract_from_flat_update(params: List[Tensor], update: Tensor):
     return outputs
 
 
-def flatten(x: List[Tensor]) -> Tensor:
-    return torch.cat([i.flatten(0, -2) for i in x], 0)
+def flatten(x: List[Tensor], remaining: int = 0) -> Tensor:
+    return torch.cat([i.flatten(0, -1 - remaining) for i in x], 0)
 
 
 def dampen_multiple(g: List[Tensor], damp: float = 2**-13):
