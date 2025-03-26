@@ -1353,7 +1353,17 @@ def update_lra_precond_(
     invQtv = vector / d
 
     # LU factorization to reuse computation
-    LU, pivots = torch.linalg.lu_factor(IpVtU)
+    try:
+        LU, pivots = torch.linalg.lu_factor(IpVtU)
+    except RuntimeError:
+        # Error:
+        # U[2,2] is zero and using it on lu_solve would result in a division by zero.
+        # If you still want to perform the factorization, consider calling
+        # linalg.lu(A, pivot) or linalg.lu_factor_ex(A, pivot)
+        # ---
+        # So, we skip this step and reattempt on the next one
+        return U.to(U_orig[0].dtype), V.to(V_orig[0].dtype), d.to(d_orig[0].dtype)
+
     invQtv = invQtv - V @ torch.linalg.lu_solve(LU, pivots, (U.T @ invQtv).view(-1, 1), adjoint=True).flatten()
     invPv = invQtv - U @ torch.linalg.lu_solve(LU, pivots, (V.T @ invQtv).view(-1, 1)).flatten()
     invPv = invPv / d
@@ -1409,27 +1419,30 @@ def dampen_grad(g: Tensor, damp: float = 2**-13):
 def apply_lra_update(params: List[Tensor], update: Tensor, U: Tensor, V: Tensor, d: Tensor):
     update = lra_precond(U, V, d, update)
     start = 0
+    update = update.flatten()
     for p in params:
         size = p.numel()
-        copy_stochastic_(p, update[start : start + size])
+        copy_stochastic_(p, update[start : start + size].view_as(p))
         start += size
 
 
 @decorator_knowngood
 def apply_flat_update(params: List[Tensor], update: Tensor):
     start = 0
+    update = update.flatten()
     for p in params:
         size = p.numel()
-        copy_stochastic_(p, update[start : start + size])
+        copy_stochastic_(p, update[start : start + size].view_as(p))
         start += size
 
 
 @decorator_knowngood
 def apply_flat_add(params: List[Tensor], update: Tensor, alpha: Tensor):
     start = 0
+    update = update.flatten()
     for p in params:
         size = p.numel()
-        stochastic_add_([p], [update[start : start + size]], alpha)
+        stochastic_add_([p], [update[start : start + size].view_as(p)], alpha)
         start += size
 
 
@@ -1437,9 +1450,10 @@ def apply_flat_add(params: List[Tensor], update: Tensor, alpha: Tensor):
 def extract_from_flat_update(params: List[Tensor], update: Tensor):
     start = 0
     outputs = []
+    update = update.flatten()
     for p in params:
         size = p.numel()
-        outputs.append(update[start : start + size])
+        outputs.append(update[start : start + size].view_as(p))
         start += size
     return outputs
 
