@@ -1,4 +1,5 @@
 import functools
+import math
 from typing import Optional
 
 from . import chainable as C
@@ -582,7 +583,7 @@ class ForeachPSGDLRA(C.BaseOpt):
         weight_decay=0.0,
         preconditioner_update_probability=None,
         momentum_into_precond_update=True,
-        rank: int = 4,
+        rank: Optional[int] = 4,
         warmup_steps: int = 0,
         foreach: bool = True,
         q_dtype="float32",
@@ -607,6 +608,13 @@ class ForeachPSGDLRA(C.BaseOpt):
             defaults.pop("preconditioner_update_probability") or utils.precond_update_prob_schedule()
         )
         params = defaults.pop("params")
+
+        if rank is None:
+            utils.warn_once(
+                f"{rank=}. It will be set to log2(param_count). This requires `params` to be of type list. Currently, {type(params)=}"
+            )
+            params = list(params)
+            defaults["rank"] = math.log2(sum(p.numel() for p in params))
 
         delayed = C.default(delayed, self.delayed)
         exp_avg_input = C.default(exp_avg_input, self.exp_avg_input)
