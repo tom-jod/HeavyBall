@@ -2,6 +2,7 @@ import functools
 import gc
 import math
 import random
+import re
 import string
 import warnings
 from typing import Callable, List, Optional, Tuple, Union
@@ -22,6 +23,9 @@ dynamic = False
 compile_mode_recommended_to_none = None
 zeroth_power_mode = "qr"  # 'qr' is baseline, 'newtonschulz' converges better and faster
 tiny_bf16 = torch.finfo(torch.bfloat16).tiny
+_cudnn_double_backward_pattern = re.compile(
+    r"the derivative for .* is not implemented\. Double backwards .* To run double backwards"
+)
 
 
 def decorator(func):
@@ -707,6 +711,8 @@ class StatefulOptimizer(torch.optim.Optimizer):
     precond_schedule: Union[Callable, float, None] = None
     stochastic_schedule: bool = False
     finite_differences: bool = False
+    fallback_to_finite_differences: bool = True
+    _fallback_enabled: bool = False
 
     def __init__(self, params, defaults, foreach: bool = True, use_ema: bool = False):
         super().__init__(params, {**defaults, "foreach": foreach})
@@ -820,6 +826,56 @@ class StatefulOptimizer(torch.optim.Optimizer):
                         set_(self.state_(p)["param_ema"], p.data)
                         set_(p.data, ema_clone)
 
+    def _finite_differences_hvp(self, closure):
+        with torch.enable_grad():
+            loss = closure()  # closure without retain_graph=True
+
+        grads = []
+        for group in self.param_groups:
+            for p, g in self.split_p_and_g_in_group(group, skip_none=True, should_promote=False):
+                grads.append(g)
+                p.vector = torch.randn_like(p)
+                p.orig = p.data.clone()
+                # scale taken from https://github.com/lixilinx/psgd_torch/blob/1943e66596111e78157ca1b72b31c1dfdf0653ef/preconditioned_stochastic_gradient_descent.py#L2161
+                stochastic_add_(p.data, p.vector, torch.finfo(p.dtype).eps ** 0.5)
+
+        with torch.enable_grad():
+            closure()
+
+        # we don't subtract the vector here again to avoid accumulating error from (x + eps - eps + eps - eps)
+        # this costs more memory, but the imprecision seems too severe to use the other method
+        for group in self.param_groups:
+            for p, g in self.split_p_and_g_in_group(group, skip_none=True, should_promote=False):
+                p.grad = grads.pop(0)
+                stochastic_add_(g, p.grad, -1)
+                p.hessian_vector = g
+                p.data.copy_(p.orig)
+                del p.orig
+        return loss
+
+    def _double_backward_hvp(self, closure):
+        with torch.enable_grad():
+            loss = modify_closure(closure)
+
+        for group in self.param_groups:
+            for p, g in self.split_p_and_g_in_group(group, skip_none=True, should_promote=False):
+                p.grad = g
+        params, grads = zip(*[
+            x
+            for group in self.param_groups
+            for x in self.split_p_and_g_in_group(group, skip_none=True, should_promote=False)
+        ])
+        vs = [torch.randn_like(p) for p in params]
+        with torch.enable_grad():
+            hvs = torch.autograd.grad(grads, params, vs)
+
+        for p, g, v, hv in zip(params, grads, vs, hvs):
+            p.hessian_vector = hv
+            p.grad = g
+            p.vector = v
+
+        return loss
+
     def _handle_closure(self, closure):
         hessian_approx = self.hessian_approx and self._is_preconditioning
 
@@ -833,54 +889,22 @@ class StatefulOptimizer(torch.optim.Optimizer):
                 loss = closure()
             return loss
 
-        if self.finite_differences:
-            with torch.enable_grad():
-                loss = closure()  # closure without retain_graph=True
+        if self.finite_differences or self._fallback_enabled:
+            return self._finite_differences_hvp(closure)
 
-            grads = []
-            for group in self.param_groups:
-                for p, g in self.split_p_and_g_in_group(group, skip_none=True, should_promote=False):
-                    grads.append(g)
-                    p.vector = torch.randn_like(p)
-                    p.orig = p.data.clone()
-                    # scale taken from https://github.com/lixilinx/psgd_torch/blob/1943e66596111e78157ca1b72b31c1dfdf0653ef/preconditioned_stochastic_gradient_descent.py#L2161
-                    stochastic_add_(p.data, p.vector, torch.finfo(p.dtype).eps ** 0.5)
-        else:
-            with torch.enable_grad():
-                loss = modify_closure(closure)
-
-        if self.finite_differences:
-            with torch.enable_grad():
-                closure()
-
-            # we don't subtract the vector here again to avoid accumulating error from (x + eps - eps + eps - eps)
-            # this costs more memory, but the imprecision seems too severe to use the other method
-            for group in self.param_groups:
-                for p, g in self.split_p_and_g_in_group(group, skip_none=True, should_promote=False):
-                    p.grad = grads.pop(0)
-                    stochastic_add_(g, p.grad, -1)
-                    p.hessian_vector = g
-                    p.data.copy_(p.orig)
-                    del p.orig
-        else:
-            for group in self.param_groups:
-                for p, g in self.split_p_and_g_in_group(group, skip_none=True, should_promote=False):
-                    p.grad = g
-            params, grads = zip(*[
-                x
-                for group in self.param_groups
-                for x in self.split_p_and_g_in_group(group, skip_none=True, should_promote=False)
-            ])
-            vs = [torch.randn_like(p) for p in params]
-            with torch.enable_grad():
-                hvs = torch.autograd.grad(grads, params, vs)
-
-            for p, g, v, hv in zip(params, grads, vs, hvs):
-                p.hessian_vector = hv
-                p.grad = g
-                p.vector = v
-
-        return loss
+        try:
+            return self._double_backward_hvp(closure)
+        except NotImplementedError as e:
+            if not self.fallback_to_finite_differences:
+                raise
+            if not any(isinstance(arg, str) and _cudnn_double_backward_pattern.match(arg) in arg for arg in e.args):
+                raise
+            if self._fallback_enabled:
+                raise
+        warn_once(
+            "CUDNN doesn't support double-backward for some models (including RNNs). Falling back to finite_differences.\nYou can accelerate startup by globally enabling finite_differences first (via opt.finite_differences=True or by subclassing it)"
+        )
+        return self._handle_closure(closure)
 
     def step(self, closure: Optional[Callable] = None):
         if self.precond_schedule is None:

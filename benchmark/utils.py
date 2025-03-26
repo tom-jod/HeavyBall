@@ -317,15 +317,7 @@ class Objective:
                     loss.backward()
                     return loss
 
-                try:
-                    loss = o.step(_closure)
-                except NotImplementedError:
-                    if not self.use_cudnn:
-                        raise
-                    o.finite_differences = True
-                    self.use_cudnn = False
-                    loss = o.step(_closure)
-
+                loss = o.step(_closure)
                 o.zero_grad()
 
                 with torch.no_grad():
