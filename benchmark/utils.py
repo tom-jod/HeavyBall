@@ -15,6 +15,7 @@ from torch import nn
 from torch._dynamo import config
 
 import heavyball.utils
+from heavyball import chainable as C
 
 config.cache_size_limit = 2**16
 
@@ -34,7 +35,7 @@ base_args = {
 }
 
 
-def get_optim(optim, params, **kwargs):
+def get_optim(optim, params, **kwargs) -> C.BaseOpt:
     args = {**base_args, **kwargs}
     signature = inspect.signature(optim)
     o = optim(params, **{k: v for k, v in args.items() if k in signature.parameters})
@@ -235,7 +236,7 @@ class Objective:
         self,
         failure_threshold,
         model,
-        opt,
+        opt: str,
         steps,
         group,
         data,
@@ -310,11 +311,10 @@ class Objective:
                 inp, tgt = self.data()
 
                 def _closure():
-                    with torch.backends.cudnn.flags(enabled=self.use_cudnn):
-                        loss = self.m() if inp is None else self.m(inp)
-                        if self.loss_fn is not None:
-                            loss = self.loss_fn(loss, tgt)
-                        loss.backward()
+                    loss = self.m() if inp is None else self.m(inp)
+                    if self.loss_fn is not None:
+                        loss = self.loss_fn(loss, tgt)
+                    loss.backward()
                     return loss
 
                 try:
@@ -322,6 +322,7 @@ class Objective:
                 except NotImplementedError:
                     if not self.use_cudnn:
                         raise
+                    o.finite_differences = True
                     self.use_cudnn = False
                     loss = o.step(_closure)
 

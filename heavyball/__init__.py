@@ -583,7 +583,7 @@ class ForeachPSGDLRA(C.BaseOpt):
         weight_decay=0.0,
         preconditioner_update_probability=None,
         momentum_into_precond_update=True,
-        rank: Optional[int] = 4,
+        rank: Optional[int] = None,
         warmup_steps: int = 0,
         foreach: bool = True,
         q_dtype="float32",
@@ -614,7 +614,8 @@ class ForeachPSGDLRA(C.BaseOpt):
                 f"{rank=}. It will be set to log2(param_count). This requires `params` to be of type list. Currently, {type(params)=}"
             )
             params = list(params)
-            defaults["rank"] = math.log2(sum(p.numel() for p in params))
+            defaults["rank"] = round(math.log2(sum(p.numel() for p in params)))
+            utils.warn_once(f"rank was set to {defaults['rank']}")
 
         delayed = C.default(delayed, self.delayed)
         exp_avg_input = C.default(exp_avg_input, self.exp_avg_input)
