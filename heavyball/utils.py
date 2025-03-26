@@ -897,13 +897,14 @@ class StatefulOptimizer(torch.optim.Optimizer):
         except NotImplementedError as e:
             if not self.fallback_to_finite_differences:
                 raise
-            if not any(isinstance(arg, str) and _cudnn_double_backward_pattern.match(arg) in arg for arg in e.args):
+            if not any(isinstance(arg, str) and _cudnn_double_backward_pattern.match(arg) for arg in e.args):
                 raise
             if self._fallback_enabled:
                 raise
         warn_once(
             "CUDNN doesn't support double-backward for some models (including RNNs). Falling back to finite_differences.\nYou can accelerate startup by globally enabling finite_differences first (via opt.finite_differences=True or by subclassing it)"
         )
+        self._fallback_enabled = True
         return self._handle_closure(closure)
 
     def step(self, closure: Optional[Callable] = None):
