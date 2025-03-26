@@ -514,7 +514,8 @@ def _update_psgd_cache(cached, Q_cache, q):
 def _cached_psgd_precond_grad(group, cache_expr, exprs, update, Q_mat, Q_cache, grad):
     if group.get("is_cached", False):
         out = utils.precond_grad_cached_(cache_expr, update, *Q_cache, caution=group["caution"], grad=grad)
-    out = utils.psgd_precond_grad(exprs[-1], update, *Q_mat, caution=group["caution"], grad=grad)
+    else:
+        out = utils.psgd_precond_grad(exprs[-1], update, *Q_mat, caution=group["caution"], grad=grad)
     group["caution"] = False  # we already cautioned here - shouldn't do it again
     return out
 
