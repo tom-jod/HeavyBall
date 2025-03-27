@@ -893,7 +893,7 @@ class StatefulOptimizer(torch.optim.Optimizer):
 
     def _double_backward_hvp(self, closure):
         with torch.enable_grad():
-            loss = modify_closure(closure, True)
+            loss = modify_closure(closure)
 
         params, grads = [], []
         for group in self.param_groups:
