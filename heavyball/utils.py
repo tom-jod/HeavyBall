@@ -715,6 +715,10 @@ def hasattr_none(obj, name):
     return getattr(obj, name, None) is not None
 
 
+class ExactHVPFailed(ValueError):
+    pass
+
+
 class StatefulOptimizer(torch.optim.Optimizer):
     """
     finite_differences saves memory, but needs more compute. (Alternative is true HVP)
@@ -889,7 +893,7 @@ class StatefulOptimizer(torch.optim.Optimizer):
 
     def _double_backward_hvp(self, closure):
         with torch.enable_grad():
-            loss = modify_closure(closure)
+            loss = modify_closure(closure, True)
 
         params, grads = [], []
         for group in self.param_groups:
@@ -902,12 +906,18 @@ class StatefulOptimizer(torch.optim.Optimizer):
 
         vs = [torch.randn_like(p) for p in params]
         with torch.enable_grad():
-            hvs = torch.autograd.grad(grads, params, vs)
+            hvs = torch.autograd.grad(grads, params, vs, create_graph=False, retain_graph=False, allow_unused=True)
 
+        unused = []
         for p, g, v, hv in zip(params, grads, vs, hvs):
             p.hessian_vector = hv
             p.grad = g
             p.vector = v
+            if hv is None:
+                unused.append(list(p.shape))
+
+        if unused:
+            raise ExactHVPFailed(f"Parameters with the following shapes have no 2nd order derivative: {unused}")
 
         return loss
 
@@ -935,11 +945,16 @@ class StatefulOptimizer(torch.optim.Optimizer):
                 raise
             if not any(isinstance(arg, str) and _cudnn_double_backward_pattern.match(arg) for arg in e.args):
                 raise
-            if self._fallback_enabled:
+            warn_once(
+                "CUDNN doesn't support double-backward for some models (including RNNs). "  #
+                "Falling back to finite_differences.\n"  #
+                "You can accelerate startup by globally enabling finite_differences first "  #
+                "(via opt.finite_differences=True or by subclassing it)"
+            )
+        except ExactHVPFailed as e:
+            if not self.fallback_to_finite_differences:
                 raise
-        warn_once(
-            "CUDNN doesn't support double-backward for some models (including RNNs). Falling back to finite_differences.\nYou can accelerate startup by globally enabling finite_differences first (via opt.finite_differences=True or by subclassing it)"
-        )
+            warn_once(e.args[0])
         self._fallback_enabled = True
         return self._handle_closure(closure)
 
