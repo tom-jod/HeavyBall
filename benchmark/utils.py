@@ -340,7 +340,7 @@ class Objective:
             self.best_loss = loss
             self.best_at = self.attempt
             self.avg = np.log(np.array(params))
-        if self.best_at * 4 < self.attempt and self.attempt - self.best_at > 50:  # no improvement in a while
+        if self.best_at * 8 < self.attempt and self.attempt - self.best_at > 64:  # no improvement in a while
             raise Stop
         return target
 
@@ -422,7 +422,14 @@ def trial(
     heavyball.utils.zeroth_power_mode = method
 
     torch.cuda.empty_cache()
+    gc.enable()
     gc.collect()
+    gc.disable()
+    with torch.cuda.device("cuda"):
+        torch.cuda.empty_cache()
+        torch.cuda.synchronize()
+        torch.cuda.empty_cache()
+        torch.cuda.synchronize()
 
     torch.manual_seed(0x1239121)
     np.random.seed(0x1239122)

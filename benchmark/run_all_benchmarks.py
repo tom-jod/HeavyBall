@@ -1,10 +1,12 @@
-# main.py
 import multiprocessing
+import os
+import random
 import re
 import traceback
 from datetime import datetime
 
 import numpy as np
+import torch
 import typer
 
 app = typer.Typer()
@@ -18,7 +20,7 @@ def last_match(pattern, text):
     return float(last)
 
 
-def run_benchmark(script, opt, steps, dtype, trials):
+def run_benchmark(script, opt, steps, dtype, trials, seed):
     base = {"name": script.replace(".py", ""), "opt": opt}
 
     import io
@@ -33,6 +35,10 @@ def run_benchmark(script, opt, steps, dtype, trials):
     try:
         module_name = script.replace(".py", "")
         module = __import__(module_name)
+
+        torch.manual_seed(seed)
+        np.random.seed(seed)
+        random.seed(seed)
 
         # Build arguments
         arguments = {
@@ -71,6 +77,7 @@ def run_benchmark(script, opt, steps, dtype, trials):
         "loss": float(loss) if loss else float("inf"),
         "attempts": attempts,
         "error": error if error else "",
+        "seed": seed,
     }
 
 
@@ -108,23 +115,52 @@ def write_progress(results, opt, output):
             f.write(f"| {o} | {caution} | {mars} | {success}/{len(opt_results)} | {runtime:.2f}s | {attempts:.1f} |\n")
 
         f.write("\n## Details\n\n")
-        f.write("| Benchmark | Optimizer | Cautious | Mars | Success | Runtime | Loss | Attempts | \n")
-        f.write("|-----------|-----------|---------|---|---|----------|------|---|\n")
+        f.write("| Benchmark | Optimizer | Cautious | Mars | Success | Runtime | Loss | Attempts | Seed |\n")
+        f.write("|-----------|-----------|---------|---|---|----------|------|---|---|\n")
 
         for r in sorted(results, key=lambda x: (x["name"], x["opt"])):
             mark = "✓" if r["success"] else "✗"
             runtime = f"{r['runtime']:.2f}s"
             loss = f"{r['loss']:.2e}"
             attempts = f"{r['attempts']:d}"
+            seed = f"{r['seed']}"
 
             opt, caution, mars = opt_to_config(r["opt"])
-            f.write(f"| {r['name']} | {opt} | {caution} | {mars} | {mark} | {runtime} | {loss} | {attempts} | \n")
+            f.write(
+                f"| {r['name']} | {opt} | {caution} | {mars} | {mark} | {runtime} | {loss} | {attempts} | {seed} |\n"
+            )
 
         if any(not r["success"] for r in results):
             f.write("\n## Errors\n\n")
             for r in sorted(results, key=lambda x: (x["name"], x["opt"])):
                 if not r["success"] and r["error"]:
                     f.write(f"\n### {r['name']} - {r['opt']}\n```\n{r['error']}\n```\n")
+
+
+def worker(task_queue, result_queue, worker_index):
+    os.environ["CUDA_VISIBLE_DEVICES"] = str(worker_index % torch.cuda.device_count())
+    torch.set_num_threads(1)
+    os.environ["OMP_NUM_THREADS"] = "1"
+    os.environ["MKL_NUM_THREADS"] = "1"
+
+    while True:
+        try:
+            script, o, steps, dtype, trials, seed = task_queue.get()
+            try:
+                result = run_benchmark(script, o, steps, dtype, trials, seed)
+            except Exception as exc:
+                result = {
+                    "name": script.replace(".py", ""),
+                    "opt": o,
+                    "success": False,
+                    "runtime": None,
+                    "attempts": 0,
+                    "loss": float("inf"),
+                    "error": str(exc),
+                }
+            result_queue.put(result)
+        except Exception:
+            break
 
 
 @app.command()
@@ -135,11 +171,14 @@ def main(
     output: str = "benchmark_results.md",
     trials: int = 1000,
     dtype: str = "float32",
-    parallelism: int = 16,
+    parallelism: int = typer.Option(8, help="Number of parallel worker processes"),
     caution: bool = False,
     mars: bool = False,
     unscaled_caution: bool = False,
+    seeds: int = 4,
 ):
+    multiprocessing.set_start_method("forkserver", force=True)
+
     benchmarks = [
         "beale.py",
         "rosenbrock.py",
@@ -150,6 +189,9 @@ def main(
         "xor_sequence.py",
         "xor_digit.py",
         "xor_spot.py",
+        "xor_sequence_rnn.py",
+        "xor_digit_rnn.py",
+        "xor_spot_rnn.py",
         "saddle_point.py",
         "saddle_point_0init.py",
         "discontinuous_gradient.py",
@@ -166,7 +208,7 @@ def main(
         "gradient_noise_scale.py",
         "adversarial_gradient.py",
         "dynamic_landscape.py",
-        "exploding_gradient.py",
+        "constrained_optimization.py",
     ]
 
     if mars:
@@ -176,40 +218,18 @@ def main(
     if unscaled_caution:
         opt = ["unscaled_cautious-" + o for o in opt]
 
-    # Create task queue and result queue
     task_queue = multiprocessing.Queue()
     result_queue = multiprocessing.Queue()
 
-    # Create all tasks
-    total_tasks = len(benchmarks) * len(opt)
+    total_tasks = len(benchmarks) * len(opt) * seeds
     for script in benchmarks:
         for o in opt:
-            task_queue.put((script, o, steps, dtype, trials))
+            for i in range(seeds):
+                task_queue.put((script, o, steps, dtype, trials, i))
 
-    def worker(task_queue, result_queue):
-        while True:
-            try:
-                script, o, steps, dtype, trials = task_queue.get()
-                try:
-                    result = run_benchmark(script, o, steps, dtype, trials)
-                except Exception as exc:
-                    result = {
-                        "name": script.replace(".py", ""),
-                        "opt": o,
-                        "success": False,
-                        "runtime": None,
-                        "attempts": 0,
-                        "loss": float("inf"),
-                        "error": str(exc),
-                    }
-                result_queue.put(result)
-            except Exception:
-                break
-
-    # Start worker processes
     processes = []
-    for _ in range(min(parallelism, total_tasks)):
-        p = multiprocessing.Process(target=worker, args=(task_queue, result_queue), daemon=True)
+    for idx in range(min(parallelism, total_tasks)):
+        p = multiprocessing.Process(target=worker, args=(task_queue, result_queue, idx), daemon=True)
         p.start()
         processes.append(p)
 
