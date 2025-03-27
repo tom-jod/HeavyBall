@@ -47,7 +47,7 @@ def main(
         model,
         data,
         F.mse_loss,
-        param_norm_win_condition(1e-7 * win_condition_multiplier, model.target),
+        param_norm_win_condition(1e-7 * win_condition_multiplier, 0),
         steps,
         opt[0],
         dtype[0],
