@@ -586,7 +586,7 @@ def _compilable_stochastic_add_divide_(x: List[Tensor], y: List[Tensor], alpha: 
 def stochastic_add_divide_(x: List[Tensor], y: List[Tensor], alpha: Union[float, int, Tensor] = 1, divisor: float = 1):
     x, y = list_guard(x, y)
     alpha, divisor = scalar_guard(alpha, divisor, x[0])
-    _compilable_stochastic_add_(x, y, alpha, divisor)
+    _compilable_stochastic_add_divide_(x, y, alpha, divisor)
 
 
 @decorator_knowngood
