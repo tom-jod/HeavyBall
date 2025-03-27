@@ -2,6 +2,7 @@ import multiprocessing
 import os
 import random
 import re
+import time
 import traceback
 from datetime import datetime
 
@@ -232,6 +233,7 @@ def main(
         p = multiprocessing.Process(target=worker, args=(task_queue, result_queue, idx), daemon=True)
         p.start()
         processes.append(p)
+        time.sleep(3)  # we can't start too many processes very quickly - otherwise there's errors with the cuda context
 
     # Collect results
     results = []
