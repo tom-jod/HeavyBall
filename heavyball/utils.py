@@ -741,29 +741,44 @@ class StatefulOptimizer(torch.optim.Optimizer):
         mars_correction(g_list, old_gs, mars_gamma, beta)
 
     def split_p_and_g_in_group(
-        self, group: dict, skip_none: bool = True, should_promote: bool = True, beta1: float = -1.0
+        self,
+        group: dict,
+        skip_none: bool = True,
+        should_promote: bool = True,
+        beta1: float = -1.0,
+        raw: bool = False,
     ):
         for p in group["params"]:
+            grad = getattr(p, "grad", None)
+            if grad is None and skip_none:
+                continue
+
+            if raw:
+                yield p, grad
+
             if p in self.mapping:
                 p_views = self.mapping[p]
             else:
                 self.mapping[p] = p_views = merge_group(group, p)
 
-            grad = getattr(p, "grad", None)
+            vector = getattr(p, "vector", None)
+            hessian_vector = getattr(p, "hessian_vector", None)
+            p.vector = None
+            p.hessian_vector = None
             p.grad = None
 
-            if grad is None:
-                grad = [getattr(pv, "grad", None) for pv in p_views]
-            else:
-                grad = merge_group(group, grad)
+            grad, vs, hvs = [
+                [None] * len(p_views) if x is None else merge_group(group, x)  #
+                for x in (grad, vector, hessian_vector)
+            ]
 
-            for pv, g in zip(p_views, grad):
-                if skip_none and g is None:
-                    continue
+            for pv, g, v, hv in zip(p_views, grad, vs, hvs):
                 if should_promote:
                     g = promote(g)
                 if beta1 >= 0 and group.get("mars", False):
                     self.mars_correct_list(group, [pv], [g], group["mars_gamma"], beta1)
+                pv.vector = v
+                pv.hessian_vector = hv
                 yield pv, g
 
     def state_size(self) -> int:
@@ -833,7 +848,7 @@ class StatefulOptimizer(torch.optim.Optimizer):
 
         grads = []
         for group in self.param_groups:
-            for p, g in self.split_p_and_g_in_group(group, skip_none=True, should_promote=False):
+            for p, g in self.split_p_and_g_in_group(group, skip_none=True, raw=True):
                 grads.append(g)
                 p.vector = torch.randn_like(p)
                 p.orig = p.data.clone()
@@ -846,7 +861,7 @@ class StatefulOptimizer(torch.optim.Optimizer):
         # we don't subtract the vector here again to avoid accumulating error from (x + eps - eps + eps - eps)
         # this costs more memory, but the imprecision seems too severe to use the other method
         for group in self.param_groups:
-            for p, g in self.split_p_and_g_in_group(group, skip_none=True, should_promote=False):
+            for p, g in self.split_p_and_g_in_group(group, skip_none=True, raw=True):
                 p.grad = grads.pop(0)
                 stochastic_add_(g, p.grad, -1)
                 p.hessian_vector = g
@@ -860,7 +875,7 @@ class StatefulOptimizer(torch.optim.Optimizer):
 
         params, grads = [], []
         for group in self.param_groups:
-            for p, g in self.split_p_and_g_in_group(group, skip_none=True, should_promote=False):
+            for p, g in self.split_p_and_g_in_group(group, skip_none=True, raw=True):
                 params.append(p)
                 grads.append(g)
 
