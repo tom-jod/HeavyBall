@@ -858,14 +858,15 @@ class StatefulOptimizer(torch.optim.Optimizer):
         with torch.enable_grad():
             loss = modify_closure(closure)
 
+        params, grads = [], []
         for group in self.param_groups:
             for p, g in self.split_p_and_g_in_group(group, skip_none=True, should_promote=False):
-                p.grad = g
-        params, grads = zip(*[
-            x
-            for group in self.param_groups
-            for x in self.split_p_and_g_in_group(group, skip_none=True, should_promote=False)
-        ])
+                params.append(p)
+                grads.append(g)
+
+        if not params:
+            raise ValueError("No parameter has gradients")
+
         vs = [torch.randn_like(p) for p in params]
         with torch.enable_grad():
             hvs = torch.autograd.grad(grads, params, vs)
