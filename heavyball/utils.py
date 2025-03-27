@@ -711,6 +711,10 @@ def modify_closure(closure):
         return closure()
 
 
+def hasattr_none(obj, name):
+    return getattr(obj, name, None) is not None
+
+
 class StatefulOptimizer(torch.optim.Optimizer):
     """
     finite_differences saves memory, but needs more compute. (Alternative is true HVP)
@@ -1531,8 +1535,6 @@ def dampen_multiple(g: List[Tensor], damp: float = 2**-13):
 
 def psgd_calc_A_and_conjB(exprA, G, Q, V=None):
     order = G.dim()
-    if V is None:
-        V, G = dampen_grad(G)
     conjB = V.permute(*range(1, order), 0).to(promote(G.dtype))
     md = min_dtype(Q + [G])
     A = torch.einsum(exprA, *[q.to(md) for q in Q], G.to(md)).to(G.dtype)

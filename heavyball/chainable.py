@@ -43,7 +43,7 @@ class FunctionTransform:
         raise NotImplementedError
 
     def get_fn(self):
-        if hasattr(self.fn, "get_fn"):
+        if utils.hasattr_none(self.fn, "get_fn"):
             return self.fn.get_fn()
         return self.fn
 
@@ -484,18 +484,22 @@ def _update_psgd_precond(cached, Q_cache, group, param, grad, Q_mat, Q, exprs, p
     if not group["is_preconditioning"]:
         return Q_mat
 
+    if utils.hasattr_none(param, "vector"):
+        vector, hessian_vector = param.vector, param.hessian_vector
+        del param.vector
+        del param.hessian_vector
+    else:
+        vector, hessian_vector = utils.dampen_grad(grad)
+
     utils.psgd_update_precond(
         Q_mat,
         exprs,
-        getattr(param, "hessian_vector", grad),
+        hessian_vector,
         group["precond_lr"],
         Q,
         group["store_triu_as_line"],
-        getattr(param, "vector", None),
+        vector,
     )
-    if hasattr(param, "vector"):
-        del param.vector
-        del param.hessian_vector
 
     if grad.dim() > 1 and precond_schedule(group, balance_probability, f"balance_prob_{id(Q)}"):
         if group["store_triu_as_line"]:
@@ -566,7 +570,7 @@ def _update_lra(
     if not group["is_preconditioning"]:
         return utils.flatten(U, 1), utils.flatten(V, 1), utils.flatten(d)
 
-    if hasattr(params[0], "hessian_vector") and params[0].hessian_vector is not None:
+    if utils.hasattr_none(params[0], "hessian_vector"):
         vector = utils.flatten([p.vector for p in params])
         hessian_vector = utils.flatten([p.hessian_vector for p in params])
     else:
