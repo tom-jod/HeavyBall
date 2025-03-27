@@ -573,6 +573,9 @@ def _update_lra(
     if utils.hasattr_none(params[0], "hessian_vector"):
         vector = utils.flatten([p.vector for p in params])
         hessian_vector = utils.flatten([p.hessian_vector for p in params])
+        for p in params:
+            del p.vector
+            del p.hessian_vector
     else:
         vector, hessian_vector = utils.dampen_multiple(grads)
     return utils.update_lra_precond_(U, V, d, vector, hessian_vector, group["eps"], group["precond_lr"], delayed)

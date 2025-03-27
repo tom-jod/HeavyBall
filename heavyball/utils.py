@@ -637,6 +637,20 @@ def promote(x):
     return x
 
 
+def promote_detach(x, should_promote):
+    if x is None:
+        return x
+    if should_promote:
+        x = promote(x)
+    return x.detach()
+
+
+def detach(x):
+    if isinstance(x, Tensor):
+        return x.detach()
+    return x
+
+
 def min_dtype(xs: List[Tensor]):
     dtypes = [x.dtype for x in xs]
     for d in (torch.float32, torch.bfloat16, torch.float16):
@@ -796,12 +810,11 @@ class StatefulOptimizer(torch.optim.Optimizer):
             ]
 
             for pv, g, v, hv in zip(p_views, grad, vs, hvs):
-                if should_promote and g is not None:
-                    g = promote(g)
+                g = promote_detach(g, should_promote)
                 if beta1 >= 0 and group.get("mars", False):
                     self.mars_correct_list(group, [pv], [g], group["mars_gamma"], beta1)
-                pv.vector = promote(v) if should_promote and v is not None else v
-                pv.hessian_vector = promote(hv) if should_promote and hv is not None else hv
+                pv.vector = promote_detach(v, should_promote)
+                pv.hessian_vector = promote_detach(hv, should_promote)
                 yield pv, g
 
     def state_size(self) -> int:
@@ -911,9 +924,9 @@ class StatefulOptimizer(torch.optim.Optimizer):
 
         unused = []
         for p, g, v, hv in zip(params, grads, vs, hvs):
-            p.hessian_vector = hv
-            p.grad = g
-            p.vector = v
+            p.hessian_vector = detach(hv)
+            p.grad = detach(g)
+            p.vector = detach(v)
             if hv is None:
                 unused.append(list(p.shape))
 
@@ -973,7 +986,11 @@ class StatefulOptimizer(torch.optim.Optimizer):
                 self._step(group)
                 if self.use_ema:
                     self.ema_update()
-
+                for raw in (True, False):
+                    for p, _ in self.split_p_and_g_in_group(group, skip_none=False, should_promote=False, raw=raw):
+                        for key in ("grad", "vector", "hessian_vector", "orig"):
+                            if hasattr(p, key):
+                                setattr(p, key, None)
         return loss
 
 
