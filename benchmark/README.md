@@ -58,3 +58,4 @@ Each test is tagged with categories describing specific optimization challenges:
 | XOR Digit | Tests RNN weak gradient learning (~RL) | Weak Gradients & Memory | ✓ |
 | XOR Sequence | Tests RNN state compression (~AE, LLM) | Compression & Sequential | ✓ |
 | XOR Spot | Tests RNN multiplicative effects (~RL) | Multiplicative & Memory | ✓ |
+| Explicit Constraints | verifying convergence to the boundary of a constrained region | Explicit Constraints | ✓ |
