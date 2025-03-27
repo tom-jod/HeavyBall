@@ -576,6 +576,20 @@ def stochastic_add_(x: List[Tensor], y: List[Tensor], alpha: Union[float, int, T
 
 
 @decorator_knowngood
+def _compilable_stochastic_add_divide_(x: List[Tensor], y: List[Tensor], alpha: Tensor, divisor: Tensor):
+    for x_, y_ in zip(x, y):
+        x32 = promote(x_)
+        y32 = promote(y_)
+        copy_stochastic_(x_, (x32 + y32 * alpha) / divisor)
+
+
+def stochastic_add_divide_(x: List[Tensor], y: List[Tensor], alpha: Union[float, int, Tensor] = 1, divisor: float = 1):
+    x, y = list_guard(x, y)
+    alpha, divisor = scalar_guard(alpha, divisor, x[0])
+    _compilable_stochastic_add_(x, y, alpha, divisor)
+
+
+@decorator_knowngood
 def _compilable_stochastic_multiply_(x: List[Tensor], y: List[Tensor]):
     for x_, y_ in zip(x, y):
         x32 = promote(x_)
@@ -773,12 +787,12 @@ class StatefulOptimizer(torch.optim.Optimizer):
             ]
 
             for pv, g, v, hv in zip(p_views, grad, vs, hvs):
-                if should_promote:
+                if should_promote and g is not None:
                     g = promote(g)
                 if beta1 >= 0 and group.get("mars", False):
                     self.mars_correct_list(group, [pv], [g], group["mars_gamma"], beta1)
-                pv.vector = v
-                pv.hessian_vector = hv
+                pv.vector = promote(v) if should_promote and v is not None else v
+                pv.hessian_vector = promote(hv) if should_promote and hv is not None else hv
                 yield pv, g
 
     def state_size(self) -> int:
@@ -863,7 +877,7 @@ class StatefulOptimizer(torch.optim.Optimizer):
         for group in self.param_groups:
             for p, g in self.split_p_and_g_in_group(group, skip_none=True, raw=True):
                 p.grad = grads.pop(0)
-                stochastic_add_(g, p.grad, -1)
+                stochastic_add_divide_(g, p.grad, -1, torch.finfo(p.dtype).eps ** 0.5)
                 p.hessian_vector = g
                 p.data.copy_(p.orig)
                 del p.orig
