@@ -777,6 +777,7 @@ class StatefulOptimizer(torch.optim.Optimizer):
 
             if raw:
                 yield p, grad
+                continue
 
             if p in self.mapping:
                 p_views = self.mapping[p]
