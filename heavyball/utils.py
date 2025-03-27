@@ -899,7 +899,7 @@ class StatefulOptimizer(torch.optim.Optimizer):
         for group in self.param_groups:
             for p, g in self.split_p_and_g_in_group(group, skip_none=True, raw=True):
                 p.grad = grads.pop(0)
-                stochastic_add_divide_(g, p.grad, -1, torch.finfo(p.dtype).eps ** 0.5)
+                stochastic_add_(g, p.grad, -1)  # technically, we have to divide by the scale here
                 p.hessian_vector = g
                 p.data.copy_(p.orig)
                 del p.orig
@@ -986,11 +986,11 @@ class StatefulOptimizer(torch.optim.Optimizer):
                 self._step(group)
                 if self.use_ema:
                     self.ema_update()
-                for raw in (True, False):
-                    for p, _ in self.split_p_and_g_in_group(group, skip_none=False, should_promote=False, raw=raw):
+                for real, views in self.mapping.items():
+                    for tensor in (real, *views):
                         for key in ("grad", "vector", "hessian_vector", "orig"):
-                            if hasattr(p, key):
-                                setattr(p, key, None)
+                            if hasattr(tensor, key):
+                                setattr(tensor, key, None)
         return loss
 
 
