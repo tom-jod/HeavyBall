@@ -24,9 +24,9 @@ expected_memory = {
 }
 
 
-@pytest.mark.parametrize("opt", ["ForeachPSGDKron"])
+@pytest.mark.parametrize("opt", ["NewtonHybrid2PSGDKron"])
 @pytest.mark.parametrize("method", ["qr", "newtonschulz2", "svd", "eigh"])
-@pytest.mark.parametrize("size,depth", [(8192, 1), (2048, 16)])
+@pytest.mark.parametrize("size,depth", [(8192, 2), (2048, 16)])
 def test_memory(opt, method, size, depth: int, iterations: int = 5, outer_iterations: int = 3):
     if "soap" not in opt.lower() and method != "qr":
         raise pytest.skip("Only SOAP supports `method` argument")
@@ -43,7 +43,7 @@ def test_memory(opt, method, size, depth: int, iterations: int = 5, outer_iterat
 
     for i in range(outer_iterations):
         model = nn.Sequential(*[nn.Linear(size, size) for _ in range(depth)]).cuda()
-
+        print(model)
         torch.cuda.reset_peak_memory_stats()
         torch.cuda.reset_max_memory_allocated()
         torch.cuda.reset_max_memory_cached()
@@ -52,11 +52,17 @@ def test_memory(opt, method, size, depth: int, iterations: int = 5, outer_iterat
         model_allocated = get_memory()
         o = get_optim(opt, model.parameters(), lr=1e-3)
         for _ in range(iterations):
-            model(torch.randn((1, size), device="cuda")).sum().backward()
-            o.step()
+            data = torch.randn((1, size), device="cuda").requires_grad_(True)
+
+            def _closure():
+                nonlocal model
+                loss = (model(data) - data).square().mean()
+                loss.backward()
+                return loss
+
+            o.step(_closure)
 
             opt_allocated = get_memory()
-            o.zero_grad()
 
         del model, o
         peak = torch.cuda.memory_stats()["allocated_bytes.all.peak"]
