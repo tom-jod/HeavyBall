@@ -1,4 +1,5 @@
 import functools
+import math
 import random
 from typing import List, Literal, Optional, Union
 
@@ -426,13 +427,47 @@ def _store_std(state, group, update, grad, param):
     state["init_std"] = torch.std(grad, dim=0)
 
 
-@general_guard("init_std", init_fn=_store_std)
+@general_guard("init_std", init_fn=_store_std, skip_first=False)
 @no_state
 def mup_approx(group, updates, grads, params, init_std):
     _updates = [(u, i) for u, i in zip(updates, init_std) if u.ndim > 1]
     _updates, _init_std = zip(*_updates)
     utils.stochastic_multiply_(_updates, _init_std)
     return updates
+
+
+def _init_delta(state, group, update, grad, param, log_space: bool):
+    val = group["initial_d"]
+    state["delta"] = torch.full((), math.log(val) if log_space else val, dtype=param.dtype, device=param.device)
+
+
+def _init_full_delta(state, group, update, grad, param, log_space: bool):
+    val = group["initial_d"]
+    state["delta"] = torch.full_like(param, math.log(val) if log_space else val)
+
+
+@zero_guard("state")
+@general_guard("delta", init_fn=functools.partial(_init_delta, log_space=False), skip_first=False)
+@no_state
+def scale_by_d_adaptation(group, update, grad, param, state, delta):
+    utils.d_adaptation(grad, update, state, delta)
+    return update
+
+
+@zero_guard("state")
+@general_guard("delta", init_fn=functools.partial(_init_delta, log_space=True), skip_first=False)
+@no_state
+def scale_by_lr_adaptation(group, update, grad, param, state, delta):
+    utils.lr_adaptation(grad, update, state, delta, group["lr_lr"])
+    return update
+
+
+@zero_guard("state")
+@general_guard("delta", init_fn=functools.partial(_init_full_delta, log_space=True), skip_first=False)
+@no_state
+def scale_by_pointwise_lr_adaptation(group, update, grad, param, state, delta):
+    utils.pointwise_lr_adaptation(grad, update, state, delta, group["lr_lr"])
+    return update
 
 
 @zero_guard("momentum")

@@ -26,6 +26,12 @@ tiny_bf16 = torch.finfo(torch.bfloat16).tiny
 _cudnn_double_backward_pattern = re.compile(
     r"the derivative for .* is not implemented\. Double backwards .* To run double backwards"
 )
+_torch_compile_double_backward_pattern = re.compile(r"compile.*does not currently support double backward")
+_fd_error = (
+    "You can accelerate startup by globally enabling finite_differences first "  #
+    "(via opt.finite_differences=True or by subclassing it)\n"
+    "Original Error: "
+)
 
 
 def decorator(func):
@@ -961,14 +967,21 @@ class StatefulOptimizer(torch.optim.Optimizer):
                 raise
             warn_once(
                 "CUDNN doesn't support double-backward for some models (including RNNs). "  #
-                "Falling back to finite_differences.\n"  #
-                "You can accelerate startup by globally enabling finite_differences first "  #
-                "(via opt.finite_differences=True or by subclassing it)"
+                f"Falling back to finite_differences.\n{_fd_error}{e}"
+            )
+        except RuntimeError as e:
+            if not self.fallback_to_finite_differences:
+                raise
+            if not any(isinstance(arg, str) and _torch_compile_double_backward_pattern.match(arg) for arg in e.args):
+                raise
+            warn_once(
+                f"torch.compile does not support double-backward. Disabling it may be beneficial, depending on "
+                f"the model.\n{_fd_error}{e}"
             )
         except ExactHVPFailed as e:
             if not self.fallback_to_finite_differences:
                 raise
-            warn_once(e.args[0])
+            warn_once(f"Exact HVP calculation failed.\n{_fd_error}{e}")
         self._fallback_enabled = True
         return self._handle_closure(closure)
 
@@ -1555,7 +1568,7 @@ def extract_from_flat_update(params: List[Tensor], update: Tensor):
 @decorator_knowngood
 def flatten(x: List[Tensor], remaining: int = 0) -> Tensor:
     last_dim = x[0].shape[-remaining:] if remaining else []
-    return torch.cat([i.view(-1, *last_dim) for i in x], 0)
+    return torch.cat([i.reshape(-1, *last_dim) for i in x], 0)
 
 
 @decorator_knowngood
@@ -1575,10 +1588,10 @@ def casted_einsum(expr: str, *args: Tensor) -> Tensor:
     return torch.einsum(expr, *[a.to(md) for a in args]).to(args[-1].dtype)
 
 
-def psgd_calc_A_and_conjB(exprA, G, Q, V=None):
+def psgd_calc_A_and_conjB(exprA, G, Q, conjB):  # conjB ("V", "vector") == randn during hvp/whitening
     order = G.dim()
     if order > 1:
-        conjB = V.view_as(G).permute(*range(1, order), 0)
+        conjB = conjB.view_as(G).permute(*range(1, order), 0)
     conjB = conjB.to(promote(G.dtype))
     A = casted_einsum(exprA, *Q, G)
     for i, q in enumerate(Q):
@@ -1982,6 +1995,68 @@ def merge_group(group, *tensors):
             ),
         )
     return out
+
+
+@decorator_knowngood
+def _compilable_d_adapt_(grads: List[Tensor], update: List[Tensor], state: List[Tensor], delta: List[Tensor]):
+    for g_, u_, s_, d_ in zip(grads, update, state, delta):
+        g, u, s, d = promote(g_), promote(u_), promote(s_), promote(d_)
+        next_d = d * (g * s).sum()
+        s = s + u * d
+        next_d = next_d / s.abs().sum()
+        next_d = torch.maximum(next_d, d)
+        copy_stochastic_(u_, u * d)
+        copy_stochastic_(d_, next_d)
+        copy_stochastic_(s_, s)
+
+
+def d_adaptation(grads: List[Tensor], update: List[Tensor], state: List[Tensor], delta: List[Tensor]):
+    grads, update, state, delta = list_guard(grads, update, state, delta)
+    _compilable_d_adapt_(grads, update, state, delta)
+
+
+@decorator_knowngood
+def _compilable_lr_adapt_(
+    grads: List[Tensor], update: List[Tensor], state: List[Tensor], delta: List[Tensor], lr_lr: Tensor
+):
+    for g_, u_, s_, d_ in zip(grads, update, state, delta):
+        g, u, s, d = promote(g_), promote(u_), promote(s_), promote(d_)
+        lr_grad = d.sigmoid()
+        lr_grad = lr_grad * (1 - lr_grad)
+        lr_grad = lr_grad * (s * g).mean()
+        d = d - lr_grad * lr_lr
+        copy_stochastic_(d_, d)
+        copy_stochastic_(u_, u * d.sigmoid())
+        copy_stochastic_(s_, u)
+
+
+def lr_adaptation(grads: List[Tensor], update: List[Tensor], state: List[Tensor], delta: List[Tensor], lr_lr: float):
+    grads, update, state, delta = list_guard(grads, update, state, delta)
+    lr_lr = scalar_guard(lr_lr, grads[0])
+    _compilable_lr_adapt_(grads, update, state, delta, lr_lr)
+
+
+@decorator_knowngood
+def _compilable_pointwise_lr_adapt_(
+    grads: List[Tensor], update: List[Tensor], state: List[Tensor], delta: List[Tensor], lr_lr: Tensor
+):
+    for g_, u_, s_, d_ in zip(grads, update, state, delta):
+        g, u, s, d = promote(g_), promote(u_), promote(s_), promote(d_)
+        lr_grad = d.sigmoid()
+        lr_grad = lr_grad * (1 - lr_grad)
+        lr_grad = lr_grad * s * g
+        d = d - lr_grad * lr_lr
+        copy_stochastic_(d_, d)
+        copy_stochastic_(u_, u * d.sigmoid())
+        copy_stochastic_(s_, u)
+
+
+def pointwise_lr_adaptation(
+    grads: List[Tensor], update: List[Tensor], state: List[Tensor], delta: List[Tensor], lr_lr: float
+):
+    grads, update, state, delta = list_guard(grads, update, state, delta)
+    lr_lr = scalar_guard(lr_lr, grads[0])
+    _compilable_lr_adapt_(grads, update, state, delta, lr_lr)
 
 
 def hook_optimizer_into_model(model, optimizer, *args, **kwargs):
