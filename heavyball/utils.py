@@ -1,12 +1,13 @@
+import contextlib
 import functools
 import gc
+import inspect
 import math
 import random
 import re
 import string
 import warnings
 from typing import Callable, List, Optional, Tuple, Union
-from unittest.mock import patch
 
 import numpy as np
 import torch
@@ -710,25 +711,28 @@ def project(grad, Q, back: bool):
     return grad
 
 
-def modify_closure(closure):
-    """
-    Modifies the closure function to use create_graph=True in backward().
+@contextlib.contextmanager
+def patch_backward():
+    @contextlib.contextmanager
+    def _inner(module):
+        original = module.backward
 
-    Args:
-        closure: The closure function passed to the optimizer.
+        signature = inspect.signature(original)
 
-    Returns:
-        The return value of the modified closure.
-    """
+        def patched_backward(*args, **kwargs):
+            new_kwargs = signature.bind(*args)
+            new_kwargs.apply_defaults()
+            new_kwargs = new_kwargs.arguments
+            new_kwargs.update(kwargs)
+            new_kwargs["create_graph"] = True
+            return original(**new_kwargs)
 
-    def patched_backward(self, *args, **kwargs):
-        kwargs["create_graph"] = True
-        return original_backward(self, *args, **kwargs)
+        module.backward = patched_backward
+        yield
+        module.backward = original
 
-    original_backward = torch.Tensor.backward
-
-    with patch.object(torch.Tensor, "backward", patched_backward):
-        return closure()
+    with _inner(torch.Tensor), _inner(torch.autograd):
+        yield
 
 
 def hasattr_none(obj, name):
@@ -795,6 +799,8 @@ class StatefulOptimizer(torch.optim.Optimizer):
             if grad is None and skip_none:
                 continue
 
+            p.grad = None
+
             if raw:
                 yield p, grad
                 continue
@@ -808,7 +814,6 @@ class StatefulOptimizer(torch.optim.Optimizer):
             hessian_vector = getattr(p, "hessian_vector", None)
             p.vector = None
             p.hessian_vector = None
-            p.grad = None
 
             grad, vs, hvs = [
                 [None] * len(p_views) if x is None else merge_group(group, x)  #
@@ -912,8 +917,8 @@ class StatefulOptimizer(torch.optim.Optimizer):
         return loss
 
     def _double_backward_hvp(self, closure):
-        with torch.enable_grad():
-            loss = modify_closure(closure)
+        with torch.enable_grad(), patch_backward():
+            loss = closure()
 
         params, grads = [], []
         for group in self.param_groups:
@@ -926,7 +931,10 @@ class StatefulOptimizer(torch.optim.Optimizer):
 
         vs = [torch.randn_like(p) for p in params]
         with torch.enable_grad():
-            hvs = torch.autograd.grad(grads, params, vs, create_graph=False, retain_graph=False, allow_unused=True)
+            try:
+                hvs = torch.autograd.grad(grads, params, vs, create_graph=False, retain_graph=False, allow_unused=True)
+            except RuntimeError as e:
+                raise ExactHVPFailed(str(e.args))
 
         unused = []
         for p, g, v, hv in zip(params, grads, vs, hvs):
