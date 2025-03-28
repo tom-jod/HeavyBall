@@ -64,7 +64,7 @@ def main(
             model,
             data,
             None,
-            loss_win_condition(0.01 * win_condition_multiplier, 0),
+            loss_win_condition(0.01 * win_condition_multiplier),
             steps,
             [o],
             [d],

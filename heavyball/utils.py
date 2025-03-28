@@ -1552,10 +1552,13 @@ def extract_from_flat_update(params: List[Tensor], update: Tensor):
     return outputs
 
 
+@decorator_knowngood
 def flatten(x: List[Tensor], remaining: int = 0) -> Tensor:
-    return torch.cat([i.flatten(0, -1 - remaining) for i in x], 0)
+    last_dim = x[0].shape[-remaining:] if remaining else []
+    return torch.cat([i.view(-1, *last_dim) for i in x], 0)
 
 
+@decorator_knowngood
 def dampen_multiple(g: List[Tensor], damp: float = 2**-13):
     vs = []
     gs = []
@@ -1566,21 +1569,27 @@ def dampen_multiple(g: List[Tensor], damp: float = 2**-13):
     return flatten(vs), flatten(gs)
 
 
+@decorator_knowngood
+def casted_einsum(expr: str, *args: Tensor) -> Tensor:
+    md = min_dtype(args)
+    return torch.einsum(expr, *[a.to(md) for a in args]).to(args[-1].dtype)
+
+
 def psgd_calc_A_and_conjB(exprA, G, Q, V=None):
     order = G.dim()
-    conjB = V.permute(*range(1, order), 0).to(promote(G.dtype))
-    md = min_dtype(Q + [G])
-    A = torch.einsum(exprA, *[q.to(md) for q in Q], G.to(md)).to(G.dtype)
-    Q = [promote(q) for q in Q]
+    if order > 1:
+        conjB = V.view_as(G).permute(*range(1, order), 0)
+    conjB = conjB.to(promote(G.dtype))
+    A = casted_einsum(exprA, *Q, G)
     for i, q in enumerate(Q):
+        q = promote(q)
         if q.dim() <= 1:
             conjB /= q
         else:
-            conjB = torch.linalg.solve_triangular(q, conjB.reshape(-1, q.size(0)), upper=True, left=False).reshape_as(
-                conjB
-            )
+            solved = torch.linalg.solve_triangular(q, conjB.reshape(-1, q.size(0)).contiguous(), upper=True, left=False)
+            conjB = solved.reshape_as(conjB)
         if i < order - 1:
-            conjB = torch.transpose(conjB, i, order - 1)
+            conjB = conjB.transpose(i, -1)
     return A, conjB
 
 
