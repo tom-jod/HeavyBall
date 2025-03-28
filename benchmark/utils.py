@@ -469,7 +469,7 @@ def trial(
             ),  #
             max_evals=trials,
             algo=hyperopt.atpe.suggest,
-            early_stop_fn=lambda x: _win_condition(obj.m, x),
+            early_stop_fn=lambda x, *a, **k: _win_condition(obj.m, x),
             return_argmin=True,
             show_progressbar=True,
         )
