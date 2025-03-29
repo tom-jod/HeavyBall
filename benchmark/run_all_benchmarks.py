@@ -180,7 +180,7 @@ def main(
     seeds: int = 4,
     difficulties: list[str] = typer.Option([], help='"easy", "medium", "hard" or any combination of these'),
 ):
-    multiprocessing.set_start_method("forkserver", force=True)
+    multiprocessing.set_start_method("spawn", force=True)  # spawn appears to be safer with CUDA MPS
 
     benchmarks = [
         "beale.py",
