@@ -152,6 +152,10 @@ class Stop(Exception):
     pass
 
 
+class SkipConfig(ValueError):
+    pass
+
+
 class Plotter(nn.Module):
     def __init__(
         self,

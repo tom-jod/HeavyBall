@@ -11,6 +11,8 @@ import numpy as np
 import torch
 import typer
 
+from benchmark.utils import SkipConfig
+
 app = typer.Typer()
 
 
@@ -53,6 +55,8 @@ def run_benchmark(script, opt, steps, dtype, trials, seed, difficulty):
         }
         # Run the main function
         module.main(**arguments)
+    except SkipConfig:
+        return
     except Exception:
         output = sys.stdout.getvalue()
         error = traceback.format_exc()
@@ -160,7 +164,8 @@ def worker(task_queue, result_queue, worker_index):
                     "loss": float("inf"),
                     "error": str(exc),
                 }
-            result_queue.put(result)
+            if result is not None:
+                result_queue.put(result)
         except Exception:
             break
 

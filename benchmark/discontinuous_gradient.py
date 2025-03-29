@@ -5,7 +5,7 @@ import torch.backends.opt_einsum
 import typer
 from torch import nn
 
-from benchmark.utils import param_norm_win_condition, trial
+from benchmark.utils import SkipConfig, param_norm_win_condition, trial
 from heavyball.utils import set_torch
 
 app = typer.Typer(pretty_exceptions_enable=False)
@@ -38,7 +38,7 @@ def main(
     config: Optional[str] = None,
 ):
     if config is not None and config != "easy":
-        return
+        raise SkipConfig("'config' must be 'easy'.")
     dtype = [getattr(torch, d) for d in dtype]
     model = Model().cuda().double()
 

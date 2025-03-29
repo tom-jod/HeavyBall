@@ -9,7 +9,7 @@ import typer
 from hyperopt import early_stop
 from torch import nn
 
-from benchmark.utils import Plotter, loss_win_condition, trial
+from benchmark.utils import Plotter, SkipConfig, loss_win_condition, trial
 from heavyball.utils import set_torch
 
 early_stop.no_progress_loss()
@@ -45,7 +45,7 @@ def main(
     config: Optional[str] = None,
 ):
     if config is not None and config != "easy":
-        return
+        raise SkipConfig("'config' must be 'easy'.")
     dtype = [getattr(torch, d) for d in dtype]
     coords = (-7, -4)
 
