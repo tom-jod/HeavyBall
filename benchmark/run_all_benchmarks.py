@@ -24,6 +24,9 @@ def last_match(pattern, text):
     return float(last)
 
 
+_module_cache = {}
+
+
 def run_benchmark(script, opt, steps, dtype, trials, seed, difficulty):
     import io
     import pathlib
@@ -35,8 +38,16 @@ def run_benchmark(script, opt, steps, dtype, trials, seed, difficulty):
     sys.stdout = io.StringIO()
     start_time = time.time()
     try:
+        torch.cuda.empty_cache()
+        torch.cuda.synchronize()
+
         module_name = script.replace(".py", "")
-        module = __import__(module_name)
+
+        if module_name in _module_cache:
+            module = _module_cache[module_name]
+        else:
+            module = __import__(module_name)
+            _module_cache[module_name] = module
 
         torch.manual_seed(seed)
         np.random.seed(seed)
@@ -148,6 +159,11 @@ def worker(task_queue, result_queue, worker_index):
     torch.set_num_threads(1)
     os.environ["OMP_NUM_THREADS"] = "1"
     os.environ["MKL_NUM_THREADS"] = "1"
+
+    # Initialize CUDA context
+    dummy = torch.zeros(1, device="cuda")
+    del dummy
+    torch.cuda.empty_cache()
 
     while True:
         try:
