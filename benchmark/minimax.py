@@ -24,11 +24,11 @@ configs = {
 class Model(nn.Module):
     def __init__(self, size):
         super().__init__()
-        self.param0 = nn.Parameter(torch.randn((size,)))
-        self.param1 = nn.Parameter(torch.randn((size,)))
+        self.param = nn.Parameter(torch.randn((2 * size,)))
 
     def forward(self, inp):
-        return self.param0 @ self.param1 + (self.param0 @ self.param0 + self.param1 @ self.param1) / 2
+        param0, param1 = self.param.chunk(2, 0)
+        return param0 @ param1 + (param0 @ param0 + param1 @ param1) / 2
 
 
 @app.command()
