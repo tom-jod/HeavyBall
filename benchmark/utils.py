@@ -403,6 +403,7 @@ def trial(
     base_lr: float = 1e-3,
     return_best: bool = False,
 ):
+    group = min(group, steps)
     heavyball.utils.set_torch()
 
     if isinstance(opt, list):

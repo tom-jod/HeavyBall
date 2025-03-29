@@ -8,14 +8,12 @@ import matplotlib.pyplot as plt
 import torch
 import torch.backends.opt_einsum
 import typer
-from hyperopt import early_stop
 from torch import nn
 from utils import Plotter
 
 from benchmark.utils import SkipConfig, loss_win_condition, trial
 from heavyball.utils import set_torch
 
-early_stop.no_progress_loss()
 app = typer.Typer(pretty_exceptions_enable=False)
 set_torch()
 
