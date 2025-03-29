@@ -1,3 +1,4 @@
+import itertools
 import multiprocessing
 import os
 import random
@@ -223,12 +224,10 @@ def main(
     task_queue = multiprocessing.Queue()
     result_queue = multiprocessing.Queue()
 
-    total_tasks = len(benchmarks) * len(opt) * seeds
-    for script in benchmarks:
-        for o in opt:
-            for i in range(seeds):
-                for d in difficulties:
-                    task_queue.put((script, o, steps, dtype, trials, i, d))
+    total_tasks = 0
+    for script, o, i, d in itertools.product(benchmarks, opt, range(seeds), difficulties):
+        task_queue.put((script, o, steps, dtype, trials, i, d))
+        total_tasks += 1
 
     processes = []
     for idx in range(min(parallelism, total_tasks)):
