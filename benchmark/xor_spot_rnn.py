@@ -8,7 +8,7 @@ This does NOT elicit memory in the RNN, but it does force it to learn a pointwis
 """
 
 import itertools
-from typing import List
+from typing import List, Optional
 
 import torch
 import torch.backends.opt_einsum
@@ -20,6 +20,8 @@ from heavyball.utils import set_torch
 
 app = typer.Typer(pretty_exceptions_enable=False)
 set_torch()
+
+configs = {"easy": {"length": 16}, "medium": {"length": 32}, "hard": {"length": 64}}
 
 
 class Model(nn.Module):
@@ -55,7 +57,10 @@ def main(
     ),
     win_condition_multiplier: float = 1.0,
     trials: int = 10,
+    config: Optional[str] = None,
 ):
+    length = configs.get(config, {}).get("length", length)
+
     dtype = [getattr(torch, d) for d in dtype]
 
     for args in itertools.product(method, dtype, [(length, size, depth, batch)], opt, [weight_decay]):

@@ -1,7 +1,7 @@
 import math
 import pathlib
 import random
-from typing import List
+from typing import List, Optional
 
 import matplotlib.colors
 import torch
@@ -16,8 +16,10 @@ from heavyball.utils import set_torch
 app = typer.Typer(pretty_exceptions_enable=False)
 set_torch()
 
+configs = {"easy": {"scale": 4}, "medium": {"size": 8}, "hard": {"size": 12}}
 
-def objective(x, y, scale: float = 10):
+
+def objective(x, y, scale: float):
     """Tests optimizer's ability to handle regions with very small gradients and sharp plateaus."""
     output = 1 / (1 + torch.exp((x**2 + y**2 - 1) * -scale))
     minimum = 1 / (1 + math.exp(scale))
@@ -25,12 +27,13 @@ def objective(x, y, scale: float = 10):
 
 
 class Model(nn.Module):
-    def __init__(self, x):
+    def __init__(self, x, scale):
         super().__init__()
         self.param = nn.Parameter(torch.tensor(x).float())
+        self.scale = scale
 
     def forward(self):
-        return objective(*self.param)
+        return objective(*self.param, scale=self.scale)
 
 
 @app.command()
@@ -43,7 +46,10 @@ def main(
     show_image: bool = False,
     trials: int = 100,
     win_condition_multiplier: float = 1.0,
+    config: Optional[str] = None,
 ):
+    scale = configs.get(config, {}).get("scale", 4)
+
     dtype = [getattr(torch, d) for d in dtype]
     coords = (1.5, 1.5)  # Start outside the plateau
 
@@ -56,16 +62,9 @@ def main(
     rng.shuffle(colors)
 
     if show_image:
-        model = Plotter(
-            lambda *x: objective(*x).log(),
-            coords=coords,
-            xlim=(-2, 2),
-            ylim=(-2, 2),
-            normalize=8,
-            after_step=torch.exp,
-        )
+        model = Plotter(lambda *x: objective(*x, scale=scale).log())
     else:
-        model = Model(coords)
+        model = Model(coords, scale=scale)
     model.double()
 
     def data():

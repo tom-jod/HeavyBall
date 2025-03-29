@@ -1,4 +1,4 @@
-from typing import List
+from typing import List, Optional
 
 import torch
 import torch.backends.opt_einsum
@@ -10,6 +10,7 @@ from heavyball.utils import set_torch
 
 app = typer.Typer(pretty_exceptions_enable=False)
 set_torch()
+configs = {"easy": {"sparsity": 2**-3}, "medium": {"sparsity": 2**-6}, "hard": {"sparsity": 2**-10}}
 
 
 class Model(nn.Module):
@@ -38,9 +39,12 @@ def main(
     opt: List[str] = typer.Option(["ForeachSOAP"], help="Optimizers to use"),
     trials: int = 100,
     win_condition_multiplier: float = 1.0,
+    sparsity: float = 2**-6,
+    config: Optional[str] = None,
 ):
+    sparsity = configs.get(config, {}).get("sparsity", sparsity)
     dtype = [getattr(torch, d) for d in dtype]
-    model = Model().cuda().double()
+    model = Model(sparsity=sparsity).cuda().double()
 
     def data():
         return None, None

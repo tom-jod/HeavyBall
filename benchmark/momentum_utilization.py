@@ -1,4 +1,4 @@
-from typing import List
+from typing import List, Optional
 
 import torch
 import torch.backends.opt_einsum
@@ -10,19 +10,21 @@ from heavyball.utils import set_torch
 
 app = typer.Typer(pretty_exceptions_enable=False)
 set_torch()
+configs = {"easy": {"weight": 0.02}, "medium": {"weight": 0.1}, "hard": {"size": 0.5}}
 
 
 class Model(nn.Module):
-    def __init__(self, size=1024):
+    def __init__(self, weight: float, size=1024):
         super().__init__()
         self.param = nn.Parameter(torch.randn(size))
         self.register_buffer("t", torch.zeros(1))
+        self.weight = weight
 
     def forward(self):
         """Tests effective use of momentum for oscillating landscapes."""
         self.t += 0.1
         x = self.param
-        return (x.square() + 0.1 * torch.sin(10 * x) * torch.cos(self.t)).mean()
+        return (x.square() + self.weight * torch.sin(10 * x) * torch.cos(self.t)).mean()
 
 
 @app.command()
@@ -34,9 +36,12 @@ def main(
     opt: List[str] = typer.Option(["ForeachSOAP"], help="Optimizers to use"),
     trials: int = 100,
     win_condition_multiplier: float = 1.0,
+    weight: float = 0.1,
+    config: Optional[str] = None,
 ):
+    weight = configs.get(config, {}).get("weight", weight)
     dtype = [getattr(torch, d) for d in dtype]
-    model = Model().cuda().double()
+    model = Model(weight).cuda().double()
 
     def data():
         return None, None

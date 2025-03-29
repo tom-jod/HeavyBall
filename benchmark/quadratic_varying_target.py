@@ -1,4 +1,4 @@
-from typing import List
+from typing import List, Optional
 
 import torch
 import torch.nn as nn
@@ -11,12 +11,14 @@ from heavyball.utils import set_torch
 app = typer.Typer(pretty_exceptions_enable=False)
 set_torch()
 
+configs = {"easy": {"size": 16}, "medium": {"size": 512}, "hard": {"size": 8192}}
+
 
 class Model(nn.Module):
     def __init__(self, size):
         super().__init__()
         self.param = nn.Parameter(torch.randn(size))
-        self.register_buffer("target", F.normalize(torch.arange(size).float().add(1).square(), dim=0))
+        self.register_buffer("target", F.normalize(torch.arange(size).float(), dim=0))
 
     def forward(self):
         return (self.param - self.target).square().mean()
@@ -33,7 +35,10 @@ def main(
     opt: List[str] = typer.Option(["ForeachSOAP"], help="Optimizers to use"),
     trials: int = 10,
     win_condition_multiplier: float = 1.0,
+    config: Optional[str] = None,
 ):
+    size = configs.get(config, {}).get("size", size)
+
     dtype = [getattr(torch, d) for d in dtype]
     model = Model(size).cuda()
 

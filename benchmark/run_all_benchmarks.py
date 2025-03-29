@@ -21,7 +21,7 @@ def last_match(pattern, text):
     return float(last)
 
 
-def run_benchmark(script, opt, steps, dtype, trials, seed):
+def run_benchmark(script, opt, steps, dtype, trials, seed, difficulty):
     base = {"name": script.replace(".py", ""), "opt": opt}
 
     import io
@@ -50,6 +50,7 @@ def run_benchmark(script, opt, steps, dtype, trials, seed):
             "opt": [opt],
             "trials": trials,
             "win_condition_multiplier": 1.0,
+            "config": difficulty,
         }
         # Run the main function
         module.main(**arguments)
@@ -146,12 +147,12 @@ def worker(task_queue, result_queue, worker_index):
 
     while True:
         try:
-            script, o, steps, dtype, trials, seed = task_queue.get()
+            script, o, steps, dtype, trials, seed, difficulty = task_queue.get()
             try:
-                result = run_benchmark(script, o, steps, dtype, trials, seed)
+                result = run_benchmark(script, o, steps, dtype, trials, seed, difficulty)
             except Exception as exc:
                 result = {
-                    "name": script.replace(".py", ""),
+                    "name": f"{script.replace('.py', '')}-{difficulty}",
                     "opt": o,
                     "success": False,
                     "runtime": None,
@@ -177,6 +178,7 @@ def main(
     mars: bool = False,
     unscaled_caution: bool = False,
     seeds: int = 4,
+    difficulties: list[str] = typer.Option([], help='"easy", "medium", "hard" or any combination of these'),
 ):
     multiprocessing.set_start_method("forkserver", force=True)
 
@@ -194,7 +196,6 @@ def main(
         "xor_digit_rnn.py",
         "xor_spot_rnn.py",
         "saddle_point.py",
-        "saddle_point_0init.py",
         "discontinuous_gradient.py",
         "wide_linear.py",
         "minimax.py",
@@ -226,7 +227,8 @@ def main(
     for script in benchmarks:
         for o in opt:
             for i in range(seeds):
-                task_queue.put((script, o, steps, dtype, trials, i))
+                for d in difficulties:
+                    task_queue.put((script, o, steps, dtype, trials, i, d))
 
     processes = []
     for idx in range(min(parallelism, total_tasks)):

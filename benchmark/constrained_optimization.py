@@ -1,5 +1,5 @@
 import pathlib
-from typing import List
+from typing import List, Optional
 
 import torch
 import torch.backends.opt_einsum
@@ -12,26 +12,29 @@ from heavyball.utils import set_torch
 app = typer.Typer(pretty_exceptions_enable=False)
 set_torch()
 
+configs = {"easy": {"penalty": 1e3}, "medium": {"penalty": 1e6}, "hard": {"size": 1e9}}
+
+
 # Objective: Minimize (x-2)^2 subject to x <= 1
 # Implemented using a penalty: (x-2)^2 + penalty * max(0, x - 1)
-PENALTY = 1e6
 TARGET_X = 1.0
 TOLERANCE = 1e-3
 
 
-def objective(x):
+def objective(x, penalty):
     """Objective function with a penalty for violating the constraint x <= 1."""
-    return (x - 2.0) ** 2 + PENALTY * torch.relu(x - TARGET_X)
+    return (x - 2.0) ** 2 + penalty * torch.relu(x - TARGET_X)
 
 
 class Model(nn.Module):
-    def __init__(self, initial_x):
+    def __init__(self, initial_x, penalty):
         super().__init__()
         # Using a tensor with requires_grad=True directly as the parameter
         self.param = nn.Parameter(torch.tensor(initial_x).float())
+        self.penalty = penalty
 
     def forward(self):
-        return objective(self.param)
+        return objective(self.param, self.penalty)
 
 
 def win_condition(model, loss):
@@ -52,7 +55,9 @@ def main(
     opt: List[str] = typer.Option(["ForeachSOAP"], help="Optimizers to use"),
     trials: int = 50,  # Reduced trials slightly for faster testing
     win_condition_multiplier: float = 1.0,  # Not used directly, but kept for consistency
+    config: Optional[str] = None,
 ):
+    penalty = configs.get(config, {}).get("penalty", 1e6)
     dtype = [getattr(torch, d) for d in dtype]
     initial_x = 0.0  # Start within the feasible region
 
@@ -60,7 +65,7 @@ def main(
     for path in pathlib.Path(".").glob("constrained_optimization*.png"):
         path.unlink()
 
-    model = Model(initial_x)
+    model = Model(initial_x, penalty)
     model.double()  # Use double for precision if needed
 
     # No external data needed for this simple objective
@@ -69,10 +74,6 @@ def main(
 
     # The loss is the objective value itself
     loss_fn = None
-
-    print(f"Running constrained optimization benchmark for {opt[0]}...")
-    print(f"Objective: (x-2)^2 + {PENALTY}*relu(x-{TARGET_X})")
-    print(f"Target x: {TARGET_X}, Tolerance: {TOLERANCE}")
 
     trial(
         model,

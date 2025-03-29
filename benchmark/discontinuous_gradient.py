@@ -1,4 +1,4 @@
-from typing import List
+from typing import List, Optional
 
 import torch
 import torch.backends.opt_einsum
@@ -35,7 +35,10 @@ def main(
     opt: List[str] = typer.Option(["ForeachSOAP"], help="Optimizers to use"),
     trials: int = 100,
     win_condition_multiplier: float = 1.0,
+    config: Optional[str] = None,
 ):
+    if config is not None and config != "easy":
+        return
     dtype = [getattr(torch, d) for d in dtype]
     model = Model().cuda().double()
 

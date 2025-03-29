@@ -1,6 +1,6 @@
 import pathlib
 import random
-from typing import List
+from typing import List, Optional
 
 import matplotlib.colors
 import torch
@@ -14,6 +14,7 @@ from heavyball.utils import set_torch
 
 app = typer.Typer(pretty_exceptions_enable=False)
 set_torch()
+configs = {"easy": {"coords": (1e-4, 1e-4)}, "medium": {"coords": (1e-8, 1e-8)}, "hard": {"coords": (0, 1e-8)}}
 
 
 def objective(x, y):
@@ -41,9 +42,10 @@ def main(
     show_image: bool = False,
     trials: int = 100,
     win_condition_multiplier: float = 1.0,
+    config: Optional[str] = None,
 ):
     dtype = [getattr(torch, d) for d in dtype]
-    coords = (1e-6, 1e-6)  # Start near but not at saddle point
+    coords = configs.get(config, {}).get("coords", (1e-6, 1e-6))
 
     # Clean up old plots
     for path in pathlib.Path(".").glob("saddle_point.png"):

@@ -9,7 +9,7 @@ testing the optimizer's:
 """
 
 import itertools
-from typing import List
+from typing import List, Optional
 
 import torch
 import torch.nn as nn
@@ -20,13 +20,14 @@ from heavyball.utils import set_torch
 
 app = typer.Typer(pretty_exceptions_enable=False)
 set_torch()
+configs = {"easy": {"scale": 2}, "medium": {"scale": 4}, "hard": {"scale": 8}}
 
 
 class ExplodingGradient(nn.Module):
-    def __init__(self, dim):
+    def __init__(self, scale, dim):
         super().__init__()
         self.param = nn.Parameter(torch.randn(dim))
-        self.scale = 5.0  # Controls how quickly gradients grow
+        self.scale = scale  # Controls how quickly gradients grow
 
     def forward(self):
         # Creates exponentially growing gradients
@@ -44,14 +45,16 @@ def main(
     opt: List[str] = typer.Option(["adamw"], help="Optimizers to use"),
     win_condition_multiplier: float = 1.0,
     trials: int = 3,
+    config: Optional[str] = None,
 ):
+    scale = configs.get(config, {}).get("scale", 2)
     """Run exploding gradient benchmark with specified parameters."""
     dtype = [getattr(torch, d) for d in dtype]
 
     for args in itertools.product(method, dtype, [dim], opt, [weight_decay]):
         m, d, dim, o, wd = args
 
-        model = ExplodingGradient(dim)
+        model = ExplodingGradient(dim, scale)
 
         def data():
             return None, None

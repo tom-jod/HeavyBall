@@ -1,6 +1,6 @@
 import pathlib
 import random
-from typing import List
+from typing import List, Optional
 
 import matplotlib.colors
 import torch
@@ -42,7 +42,10 @@ def main(
     show_image: bool = False,
     trials: int = 100,
     win_condition_multiplier: float = 1.0,
+    config: Optional[str] = None,
 ):
+    if config is not None and config != "easy":
+        return
     dtype = [getattr(torch, d) for d in dtype]
     coords = (-7, -4)
 

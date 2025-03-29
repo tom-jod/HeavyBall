@@ -1,7 +1,7 @@
 import math
 import pathlib
 import random
-from typing import List
+from typing import List, Optional
 
 import matplotlib.colors
 import matplotlib.pyplot as plt
@@ -51,7 +51,11 @@ def main(
     trials: int = 100,
     win_condition_multiplier: float = 1.0,
     size: int = 2,
+    config: Optional[str] = None,
 ):
+    if config is not None and config != "easy":
+        return
+
     if show_image:
         assert size == 2, "Image can only be displayed for 2D functions"
     dtype = [getattr(torch, d) for d in dtype]

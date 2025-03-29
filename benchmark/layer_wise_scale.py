@@ -1,4 +1,4 @@
-from typing import List
+from typing import List, Optional
 
 import torch
 import torch.backends.opt_einsum
@@ -11,20 +11,25 @@ from heavyball.utils import set_torch
 app = typer.Typer(pretty_exceptions_enable=False)
 set_torch()
 
+configs = {"easy": {"scale": 1e1}, "medium": {"scale": 1e3}, "hard": {"size": 1e5}}
+
 
 class Model(nn.Module):
-    def __init__(self, size=1024):
+    def __init__(self, scale: float, size=1024):
         super().__init__()
         # Simulate different layer scales in deep networks
         self.layer1 = nn.Parameter(torch.randn(size))  # Small gradients
         self.layer2 = nn.Parameter(torch.randn(size))  # Medium gradients
         self.layer3 = nn.Parameter(torch.randn(size))  # Large gradients
+        self.scale = scale
 
     def forward(self):
         """Test optimizer's ability to handle different gradient scales across layers."""
         # Each layer contributes equally to the loss but has very different scales
         return (
-            self.layer1.square().mean() * 1e-3 + self.layer2.square().mean() + self.layer3.square().mean() * 1e3
+            self.layer1.square().mean() * self.scale
+            + self.layer2.square().mean()
+            + self.layer3.square().mean() / self.scale
         ) / 3
 
 
@@ -37,9 +42,11 @@ def main(
     opt: List[str] = typer.Option(["ForeachSOAP"], help="Optimizers to use"),
     trials: int = 100,
     win_condition_multiplier: float = 1.0,
+    config: Optional[str] = None,
 ):
+    scale = configs.get(config, {}).get("scale", 1e3)
     dtype = [getattr(torch, d) for d in dtype]
-    model = Model().cuda().double()
+    model = Model(scale).cuda().double()
 
     def data():
         return None, None

@@ -1,6 +1,6 @@
 import math
 import random
-from typing import List
+from typing import List, Optional
 
 import torch
 import torch.backends.opt_einsum
@@ -14,20 +14,23 @@ app = typer.Typer(pretty_exceptions_enable=False)
 set_torch()
 
 
+configs = {"easy": {"max_batch": 4096}, "medium": {"max_batch": 256}, "hard": {"max_batch": 16}}
+
+
 class Model(nn.Module):
-    def __init__(self, size=1024):
+    def __init__(self, max_batch: int, size=1024):
         super().__init__()
         self.param = nn.Parameter(torch.randn(size))
-        self.register_buffer("batch_sizes", torch.tensor([1, 4, 16, 64]))
+        self.max_batch = max_batch
         self.rng = random.Random(0x1238192)
 
     def forward(self):
         """Test optimizer's ability to handle different batch sizes and noise scales."""
-        batch_size = self.rng.choice(self.batch_sizes)
         generator = torch.Generator(device=self.param.device).manual_seed(self.rng.randint(0, 2**31))
         noise = torch.randn(self.param.shape, generator=generator, device=self.param.device)
         scale = self.param.norm() / (noise.norm() + 1e-6)
-        noise *= scale.detach() / math.sqrt(batch_size)
+        batch_scale = self.max_batch ** (self.rng.random() / 2)  # sqrt of random uniform between 1 and max_batch
+        noise *= scale.detach() / math.sqrt(batch_scale)
         return (self.param + noise).square().mean()
 
 
@@ -40,9 +43,11 @@ def main(
     opt: List[str] = typer.Option(["ForeachSOAP"], help="Optimizers to use"),
     trials: int = 100,
     win_condition_multiplier: float = 1.0,
+    config: Optional[str] = None,
 ):
+    max_batch = configs.get(config, {}).get("max_batch", 256)
     dtype = [getattr(torch, d) for d in dtype]
-    model = Model().cuda().double()
+    model = Model(max_batch).cuda().double()
 
     def data():
         return None, None

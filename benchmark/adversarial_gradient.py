@@ -1,4 +1,4 @@
-from typing import List
+from typing import List, Optional
 
 import torch
 import torch.backends.opt_einsum
@@ -11,18 +11,21 @@ from heavyball.utils import set_torch
 app = typer.Typer(pretty_exceptions_enable=False)
 set_torch()
 
+configs = {"easy": {"frequency": 100}, "medium": {"frequency": 10}, "hard": {"frequency": 4}}
+
 
 class Model(nn.Module):
-    def __init__(self, size=1024):
+    def __init__(self, frequency, size=1024):
         super().__init__()
         self.param = nn.Parameter(torch.randn(size))
         self.register_buffer("step", torch.zeros(1))
+        self.frequency = frequency
 
     def forward(self):
         """Test optimizer's robustness to adversarial gradient patterns."""
         self.step += 1
         # Create an oscillating adversarial component
-        direction = torch.sin(self.step * torch.pi / 10)
+        direction = torch.sin(self.step * torch.pi / self.frequency)
         # Main objective plus adversarial component
         return self.param.square().mean() + direction * self.param.mean()
 
@@ -36,9 +39,11 @@ def main(
     opt: List[str] = typer.Option(["ForeachSOAP"], help="Optimizers to use"),
     trials: int = 100,
     win_condition_multiplier: float = 1.0,
+    config: Optional[str] = None,
 ):
+    frequency = configs.get(config, {}).get("frequency", 10)
     dtype = [getattr(torch, d) for d in dtype]
-    model = Model().cuda().double()
+    model = Model(frequency).cuda().double()
 
     def data():
         return None, None

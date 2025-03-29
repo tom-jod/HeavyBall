@@ -10,7 +10,7 @@ continuously shift over time. This tests the optimizer's ability to:
 
 import itertools
 import math
-from typing import List
+from typing import List, Optional
 
 import torch
 import torch.nn as nn
@@ -21,14 +21,15 @@ from heavyball.utils import set_torch
 
 app = typer.Typer(pretty_exceptions_enable=False)
 set_torch()
+configs = {"easy": {"frequency": 0.01}, "medium": {"frequency": 0.1}, "hard": {"frequency": 0.25}}
 
 
 class ShiftingSphere(nn.Module):
-    def __init__(self, dim):
+    def __init__(self, dim, frequency):
         super().__init__()
         self.param = nn.Parameter(torch.randn(dim))
         self.phase = 0
-        self.frequency = 0.1  # How fast target moves
+        self.frequency = frequency
 
     def forward(self):
         self.phase += self.frequency
@@ -47,14 +48,16 @@ def main(
     opt: List[str] = typer.Option(["adamw"], help="Optimizers to use"),
     win_condition_multiplier: float = 1.0,
     trials: int = 3,
+    config: Optional[str] = None,
 ):
     """Run dynamic landscape benchmark with specified parameters."""
+    frequency = configs.get(config, {}).get("frequency", 0.1)
     dtype = [getattr(torch, d) for d in dtype]
 
     for args in itertools.product(method, dtype, [dim], opt, [weight_decay]):
         m, d, dim, o, wd = args
 
-        model = ShiftingSphere(dim)
+        model = ShiftingSphere(dim, frequency)
 
         def data():
             return None, None
