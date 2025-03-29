@@ -12,7 +12,14 @@ from heavyball.utils import set_torch
 app = typer.Typer(pretty_exceptions_enable=False)
 set_torch()
 
-configs = {"easy": {"max_delay": 2}, "medium": {"max_delay": 16}, "hard": {"max_delay": 64}}
+configs = {
+    "trivial": {"max_delay": 2},
+    "easy": {"max_delay": 4},
+    "medium": {"max_delay": 16},
+    "hard": {"max_delay": 64},
+    "extreme": {"max_delay": 128},
+    "nightmare": {"max_delay": 256},
+}
 
 
 class Model(nn.Module):

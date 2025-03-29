@@ -10,7 +10,14 @@ from heavyball.utils import set_torch
 
 app = typer.Typer(pretty_exceptions_enable=False)
 set_torch()
-configs = {"easy": {"size": 16}, "medium": {"size": 512}, "hard": {"size": 8192}}
+configs = {
+    "trivial": {"range": 1},
+    "easy": {"range": 2},
+    "medium": {"range": 3},
+    "hard": {"range": 4},
+    "extreme": {"range": 5},
+    "nightmare": {"range": 6},
+}
 
 
 def objective(x):
@@ -19,10 +26,10 @@ def objective(x):
 
 
 class Model(nn.Module):
-    def __init__(self, size=1024):
+    def __init__(self, size, value_range):
         super().__init__()
         # Initialize with different scales
-        scales = torch.logspace(-3, 3, size)
+        scales = torch.logspace(-value_range, value_range, size)
         self.param = nn.Parameter(scales * torch.randn(size))
 
     def forward(self):
@@ -38,13 +45,13 @@ def main(
     opt: List[str] = typer.Option(["ForeachSOAP"], help="Optimizers to use"),
     trials: int = 100,
     win_condition_multiplier: float = 1.0,
-    size: int = 128,
+    size: int = 512,
     config: Optional[str] = None,
 ):
-    size = configs.get(config, {}).get("size", size)
+    value_range = configs.get(config, {}).get("range", 3)
 
     dtype = [getattr(torch, d) for d in dtype]
-    model = Model(size).cuda().double()
+    model = Model(size, value_range).cuda().double()
 
     def data():
         return None, None

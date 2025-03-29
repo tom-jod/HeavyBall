@@ -14,7 +14,15 @@ from heavyball.utils import set_torch
 
 app = typer.Typer(pretty_exceptions_enable=False)
 set_torch()
-configs = {"easy": {"coords": (1e-4, 1e-4)}, "medium": {"coords": (1e-8, 1e-8)}, "hard": {"coords": (0, 1e-8)}}
+
+configs = {
+    "trivial": {"coords": (0.1, 0.1)},
+    "easy": {"coords": (1e-4, 1e-4)},
+    "medium": {"coords": (1e-8, 1e-8)},
+    "hard": {"coords": (1e-10, 1e-10)},
+    "extreme": {"coords": (1e-10, 0)},
+    "nightmare": {"coords": (0, 0)},
+}
 
 
 def objective(x, y):

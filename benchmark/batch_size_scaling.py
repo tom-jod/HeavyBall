@@ -13,8 +13,14 @@ from heavyball.utils import set_torch
 app = typer.Typer(pretty_exceptions_enable=False)
 set_torch()
 
-
-configs = {"easy": {"max_batch": 4096}, "medium": {"max_batch": 256}, "hard": {"max_batch": 16}}
+configs = {
+    "trivial": {"max_batch": 65536},
+    "easy": {"max_batch": 8192},
+    "medium": {"max_batch": 1024},
+    "hard": {"max_batch": 128},
+    "extreme": {"max_batch": 16},
+    "nightmare": {"max_batch": 2},
+}
 
 
 class Model(nn.Module):

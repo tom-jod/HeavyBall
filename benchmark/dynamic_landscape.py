@@ -21,7 +21,14 @@ from heavyball.utils import set_torch
 
 app = typer.Typer(pretty_exceptions_enable=False)
 set_torch()
-configs = {"easy": {"frequency": 0.01}, "medium": {"frequency": 0.1}, "hard": {"frequency": 0.25}}
+configs = {
+    "trivial": {"frequency": 1000},
+    "easy": {"frequency": 100},
+    "medium": {"frequency": 20},
+    "hard": {"frequency": 10},
+    "extreme": {"frequency": 6},
+    "nightmare": {"frequency": 4},
+}
 
 
 class ShiftingSphere(nn.Module):
@@ -29,7 +36,7 @@ class ShiftingSphere(nn.Module):
         super().__init__()
         self.param = nn.Parameter(torch.randn(dim))
         self.phase = 0
-        self.frequency = frequency
+        self.frequency = 1 / frequency * 1.1  # so that we don't repeat numbers
 
     def forward(self):
         self.phase += self.frequency

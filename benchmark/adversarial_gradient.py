@@ -11,7 +11,14 @@ from heavyball.utils import set_torch
 app = typer.Typer(pretty_exceptions_enable=False)
 set_torch()
 
-configs = {"easy": {"frequency": 100}, "medium": {"frequency": 10}, "hard": {"frequency": 4}}
+configs = {
+    "trivial": {"frequency": 1000},
+    "easy": {"frequency": 100},
+    "medium": {"frequency": 10},
+    "hard": {"frequency": 7},
+    "extreme": {"frequency": 4},
+    "nightmare": {"frequency": 2},
+}
 
 
 class Model(nn.Module):
@@ -19,13 +26,13 @@ class Model(nn.Module):
         super().__init__()
         self.param = nn.Parameter(torch.randn(size))
         self.register_buffer("step", torch.zeros(1))
-        self.frequency = frequency
+        self.frequency = 1 / frequency * 1.1  # to avoid repeating
 
     def forward(self):
         """Test optimizer's robustness to adversarial gradient patterns."""
         self.step += 1
         # Create an oscillating adversarial component
-        direction = torch.sin(self.step * torch.pi / self.frequency)
+        direction = torch.sin(self.step * torch.pi * self.frequency)
         # Main objective plus adversarial component
         return self.param.square().mean() + direction * self.param.mean()
 

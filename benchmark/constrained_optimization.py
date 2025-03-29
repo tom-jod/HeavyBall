@@ -12,8 +12,14 @@ from heavyball.utils import set_torch
 app = typer.Typer(pretty_exceptions_enable=False)
 set_torch()
 
-configs = {"easy": {"penalty": 1e3}, "medium": {"penalty": 1e6}, "hard": {"size": 1e9}}
-
+configs = {
+    "trivial": {"penalty": 1e1},
+    "easy": {"penalty": 1e2},
+    "medium": {"penalty": 1e4},
+    "hard": {"size": 1e6},
+    "extreme": {"penalty": 1e8},
+    "nightmare": {"penalty": 1e10},
+}
 
 # Objective: Minimize (x-2)^2 subject to x <= 1
 # Implemented using a penalty: (x-2)^2 + penalty * max(0, x - 1)
@@ -50,7 +56,8 @@ def win_condition(model, loss):
 def main(
     method: List[str] = typer.Option(["qr"], help="Eigenvector method to use (for SOAP)"),
     dtype: List[str] = typer.Option(["float32"], help="Data type to use"),
-    steps: int = 200,  # Increased steps slightly
+    steps: int = 200,
+    # Increased steps slightly
     weight_decay: float = 0,
     opt: List[str] = typer.Option(["ForeachSOAP"], help="Optimizers to use"),
     trials: int = 50,  # Reduced trials slightly for faster testing

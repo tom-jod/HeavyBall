@@ -10,11 +10,18 @@ from heavyball.utils import set_torch
 
 app = typer.Typer(pretty_exceptions_enable=False)
 set_torch()
-configs = {"easy": {"sparsity": 2**-3}, "medium": {"sparsity": 2**-6}, "hard": {"sparsity": 2**-10}}
+configs = {
+    "trivial": {"sparsity": 0.5},
+    "easy": {"sparsity": 2**-3},
+    "medium": {"sparsity": 2**-6},
+    "hard": {"sparsity": 2**-8},
+    "extreme": {"sparsity": 2**-11},
+    "nightmare": {"sparsity": 2**-14},
+}
 
 
 class Model(nn.Module):
-    def __init__(self, size=2**12, sparsity=2**-6):
+    def __init__(self, size=2**16, sparsity=2**-6):
         super().__init__()
         self.param = nn.Parameter(torch.randn(size))
         self.sparsity = sparsity

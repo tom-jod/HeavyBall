@@ -20,7 +20,14 @@ from heavyball.utils import set_torch
 
 app = typer.Typer(pretty_exceptions_enable=False)
 set_torch()
-configs = {"easy": {"scale": 2}, "medium": {"scale": 4}, "hard": {"scale": 8}}
+configs = {
+    "trivial": {"scale": 1},
+    "easy": {"scale": 2},
+    "medium": {"scale": 4},
+    "hard": {"scale": 8},
+    "extreme": {"scale": 12},
+    "nightmare": {"scale": 16},
+}
 
 
 class ExplodingGradient(nn.Module):

@@ -16,7 +16,14 @@ from heavyball.utils import set_torch
 app = typer.Typer(pretty_exceptions_enable=False)
 set_torch()
 
-configs = {"easy": {"scale": 4}, "medium": {"scale": 8}, "hard": {"scale": 12}}
+configs = {
+    "trivial": {"scale": 1},
+    "easy": {"scale": 4},
+    "medium": {"scale": 8},
+    "hard": {"scale": 12},
+    "extreme": {"scale": 16},
+    "nightmare": {"scale": 20},
+}
 
 
 def objective(x, y, scale: float):

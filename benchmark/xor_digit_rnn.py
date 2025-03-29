@@ -12,7 +12,14 @@ from heavyball.utils import set_torch
 app = typer.Typer(pretty_exceptions_enable=False)
 set_torch()
 
-configs = {"easy": {"length": 16}, "medium": {"length": 32}, "hard": {"length": 64}}
+configs = {
+    "trivial": {"length": 4},
+    "easy": {"length": 8},
+    "medium": {"length": 16},
+    "hard": {"length": 32},
+    "extreme": {"length": 64},
+    "nightmare": {"length": 96},
+}
 
 
 class Model(nn.Module):

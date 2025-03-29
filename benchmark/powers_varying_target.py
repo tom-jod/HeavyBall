@@ -10,7 +10,15 @@ from heavyball.utils import set_torch
 
 app = typer.Typer(pretty_exceptions_enable=False)
 set_torch()
-configs = {"easy": {"size": 16}, "medium": {"size": 512}, "hard": {"size": 8192}}
+
+configs = {
+    "trivial": {"powers": 4},
+    "easy": {"powers": 8},
+    "medium": {"powers": 16},
+    "hard": {"powers": 32},
+    "extreme": {"powers": 128},
+    "nightmare": {"powers": 512},
+}
 
 
 class Model(nn.Module):
@@ -42,7 +50,7 @@ def main(
     trials: int = 10,
     config: Optional[str] = None,
 ):
-    size = configs.get(config, {}).get("size", size)
+    powers = configs.get(config, {}).get("powers", powers)
 
     dtype = [getattr(torch, d) for d in dtype]
     model = Model(size, powers, target_mult).cuda().double()

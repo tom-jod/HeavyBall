@@ -220,7 +220,9 @@ def main(
     mars: bool = False,
     unscaled_caution: bool = False,
     seeds: int = 4,
-    difficulties: list[str] = typer.Option([], help='"easy", "medium", "hard" or any combination of these'),
+    difficulties: list[str] = typer.Option(
+        [], help='"trivial", "easy", "medium", "hard", "extreme", "nightmare" or any combination of these'
+    ),
 ):
     multiprocessing.set_start_method("spawn", force=True)  # spawn appears to be safer with CUDA MPS
 
