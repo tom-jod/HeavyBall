@@ -23,8 +23,6 @@ def last_match(pattern, text):
 
 
 def run_benchmark(script, opt, steps, dtype, trials, seed, difficulty):
-    base = {"name": script.replace(".py", ""), "opt": opt}
-
     import io
     import pathlib
     import sys
@@ -74,7 +72,8 @@ def run_benchmark(script, opt, steps, dtype, trials, seed, difficulty):
     total_runtime = time.time() - start_time
 
     return {
-        **base,
+        "name": f"{script.replace('.py', '')}-{difficulty}",
+        "opt": opt,
         "success": success,
         "runtime": float(runtime or total_runtime),
         "loss": float(loss) if loss else float("inf"),
