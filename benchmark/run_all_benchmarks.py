@@ -154,7 +154,7 @@ def write_progress(results, opt, output):
                     f.write(f"\n### {r['name']} - {r['opt']}\n```\n{r['error']}\n```\n")
 
 
-def worker(task_queue, result_queue, worker_index):
+def worker(task_queue, result_queue, worker_index, difficulties: list):
     os.environ["CUDA_VISIBLE_DEVICES"] = str(worker_index % torch.cuda.device_count())
     torch.set_num_threads(1)
     os.environ["OMP_NUM_THREADS"] = "1"
@@ -167,21 +167,42 @@ def worker(task_queue, result_queue, worker_index):
 
     while True:
         try:
-            script, o, steps, dtype, trials, seed, difficulty = task_queue.get()
-            try:
-                result = run_benchmark(script, o, steps, dtype, trials, seed, difficulty)
-            except Exception as exc:
-                result = {
-                    "name": f"{script.replace('.py', '')}-{difficulty}",
-                    "opt": o,
-                    "success": False,
-                    "runtime": None,
-                    "attempts": 0,
-                    "loss": float("inf"),
-                    "error": str(exc),
-                }
-            if result is not None:
-                result_queue.put(result)
+            script, o, steps, dtype, trials, seed = task_queue.get()
+            inner_difficulties = difficulties.copy()
+            for _ in range(len(difficulties)):
+                d = inner_difficulties.pop(0)
+                exc = None
+                try:
+                    result = run_benchmark(script, o, steps, dtype, trials, seed, d)
+                except Exception as exc:
+                    result = {
+                        "name": f"{script.replace('.py', '')}-{d}",
+                        "opt": o,
+                        "success": False,
+                        "runtime": None,
+                        "attempts": 0,
+                        "loss": float("inf"),
+                        "error": str(exc),
+                    }
+
+                if result is not None:
+                    result_queue.put(result)
+                    continue
+
+                # model failed this task - no need to try harder ones
+                for d_ in [d] + list(inner_difficulties):
+                    result = {
+                        "name": f"{script.replace('.py', '')}-{d_}",
+                        "opt": o,
+                        "success": False,
+                        "runtime": None,
+                        "attempts": 0,
+                        "loss": float("inf"),
+                        "error": str(exc),
+                    }
+                    result_queue.put(result)
+                break
+
         except Exception:
             break
 
@@ -245,13 +266,13 @@ def main(
     result_queue = multiprocessing.Queue()
 
     total_tasks = 0
-    for script, o, i, d in itertools.product(benchmarks, opt, range(seeds), difficulties):
-        task_queue.put((script, o, steps, dtype, trials, i, d))
+    for script, o, i in itertools.product(benchmarks, opt, range(seeds)):
+        task_queue.put((script, o, steps, dtype, trials, i))
         total_tasks += 1
 
     processes = []
     for idx in range(min(parallelism, total_tasks)):
-        p = multiprocessing.Process(target=worker, args=(task_queue, result_queue, idx), daemon=True)
+        p = multiprocessing.Process(target=worker, args=(task_queue, result_queue, idx, difficulties), daemon=True)
         p.start()
         processes.append(p)
         time.sleep(3)  # we can't start too many processes very quickly - otherwise there's errors with the cuda context
