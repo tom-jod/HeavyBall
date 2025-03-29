@@ -172,18 +172,11 @@ def worker(task_queue, result_queue, worker_index, difficulties: list):
             for _ in range(len(difficulties)):
                 d = inner_difficulties.pop(0)
                 exc = None
+                result = None
                 try:
                     result = run_benchmark(script, o, steps, dtype, trials, seed, d)
-                except Exception as exc:
-                    result = {
-                        "name": f"{script.replace('.py', '')}-{d}",
-                        "opt": o,
-                        "success": False,
-                        "runtime": None,
-                        "attempts": 0,
-                        "loss": float("inf"),
-                        "error": str(exc),
-                    }
+                except Exception:
+                    pass
 
                 if result is not None:
                     result_queue.put(result)
