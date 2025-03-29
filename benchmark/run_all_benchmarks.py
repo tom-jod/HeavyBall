@@ -195,7 +195,7 @@ def worker(task_queue, result_queue, worker_index, difficulties: list):
                         "name": f"{script.replace('.py', '')}-{d_}",
                         "opt": o,
                         "success": False,
-                        "runtime": None,
+                        "runtime": 0,
                         "attempts": 0,
                         "loss": float("inf"),
                         "error": str(exc),
