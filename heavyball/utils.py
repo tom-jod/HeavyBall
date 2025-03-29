@@ -50,7 +50,7 @@ def decorator(func):
     return _fn
 
 
-def decorator_knowngood(func: Callable):
+def decorator_knowngood(func: Callable, fullgraph: bool = True):
     compiled = None
 
     @functools.wraps(func)
@@ -59,7 +59,7 @@ def decorator_knowngood(func: Callable):
             return func(*args, **kwargs)
         nonlocal compiled
         if compiled is None:
-            compiled = torch.compile(fullgraph=True, dynamic=dynamic, mode=compile_mode)(func)
+            compiled = torch.compile(fullgraph=fullgraph, dynamic=dynamic, mode=compile_mode)(func)
         return compiled(*args, **kwargs)
 
     return _fn
@@ -1332,6 +1332,7 @@ def divided_root(x: torch.Tensor, y: torch.Tensor, pow0: float, pow1: float, eps
 def precond_init_scale(scale, scale_scale, grad, hessian_vector, vector, scale_max: float = 1e6):
     automatic_scale = True
     manual_hint = " Set it manually using `precond_init_scale=0.1`"
+
     if scale is not None:
         automatic_scale = False
         warn_once(
@@ -1345,12 +1346,16 @@ def precond_init_scale(scale, scale_scale, grad, hessian_vector, vector, scale_m
         scale = mean_root(grad, 4) * scale_scale
     else:
         scale = divided_root(vector, hessian_vector, 2, 4) * scale_scale
+
     if isinstance(scale, torch.Tensor):
         scale = scale.item()  # slow, but necessary
+
     if np.isfinite(scale):
-        if scale > scale_max or scale < 1 / scale_max:
+        if scale > scale_max or scale < 1 / scale_max:  # fallthrough to later checks
             warn_once(f"The computed precond_init_scale {scale} is outside of the expected range.{manual_hint}")
-        return scale
+        else:
+            return scale
+
     if not automatic_scale:
         raise ValueError("The manually set precond_init_scale is not finite")
 
@@ -1361,6 +1366,10 @@ def precond_init_scale(scale, scale_scale, grad, hessian_vector, vector, scale_m
             raise ValueError(f"Grad or HVP is all 0s, causing NaNs in precond_init_scale computation.{manual_hint}")
         if not torch.isfinite(x).all().item():
             raise ValueError("Grad or HVP is not finite")
+
+    if np.isfinite(scale):
+        return scale
+
     raise ValueError(f"Computed precond_init_scale is not finite.{manual_hint}")
 
 
@@ -1634,10 +1643,30 @@ def dampen_multiple(g: List[Tensor], damp: float = 2**-13):
     return flatten(vs), flatten(gs)
 
 
-@decorator_knowngood
 def casted_einsum(expr: str, *args: Tensor) -> Tensor:
     md = min_dtype(args)
     return torch.einsum(expr, *[a.to(md) for a in args]).to(args[-1].dtype)
+
+
+@decorator_knowngood
+def _psgd_calc_scalars_(Qs: List[Tensor], conjB: Tensor):
+    triangular_qs = []
+    for i, q in enumerate(Qs):
+        q = promote(q)
+        if q.dim() <= 1:
+            shape = [1] * conjB.ndim
+            shape[i] = -1
+            conjB /= q.view(shape)
+        else:
+            triangular_qs.append((i, q))
+    return triangular_qs
+
+
+@decorator_knowngood
+def _reshape_conjB(solved: Tensor, original_shape: List[int], last_dim: int, new_shape: int):
+    solved = solved.reshape(original_shape)
+    solved.transpose(last_dim, -1)
+    return solved.reshape(new_shape).contiguous()
 
 
 def psgd_calc_A_and_conjB(exprA, G, Q, conjB):  # conjB ("V", "vector") == randn during hvp/whitening
@@ -1646,23 +1675,26 @@ def psgd_calc_A_and_conjB(exprA, G, Q, conjB):  # conjB ("V", "vector") == randn
         conjB = conjB.view_as(G).permute(*range(1, order), 0)
     conjB = conjB.to(promote(G.dtype))
     A = casted_einsum(exprA, *Q, G)
-    for i, q in enumerate(Q):
-        q = promote(q)
-        if q.dim() <= 1:
-            conjB /= q
-        else:
-            solved = torch.linalg.solve_triangular(q, conjB.reshape(-1, q.size(0)).contiguous(), upper=True, left=False)
-            conjB = solved.reshape_as(conjB)
-        if i < order - 1:
-            conjB = conjB.transpose(i, -1)
+    solve = torch.compiler.disable(torch.linalg.solve_triangular)
+    original_shape = conjB.shape
+    prev_i = -1
+    for i, tri_q in _psgd_calc_scalars_(Q, conjB):
+        conjB = _reshape_conjB(conjB, original_shape, prev_i, [-1, tri_q.size(0)])
+        prev_i = i
+        conjB = solve(tri_q, conjB, upper=True, left=False)
+    conjB = _reshape_conjB(conjB, original_shape, prev_i, original_shape)
     return A, conjB
 
 
-def psgd_lb(A, max_abs):
+@decorator_knowngood
+def _max_select(to_index: Tensor, to_argmax: Tensor):
+    idx = to_argmax.argmax()
+    return to_index.index_select(1, idx).flatten().contiguous()
+
+
+def psgd_lb(A: Tensor, max_abs: Tensor):
     A /= max_abs
-    a0 = torch.einsum("ij,ij->j", A, A)
-    i = torch.argmax(a0)
-    x = torch.index_select(A, 1, i).flatten().contiguous()
+    x = _max_select(A, torch.einsum("ij,ij->j", A, A))
     x = torch.einsum("i,ij->j", x, A)
     x /= x.norm()
     x = torch.einsum("j,kj->k", x, A)
@@ -1671,30 +1703,51 @@ def psgd_lb(A, max_abs):
     return x
 
 
+@decorator_knowngood
+def _subtract_from_line_(state: Tensor, term: Tensor):
+    stochastic_add_([state], [triu_to_line([term])[0][1]], -1)
+
+
+@decorator_knowngood
+def _prescale_term_(term1: Tensor, fac: Tensor, norm: Tensor, lower_bound: Tensor):
+    out = term1.float().triu() * fac
+    out = out / torch.where(norm > 0, lower_bound, norm).clamp(tiny_bf16)
+    copy_stochastic_(term1, out)
+
+
+@decorator_knowngood
+def _compilable_stochastic_multiply_div_(x: Tensor, fac: Tensor, y: Tensor, z: Tensor):
+    copy_stochastic_(x, promote(x) * promote(fac) * promote(y) / promote(z).clamp(min=tiny_bf16))
+
+
+@decorator_knowngood
+def _compilable_add_sub_(x: Tensor, y: Tensor):
+    x = promote(x)
+    y = promote(y)
+    return x - y, x + y
+
+
 @decorator
 def psgd_update_precond(Q, exprs, G, precond_lr, oq, store_triu_as_line, V):
     """Update Kronecker product preconditioner Q with pair (V, G)."""
     exprA, exprGs, _ = exprs
     A, conjB = psgd_calc_A_and_conjB(exprA, G, Q, V)
+    precond_lr = scalar_guard(precond_lr, G)
 
     for q, exprG, o in zip(Q, exprGs, oq):
-        term1 = promote(torch.einsum(exprG, A, A))
-        term2 = promote(torch.einsum(exprG, conjB, conjB))
-        term1, term2 = term1 - term2, term1 + term2
-        term1 *= precond_lr
+        term1 = torch.einsum(exprG, A, A)
+        term2 = torch.einsum(exprG, conjB, conjB)
+        term1, term2 = _compilable_add_sub_(term1, term2)
         norm = term2.norm(float("inf"))
         if q.dim() < 2:
-            term1 *= q.to(term1.dtype) / norm.clamp_(min=tiny_bf16)
+            _compilable_stochastic_multiply_div_(term1, precond_lr, q, norm)
         else:
-            torch.triu(term1, out=term1)
-            term1 /= torch.where(norm > 0, psgd_lb(term2, norm), norm).clamp_(tiny_bf16)
-            term1 = torch.mm(term1, q.to(term1.dtype))
+            lower_bound = psgd_lb(term2, norm)
+            _prescale_term_(term1, precond_lr, lower_bound, norm)
+            torch.mm(term1, q.to(term1.dtype), out=term1)
         if store_triu_as_line:
-            term1 = triu_to_line([term1])[0][1]  # Convert update to line format
-            # Apply update directly to the tensor part of the state tuple o[1]
-            stochastic_add_(o[1], term1, -1)
+            _subtract_from_line_(q, term1)
         else:
-            # Apply update to the state tensor o
             stochastic_add_(o, term1, -1)
 
 
