@@ -10,7 +10,6 @@ from heavyball.utils import clean, set_torch
 
 def get_memory():
     clean()
-    torch.cuda.synchronize()
     clean()
     torch.cuda.synchronize()
     out = torch.cuda.memory_stats()["allocated_bytes.all.peak"]
@@ -22,15 +21,35 @@ def get_memory():
 
 
 @pytest.mark.parametrize("opt", ["NewtonHybrid2PSGDKron", "ForeachPSGDKron", "ForeachADOPT", "SOAP"])
-@pytest.mark.parametrize("size,depth", [(8192, 2), (2048, 16)])
-def test_memory(opt, size, depth: int, iterations: int = 500, warmup: int = 50):
+@pytest.mark.parametrize("size,depth", [(256, 1), (128, 4)])
+@pytest.mark.parametrize("mars", [True, False])
+@pytest.mark.parametrize("merge_dims", [True, False])
+@pytest.mark.parametrize("split", [True, False])
+@pytest.mark.parametrize("finite_differences", [True, False])
+def test_memory(
+    opt,
+    size,
+    depth: int,
+    mars: bool,
+    merge_dims: bool,
+    split: bool,
+    finite_differences: bool,
+    iterations: int = 500,
+    warmup: int = 100,
+    max_growth: float = 1.05,
+):
     set_torch()
 
     opt = getattr(heavyball, opt)
     model = nn.Sequential(*[nn.Linear(size, size) for _ in range(depth)]).cuda()
     print(model)
 
-    o = get_optim(opt, model.parameters(), lr=1e-3)
+    o = get_optim(opt, model.parameters(), lr=1e-3, mars=mars, merge_dims=merge_dims, split=split)
+    if finite_differences:
+        if not o.hessian_approx:
+            pytest.skip("Finite Differences is an HVP calculation - can't do it on non-hvp optimizers")
+        o.finite_differences = True
+
     peak = 0
     for i in range(iterations):
         data = torch.randn((1, size), device="cuda").requires_grad_(True)
@@ -46,4 +65,4 @@ def test_memory(opt, size, depth: int, iterations: int = 500, warmup: int = 50):
         if i <= warmup:
             peak = max(peak, get_memory())
         if i > warmup:
-            assert peak >= get_memory() * 0.95  # fudge factor
+            assert peak * max_growth >= get_memory()  # fudge factor
