@@ -1294,30 +1294,74 @@ def _max_idx(x: List[int]):
 
 
 @decorator_knowngood
-def mean_root(x: torch.Tensor, pow: float):
-    return stochastic_round_(x, x.float().pow(pow).mean().pow(-1 / pow / 2))
+def stable_exp(x: Tensor):
+    # fp16:
+    #   exp(x) is stable in [-17, 11]
+    #   `stable_exp` extends to [-17, 17]
+    #   average error (in [-10, 10]) increased from 2.288e-3 to 2.299e-3
+    # fp32:
+    #   exp(x) is stable in [-103, 88]
+    #   `stable_exp` extends to [-103, 103]
+    #   average error (in [-87, 87]) reduced from 3.309-06 to 3.224-06
+    return torch.where(x > 0, 1 / (-x).exp(), x.exp())
 
 
 @decorator_knowngood
-def divided_root(x, y, pow0, pow1):
-    mean_x = x.float().pow(pow0).mean().pow(1 / pow0 / 2)
-    mean_y = y.float().pow(pow1).mean().pow(-1 / pow1 / 2)
-    return stochastic_round_(x, mean_x * mean_y)  # multiply here, as we already divide in pow -1
+def mean_root(x: torch.Tensor, pow: float, eps=1e-12):
+    # 1 / (mean(x ** pow) ** (1 / pow / 2))
+    log_x = x.double().abs().clamp(min=eps).log()
+    log_mean_x_pow = (log_x * pow).logsumexp(dim=0) - math.log(x.numel())
+    return stable_exp(-log_mean_x_pow / pow / 2)
 
 
-def precond_init_scale(scale, scale_scale, grad, hessian_vector, vector):
+@decorator_knowngood
+def divided_root(x: torch.Tensor, y: torch.Tensor, pow0: float, pow1: float, eps=1e-12):
+    # mean(x ** pow0) ** (1 / pow0 / 2) / mean(y ** pow1) ** (1 / pow1 / 2)
+    log_x = x.double().abs().clamp(min=eps).log()
+    log_y = y.double().abs().clamp(min=eps).log()
+
+    x_normed = (log_x * pow0).logsumexp(dim=0) - math.log(x.numel())
+    x_normed = x_normed / pow0 / 2
+
+    y_normed = (log_y * pow1).logsumexp(dim=0) - math.log(y.numel())
+    y_normed = y_normed / pow1 / 2
+
+    return stable_exp(x_normed - y_normed)
+
+
+def precond_init_scale(scale, scale_scale, grad, hessian_vector, vector, scale_max: float = 1e6):
+    automatic_scale = True
+    manual_hint = " Set it manually using `precond_init_scale=0.1`"
     if scale is not None:
+        automatic_scale = False
         warn_once(
             "It's recommended to use precond_init_scale=None (default since 1.7.x), which uses advanced heuristics."
         )
-        if scale_scale is not None:
+        if scale_scale is not None and scale_scale != 1:
             warn_once(
                 "precond_init_scale_scale multiplies the precond_init_scale by a constant factor. With a fixed precond_init_scale, you should explicitly multiply it into the precond_init_scale."
             )
+    elif hessian_vector is None:
+        scale = mean_root(grad, 4) * scale_scale
+    else:
+        scale = divided_root(vector, hessian_vector, 2, 4) * scale_scale
+    if isinstance(scale, torch.Tensor):
+        scale = scale.item()  # slow, but necessary
+    if np.isfinite(scale):
+        if scale > scale_max or scale < 1 / scale_max:
+            warn_once(f"The computed precond_init_scale {scale} is outside of the expected range.{manual_hint}")
         return scale
-    if hessian_vector is None:
-        return mean_root(grad, 4) * scale_scale
-    return divided_root(vector, hessian_vector, 2, 4) * scale_scale
+    if not automatic_scale:
+        raise ValueError("The manually set precond_init_scale is not finite")
+
+    for x in (grad, hessian_vector, vector):
+        if x is None:
+            continue
+        if torch.allclose(x, torch.zeros_like(x)).item():
+            raise ValueError(f"Grad or HVP is all 0s, causing NaNs in precond_init_scale computation.{manual_hint}")
+        if not torch.isfinite(x).all().item():
+            raise ValueError("Grad or HVP is not finite")
+    raise ValueError(f"Computed precond_init_scale is not finite.{manual_hint}")
 
 
 def init_lra(grad, scale, scale_scale, rank, hessian_vector, vector, dtype=None):
@@ -1646,9 +1690,12 @@ def psgd_update_precond(Q, exprs, G, precond_lr, oq, store_triu_as_line, V):
             term1 /= torch.where(norm > 0, psgd_lb(term2, norm), norm).clamp_(tiny_bf16)
             term1 = torch.mm(term1, q.to(term1.dtype))
         if store_triu_as_line:
-            term1 = triu_to_line([term1])[0][1]
-            o = o[1]
-        stochastic_add_(o, term1, -1)
+            term1 = triu_to_line([term1])[0][1]  # Convert update to line format
+            # Apply update directly to the tensor part of the state tuple o[1]
+            stochastic_add_(o[1], term1, -1)
+        else:
+            # Apply update to the state tensor o
+            stochastic_add_(o, term1, -1)
 
 
 @decorator_knowngood
