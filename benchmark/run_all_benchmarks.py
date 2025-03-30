@@ -151,7 +151,7 @@ def write_progress(results, opt, output):
         if any(not r["success"] for r in results):
             f.write("\n## Errors\n\n")
             for r in sorted(results, key=lambda x: (x["name"], x["opt"])):
-                if not r["success"] and r["error"]:
+                if not r["success"] and r["error"] and r["error"] != "None" and r["error"] != "":
                     f.write(f"\n### {r['name']} - {r['opt']}\n```\n{r['error']}\n```\n")
 
 
@@ -177,7 +177,7 @@ def worker(task_queue, result_queue, worker_index, difficulties: list):
             inner_difficulties = difficulties.copy()
             for _ in range(len(difficulties)):
                 d = inner_difficulties.pop(0)
-                exc = None
+                exc = ""
                 result = None
                 try:
                     result = run_benchmark(script, o, steps, dtype, trials, seed, d)
