@@ -37,8 +37,8 @@ def main(
     win_condition_multiplier: float = 1.0,
     config: Optional[str] = None,
 ):
-    if config is not None and config != "easy":
-        raise SkipConfig("'config' must be 'easy'.")
+    if config is not None and config != "trivial":
+        raise SkipConfig("'config' must be 'trivial'.")
     dtype = [getattr(torch, d) for d in dtype]
     model = Model().cuda().double()
 

@@ -272,7 +272,7 @@ def main(
     total_tasks = 0
     for script, o, i in itertools.product(benchmarks, opt, range(seeds)):
         task_queue.put((script, o, steps, dtype, trials, i))
-        total_tasks += 1
+        total_tasks += len(difficulties)
 
     if not total_tasks:
         raise ValueError("No benchmarks found")

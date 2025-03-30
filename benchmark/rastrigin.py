@@ -51,8 +51,8 @@ def main(
     size: int = 2,
     config: Optional[str] = None,
 ):
-    if config is not None and config != "easy":
-        raise SkipConfig("'config' must be 'easy'.")
+    if config is not None and config != "trivial":
+        raise SkipConfig("'config' must be 'trivial'.")
     if show_image:
         assert size == 2, "Image can only be displayed for 2D functions"
     dtype = [getattr(torch, d) for d in dtype]

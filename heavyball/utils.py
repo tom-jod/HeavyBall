@@ -1718,7 +1718,7 @@ def _subtract_from_line_(state: Tensor, term: Tensor):
 
 @decorator_knowngood
 def _prescale_term_(term1: Tensor, fac: Tensor, norm: Tensor, lower_bound: Tensor):
-    out = term1.float().triu() * fac
+    out = promote(term1).triu() * fac
     out = out / torch.where(norm > 0, lower_bound, norm).clamp(tiny_bf16)
     copy_stochastic_(term1, out)
 
