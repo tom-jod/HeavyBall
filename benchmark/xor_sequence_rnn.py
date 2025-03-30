@@ -45,7 +45,6 @@ class Model(nn.Module):
         i1 = self.embed1(i1)
         _, state = torch.compiler.disable()(self.enc)(i0)
         out, _ = torch.compiler.disable()(self.dec)(i1, state)
-        print(out.shape)
         return self.proj(out.transpose(0, 1))
 
 
