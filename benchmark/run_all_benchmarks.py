@@ -175,7 +175,8 @@ def worker(task_queue, result_queue, worker_index, difficulties: list):
                 result = None
                 try:
                     result = run_benchmark(script, o, steps, dtype, trials, seed, d)
-                except Exception:
+                except Exception as e:
+                    exc = str(e)
                     pass
 
                 if result is not None:
