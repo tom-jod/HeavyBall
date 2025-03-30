@@ -958,7 +958,7 @@ class StatefulOptimizer(torch.optim.Optimizer):
             return None
 
         step = self._inner_group["total_hvp_steps"] = self._inner_group.get("total_hvp_steps", 0) + 1
-        if not hessian_approx or step % self.hvp_interval == 0:
+        if not hessian_approx or (step - 1) % self.hvp_interval == 0:  # hvp in 0th step for better precond init
             with torch.enable_grad():
                 loss = closure()
             return loss
@@ -1306,8 +1306,18 @@ def stable_exp(x: Tensor):
     return torch.where(x > 0, 1 / (-x).exp(), x.exp())
 
 
+"""
+@torch.compile
+def _lse_mean(x: torch.Tensor, pow: float, eps: float) -> torch.Tensor:
+    x_calc = x.abs().clamp(min=eps).double().log() * pow
+    x_calc = x_calc.logsumexp(dim=0) - math.log(x.numel())
+    return x_calc / pow / 2
+    """
+
+
 def _lse_mean(x: Tensor, pow: float, eps: float) -> Tensor:
     # ln(mean(x ** pow) ** (1 / pow / 2))
+    normalization = math.log(x.numel())
     x = x.double()
     x = x.abs()
     x = x.clamp(min=eps)
@@ -1315,7 +1325,7 @@ def _lse_mean(x: Tensor, pow: float, eps: float) -> Tensor:
     x = x * pow
     x = x.flatten()
     x = x.logsumexp(dim=0)  # log(sum(exp( log(x) * P ) - more stable than sum(x ** P)
-    x = x - math.log(x.numel())  # sum -> mean (divide by x.numel() in log space)
+    x = x - normalization  # sum -> mean (divide by x.numel() in log space)
     return x / pow / 2
 
 
