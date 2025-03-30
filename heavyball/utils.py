@@ -1741,7 +1741,7 @@ def psgd_lb(A: torch.Tensor, max_abs: torch.Tensor, max_svd: int = 32) -> torch.
     Q = Q / max_abs
     Z = A.T @ Q
     W, _ = torch.linalg.qr(Z)
-    sketch_norm = torch.linalg.norm(torch.einsum("ji,ik,kn->jn", Q, A, W), ord=2)
+    sketch_norm = torch.linalg.norm(torch.einsum("ij,ik,kn->jn", Q, A, W), ord=2)
     return sketch_norm * max_abs
 
 
