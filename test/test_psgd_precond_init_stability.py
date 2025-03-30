@@ -1,8 +1,14 @@
+import sys
+
 import numpy as np
 import pytest
 import torch
+from torch._dynamo import config
 
 from heavyball.utils import _lse_mean, divided_root, mean_root, stable_exp
+
+config.cache_size_limit = sys.maxsize
+config.accumulated_cache_size_limit = sys.maxsize
 
 
 def np_mean_pow_root(z_np: np.ndarray, pow_val: float, eps_val: float):

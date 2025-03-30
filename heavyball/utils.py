@@ -1306,15 +1306,6 @@ def stable_exp(x: Tensor):
     return torch.where(x > 0, 1 / (-x).exp(), x.exp())
 
 
-"""
-@torch.compile
-def _lse_mean(x: torch.Tensor, pow: float, eps: float) -> torch.Tensor:
-    x_calc = x.abs().clamp(min=eps).double().log() * pow
-    x_calc = x_calc.logsumexp(dim=0) - math.log(x.numel())
-    return x_calc / pow / 2
-    """
-
-
 def _lse_mean(x: Tensor, pow: float, eps: float) -> Tensor:
     # ln(mean(x ** pow) ** (1 / pow / 2))
     normalization = math.log(x.numel())
@@ -1341,29 +1332,38 @@ def divided_root(x: torch.Tensor, y: torch.Tensor, pow0: float, pow1: float, eps
     return stable_exp(_lse_mean(x, pow0, eps) - _lse_mean(y, pow1, eps))
 
 
-def precond_init_scale(scale, scale_scale, grad, hessian_vector, vector, scale_max: float = 1e6):
+def precond_init_scale(scale, scale_scale, scale_power, grad, hessian_vector, vector, scale_max: float = 100):
     automatic_scale = True
     manual_hint = " Set it manually using `precond_init_scale=0.1`"
+    scale_scale = 1 if scale_scale is None else scale_scale
 
     if scale is not None:
         automatic_scale = False
         warn_once(
             "It's recommended to use precond_init_scale=None (default since 1.7.x), which uses advanced heuristics."
         )
-        if scale_scale is not None and scale_scale != 1:
+        if scale_scale != 1:
             warn_once(
-                "precond_init_scale_scale multiplies the precond_init_scale by a constant factor. With a fixed precond_init_scale, you should explicitly multiply it into the precond_init_scale."
+                "precond_init_scale_scale multiplies the precond_init_scale by a constant factor. With a fixed precond_init_scale, you should explicitly fuse it."
+            )
+        if scale_power is not None:
+            warn_once(
+                "precond_init_scale_power is used to compute precond_init_scale ** precond_init_scale_power. With a fixed precond_init_scale, you should explicitly fuse it."
             )
     elif hessian_vector is None:
         scale = mean_root(grad, 4) * scale_scale
     else:
         scale = divided_root(vector, hessian_vector, 2, 4) * scale_scale
 
+    if automatic_scale:
+        scale_power = 0.5 if scale_power is None else scale_power
+        scale = scale**scale_power
+
     if isinstance(scale, torch.Tensor):
         scale = scale.item()  # slow, but necessary
 
     if np.isfinite(scale):
-        if scale > scale_max or scale < 1 / scale_max:  # fallthrough to later checks
+        if scale > scale_max:  # fallthrough to later checks
             warn_once(f"The computed precond_init_scale {scale} is outside of the expected range.{manual_hint}")
         else:
             return scale
@@ -1385,8 +1385,8 @@ def precond_init_scale(scale, scale_scale, grad, hessian_vector, vector, scale_m
     raise ValueError(f"Computed precond_init_scale is not finite.{manual_hint}")
 
 
-def init_lra(grad, scale, scale_scale, rank, hessian_vector, vector, dtype=None):
-    scale = precond_init_scale(scale, scale_scale, grad, hessian_vector, vector)
+def init_lra(grad, scale, scale_scale, scale_power, rank, hessian_vector, vector, dtype=None):
+    scale = precond_init_scale(scale, scale_scale, scale_power, grad, hessian_vector, vector)
     U = torch.randn((*grad.shape, rank), dtype=dtype, device=grad.device)
     V = torch.randn((*grad.shape, rank), dtype=dtype, device=grad.device)
     d = torch.full_like(grad, scale, dtype=dtype, device=grad.device)
@@ -1394,7 +1394,16 @@ def init_lra(grad, scale, scale_scale, rank, hessian_vector, vector, dtype=None)
 
 
 def init_Q_exprs(
-    grad, scale, scale_scale, max_size, min_ndim_triangular, memory_save_mode, hessian_vector, vector, dtype=None
+    grad,
+    scale,
+    scale_scale,
+    scale_power,
+    max_size,
+    min_ndim_triangular,
+    memory_save_mode,
+    hessian_vector,
+    vector,
+    dtype=None,
 ):
     """
     For a scalar or tensor `grad`, we initialize its preconditioner Q and
@@ -1403,7 +1412,7 @@ def init_Q_exprs(
     precond init scale computation from
     https://github.com/lixilinx/psgd_torch/blob/1943e66596111e78157ca1b72b31c1dfdf0653ef/preconditioned_stochastic_gradient_descent.py#L2208-L2227
     """
-    scale = precond_init_scale(scale, scale_scale, grad, hessian_vector, vector)
+    scale = precond_init_scale(scale, scale_scale, scale_power, grad, hessian_vector, vector)
     letters = string.ascii_lowercase + string.ascii_uppercase
     dtype = dtype if dtype is not None else grad.dtype
     shape = grad.shape

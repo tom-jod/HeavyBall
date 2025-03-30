@@ -517,8 +517,9 @@ class ForeachPSGDKron(C.BaseOpt):
         update_clipping: C.str_or_fn = C.use_default,  #
         # expert parameters
         precond_init_scale=None,
-        precond_init_scale_scale=1,
-        precond_lr=0.1,
+        precond_init_scale_scale: float = 1,
+        precond_init_scale_power: Optional[float] = None,
+        precond_lr: float = 0.1,
     ):
         defaults = locals()
         defaults.pop("self")
@@ -603,8 +604,9 @@ class ForeachPSGDLRA(C.BaseOpt):
         eps: float = 1e-8,  #
         # expert parameters
         precond_init_scale=None,
-        precond_init_scale_scale=1,
-        precond_lr=0.1,
+        precond_init_scale_scale: float = 1,
+        precond_init_scale_power: Optional[float] = None,
+        precond_lr: float = 0.1,
     ):
         defaults = locals()
         defaults.pop("self")
