@@ -1720,15 +1720,29 @@ def _max_select(to_index: Tensor, to_argmax: Tensor):
     return to_index.index_select(1, idx).flatten().contiguous()
 
 
-def psgd_lb(A: Tensor, max_abs: Tensor):
-    A /= max_abs
-    x = _max_select(A, torch.einsum("ij,ij->j", A, A))
-    x = torch.einsum("i,ij->j", x, A)
-    x /= x.norm()
-    x = torch.einsum("j,kj->k", x, A)
-    x = x.norm()
-    x *= max_abs
-    return x
+@decorator_knowngood
+def _random_projection(x: Tensor, scale: Tensor):
+    k = 2 ** math.ceil(math.log2(math.log2(min(x.shape))))  # next-largest-power-of-2 of log2-of-size
+    projection = torch.randn(x.size(1), k, device=x.device, dtype=x.dtype)
+    return x @ projection / scale
+
+
+def psgd_lb(A: torch.Tensor, max_abs: torch.Tensor, max_svd: int = 32) -> torch.Tensor:
+    """
+    Spectral norm estimate via randomized subspace iteration
+
+    Code originally from @evanatyourservice
+    """
+    if min(A.shape) <= max_svd:
+        return torch.linalg.norm(A, ord=2)
+
+    Y = _random_projection(A, max_abs)
+    Q, _ = torch.linalg.qr(Y)
+    Q = Q / max_abs
+    Z = A.T @ Q
+    W, _ = torch.linalg.qr(Z)
+    sketch_norm = torch.linalg.norm(torch.einsum("ji,ik,kn->jn", Q, A, W), ord=2)
+    return sketch_norm * max_abs
 
 
 @decorator_knowngood
