@@ -6,6 +6,7 @@ import re
 import time
 import traceback
 from datetime import datetime
+from queue import Empty
 
 import numpy as np
 import torch
@@ -167,7 +168,12 @@ def worker(task_queue, result_queue, worker_index, difficulties: list):
 
     while True:
         try:
-            script, o, steps, dtype, trials, seed = task_queue.get()
+            try:
+                script, o, steps, dtype, trials, seed = task_queue.get(timeout=0.1)
+            except Empty:
+                result_queue.put(None)
+                return
+
             inner_difficulties = difficulties.copy()
             for _ in range(len(difficulties)):
                 d = inner_difficulties.pop(0)
@@ -199,6 +205,7 @@ def worker(task_queue, result_queue, worker_index, difficulties: list):
                 break
 
         except Exception:
+            traceback.print_exc()
             break
 
 
@@ -267,8 +274,12 @@ def main(
         task_queue.put((script, o, steps, dtype, trials, i))
         total_tasks += 1
 
+    if not total_tasks:
+        raise ValueError("No benchmarks found")
+
     processes = []
-    for idx in range(min(parallelism, total_tasks)):
+    workers = min(parallelism, total_tasks)
+    for idx in range(workers):
         p = multiprocessing.Process(target=worker, args=(task_queue, result_queue, idx, difficulties), daemon=True)
         p.start()
         processes.append(p)
@@ -279,8 +290,11 @@ def main(
     completed = 0
 
     try:
-        while completed < total_tasks:
+        while workers > 0:
             result = result_queue.get()
+            if result is None:
+                workers -= 1
+                continue
             results.append(result)
             completed += 1
             print(

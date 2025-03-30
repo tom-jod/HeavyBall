@@ -14,8 +14,8 @@ set_torch()
 
 
 configs = {
-    "trivial": {"length": 2},
-    "easy": {"length": 5},
+    "trivial": {"length": 4},
+    "easy": {"length": 6},
     "medium": {"length": 8},
     "hard": {"length": 10},
     "extreme": {"length": 12},
@@ -45,6 +45,7 @@ class Model(nn.Module):
         i1 = self.embed1(i1)
         _, state = torch.compiler.disable()(self.enc)(i0)
         out, _ = torch.compiler.disable()(self.dec)(i1, state)
+        print(out.shape)
         return self.proj(out.transpose(0, 1))
 
 

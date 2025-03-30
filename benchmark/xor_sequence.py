@@ -11,9 +11,10 @@ from heavyball.utils import set_torch
 
 app = typer.Typer(pretty_exceptions_enable=False)
 set_torch()
+
 configs = {
-    "trivial": {"length": 2},
-    "easy": {"length": 5},
+    "trivial": {"length": 4},
+    "easy": {"length": 6},
     "medium": {"length": 8},
     "hard": {"length": 10},
     "extreme": {"length": 12},
