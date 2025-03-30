@@ -192,6 +192,7 @@ def worker(task_queue, result_queue, worker_index, difficulties: list):
                         "attempts": 0,
                         "loss": float("inf"),
                         "error": str(exc),
+                        "seed": seed,
                     }
                     result_queue.put(result)
                 break
