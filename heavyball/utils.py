@@ -1752,7 +1752,9 @@ def _compilable_stochastic_multiply_div_(x: Tensor, fac: Tensor, y: Tensor, z: T
 def _compilable_add_sub_(x: Tensor, y: Tensor):
     x = promote(x)
     y = promote(y)
-    return x - y, x + y
+    diff = x - y
+    summed = x + y
+    return diff, summed, summed.norm(float("inf"))
 
 
 @decorator
@@ -1765,8 +1767,7 @@ def psgd_update_precond(Q, exprs, G, precond_lr, oq, store_triu_as_line, V):
     for q, exprG, o in zip(Q, exprGs, oq):
         term1 = torch.einsum(exprG, A, A)
         term2 = torch.einsum(exprG, conjB, conjB)
-        term1, term2 = _compilable_add_sub_(term1, term2)
-        norm = term2.norm(float("inf"))
+        term1, term2, norm = _compilable_add_sub_(term1, term2)
         if q.dim() < 2:
             _compilable_stochastic_multiply_div_(term1, precond_lr, q, norm)
         else:
@@ -1969,12 +1970,6 @@ def line_to_triu(Q_list: List[Tuple[Optional[List[int]], Tensor]]):
             q = x
         new.append(q)
     return new
-
-
-def update_triu_(q_state, materialised):
-    for (shape0, q), (shape1, m) in zip(q_state, triu_to_line(materialised)):
-        assert shape0 == shape1
-        copy_stochastic_(q, m)
 
 
 _warned = set()
