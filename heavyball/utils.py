@@ -1307,6 +1307,7 @@ def stable_exp(x: Tensor):
 
 
 def _lse_mean(x: Tensor, pow: float, eps: float) -> Tensor:
+    # ln(mean(x ** pow) ** (1 / pow / 2))
     x = x.double()
     x = x.abs()
     x = x.clamp(min=eps)
@@ -1314,7 +1315,7 @@ def _lse_mean(x: Tensor, pow: float, eps: float) -> Tensor:
     x = x * pow
     x = x.flatten()
     x = x.logsumexp(dim=0)  # log(sum(exp( log(x) * P ) - more stable than sum(x ** P)
-    x = x - math.log(x.numel())  # debias
+    x = x - math.log(x.numel())  # sum -> mean (divide by x.numel() in log space)
     return x / pow / 2
 
 

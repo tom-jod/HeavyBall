@@ -291,16 +291,23 @@ def main(
 
     try:
         while workers > 0:
-            result = result_queue.get()
-            if result is None:
-                workers -= 1
-                continue
-            results.append(result)
-            completed += 1
-            print(
-                f"Progress: [{completed}/{total_tasks}] {result['name']}.py - {result['opt']}: {'✓' if result['success'] else '✗'}"
-            )
-            write_progress(results, opt, output)
+            prev_completed = completed
+            while True:  # clear entire backlog and continue
+                try:
+                    result = result_queue.get(timeout=1)
+                except Empty:
+                    break
+                if result is None:
+                    workers -= 1
+                    continue
+                results.append(result)
+                completed += 1
+                print(
+                    f"Progress: [{completed}/{total_tasks}] {result['name']}.py - {result['opt']}: "  #
+                    f"{'✓' if result['success'] else '✗'}"
+                )
+            if prev_completed != completed:  # >= 1 task finished
+                write_progress(results, opt, output)
 
     except KeyboardInterrupt:
         print("\nInterrupted by user. Saving current progress...")
