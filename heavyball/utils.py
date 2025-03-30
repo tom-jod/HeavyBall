@@ -161,7 +161,7 @@ def dim_merger(grad, max_precond_dim, split: bool = False):
     new_shape = [grad.shape[0], *new_shape[::-1]]
     new_grad = grad.reshape(new_shape)
     if not split:
-        return new_grad
+        return new_grad.to(memory_format=torch.contiguous_format).contiguous()
 
     grads = [new_grad]
     for i, sh in reversed(list(enumerate(new_shape[:]))):
@@ -172,7 +172,7 @@ def dim_merger(grad, max_precond_dim, split: bool = False):
             continue
         grads = [a for g in grads for a in g.split(max_precond_dim, dim=i)]
     if len(grads) == 1:
-        return new_grad
+        return new_grad.to(memory_format=torch.contiguous_format).contiguous()
     new_grads = []
     for g in grads:
         append_or_extend(new_grads, dim_merger(g, max_precond_dim, split))
