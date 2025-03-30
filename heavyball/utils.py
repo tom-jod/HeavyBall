@@ -1652,38 +1652,45 @@ def casted_einsum(expr: str, *args: Tensor) -> Tensor:
 @decorator_knowngood
 def _psgd_calc_scalars_(Qs: List[Tensor], conjB: Tensor):
     triangular_qs = []
+    conjB = promote(conjB)
     for i, q in enumerate(Qs):
         q = promote(q)
         if q.dim() <= 1:
-            shape = [1] * conjB.ndim
-            shape[i] = -1
-            conjB /= q.view(shape)
+            if conjB.ndim == 0:
+                conjB = conjB / q
+            else:
+                shape = [1] * conjB.ndim
+                shape[i] = -1
+                conjB = conjB / q.view(shape)
         else:
             triangular_qs.append((i, q))
-    return triangular_qs
+    return triangular_qs, conjB
 
 
 @decorator_knowngood
-def _reshape_conjB(solved: Tensor, original_shape: List[int], last_dim: int, new_shape: int):
+def _reshape_conjB(
+    solved: Tensor, transposed_shape: List[int], original_shape: List[int], last_dim: int, new_dim: int, new_shape: int
+):
+    solved = solved.reshape(transposed_shape)
+    solved = solved.transpose(-1, last_dim)
     solved = solved.reshape(original_shape)
-    solved.transpose(last_dim, -1)
-    return solved.reshape(new_shape).contiguous()
+    solved = solved.transpose(-1, new_dim)
+    return solved.reshape(new_shape).contiguous(), solved.shape
 
 
 def psgd_calc_A_and_conjB(exprA, G, Q, conjB):  # conjB ("V", "vector") == randn during hvp/whitening
-    order = G.dim()
-    if order > 1:
-        conjB = conjB.view_as(G).permute(*range(1, order), 0)
-    conjB = conjB.to(promote(G.dtype))
     A = casted_einsum(exprA, *Q, G)
     solve = torch.compiler.disable(torch.linalg.solve_triangular)
-    original_shape = conjB.shape
+    transposed_shape = original_shape = conjB.shape
     prev_i = -1
-    for i, tri_q in _psgd_calc_scalars_(Q, conjB):
-        conjB = _reshape_conjB(conjB, original_shape, prev_i, [-1, tri_q.size(0)])
+    qs, conjB = _psgd_calc_scalars_(Q, conjB)
+    for i, tri_q in qs:
+        conjB, transposed_shape = _reshape_conjB(
+            conjB, transposed_shape, original_shape, prev_i, i, [-1, tri_q.size(0)]
+        )
         prev_i = i
         conjB = solve(tri_q, conjB, upper=True, left=False)
-    conjB = _reshape_conjB(conjB, original_shape, prev_i, original_shape)
+    conjB, _ = _reshape_conjB(conjB, transposed_shape, original_shape, prev_i, -1, G.shape)
     return A, conjB
 
 
@@ -1747,7 +1754,7 @@ def psgd_update_precond(Q, exprs, G, precond_lr, oq, store_triu_as_line, V):
             _prescale_term_(term1, precond_lr, lower_bound, norm)
             torch.mm(term1, q.to(term1.dtype), out=term1)
         if store_triu_as_line:
-            _subtract_from_line_(q, term1)
+            _subtract_from_line_(o[1], term1)
         else:
             stochastic_add_(o, term1, -1)
 
