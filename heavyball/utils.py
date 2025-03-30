@@ -1306,27 +1306,28 @@ def stable_exp(x: Tensor):
     return torch.where(x > 0, 1 / (-x).exp(), x.exp())
 
 
+def _lse_mean(x: Tensor, pow: float, eps: float) -> Tensor:
+    x = x.double()
+    x = x.abs()
+    x = x.clamp(min=eps)
+    x = x.log()
+    x = x * pow
+    x = x.flatten()
+    x = x.logsumexp(dim=0)  # log(sum(exp( log(x) * P ) - more stable than sum(x ** P)
+    x = x - math.log(x.numel())  # debias
+    return x / pow / 2
+
+
 @decorator_knowngood
 def mean_root(x: torch.Tensor, pow: float, eps=1e-12):
     # 1 / (mean(x ** pow) ** (1 / pow / 2))
-    log_x = x.double().abs().clamp(min=eps).log()
-    log_mean_x_pow = (log_x * pow).logsumexp(dim=0) - math.log(x.numel())
-    return stable_exp(-log_mean_x_pow / pow / 2)
+    return stable_exp(-_lse_mean(x, pow, eps))
 
 
 @decorator_knowngood
 def divided_root(x: torch.Tensor, y: torch.Tensor, pow0: float, pow1: float, eps=1e-12):
     # mean(x ** pow0) ** (1 / pow0 / 2) / mean(y ** pow1) ** (1 / pow1 / 2)
-    log_x = x.double().abs().clamp(min=eps).log()
-    log_y = y.double().abs().clamp(min=eps).log()
-
-    x_normed = (log_x * pow0).logsumexp(dim=0) - math.log(x.numel())
-    x_normed = x_normed / pow0 / 2
-
-    y_normed = (log_y * pow1).logsumexp(dim=0) - math.log(y.numel())
-    y_normed = y_normed / pow1 / 2
-
-    return stable_exp(x_normed - y_normed)
+    return stable_exp(_lse_mean(x, pow0, eps) - _lse_mean(y, pow1, eps))
 
 
 def precond_init_scale(scale, scale_scale, grad, hessian_vector, vector, scale_max: float = 1e6):
