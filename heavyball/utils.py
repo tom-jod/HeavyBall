@@ -1727,14 +1727,14 @@ def _random_projection(x: Tensor, scale: Tensor):
     return x @ projection / scale
 
 
-def psgd_lb(A: torch.Tensor, max_abs: torch.Tensor, max_svd: int = 32) -> torch.Tensor:
+def psgd_lb(A: torch.Tensor, max_abs: torch.Tensor, max_svd: int = 64) -> torch.Tensor:
     """
     Spectral norm estimate via randomized subspace iteration
 
     Code originally from @evanatyourservice
     """
     if min(A.shape) <= max_svd:
-        return torch.linalg.norm(A, ord=2)
+        return torch.linalg.norm(A, ord=2)  # SVD needs ~25% more runtime for size=32, but is 100% accurate
 
     Y = _random_projection(A, max_abs)
     Q, _ = torch.linalg.qr(Y)
