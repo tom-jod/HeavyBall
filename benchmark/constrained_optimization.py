@@ -44,12 +44,9 @@ class Model(nn.Module):
 
 
 def win_condition(model, loss):
-    """Check if the parameter x is close to the constraint boundary."""
     with torch.no_grad():
-        final_x = model.param.item()
-        success = abs(final_x - TARGET_X) < TOLERANCE
-        # print(f"Final x: {final_x}, Target: {TARGET_X}, Success: {success}") # Debug print
-        return success, {"final_x": final_x}
+        success = ((model.param - TARGET_X).abs() < TOLERANCE).all()
+        return success, {}
 
 
 @app.command()
