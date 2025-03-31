@@ -297,6 +297,8 @@ class Objective:
         self.set_precond_init_scale = False
 
     def _inner(self, params):
+        input_kwargs = locals()
+        input_kwargs.pop("self")
         params = {
             "lr": params[0],
             "betas": (1 - params[1], 1 - params[2]),
@@ -329,7 +331,7 @@ class Objective:
                     loss = o.step(_closure)
                 except PrecondInitError:
                     self.set_precond_init_scale = True
-                    return self._inner(params)
+                    return self._inner(**input_kwargs)
                 o.zero_grad()
 
                 with torch.no_grad():
