@@ -404,7 +404,7 @@ def precond_schedule(group, prob: Union[callable, float, None] = None, name: str
 
 @no_state_no_foreach
 def orthogonalize_update(group, update, grad, param, scale_mode: str = "scale"):  # explore scale_mode="graft"
-    if update.dim() == 1:
+    if update.dim() < 2:
         return update
     original_shape = update.shape
     # doing it this way, as tmp and update are not guaranteed to share memory address or layout

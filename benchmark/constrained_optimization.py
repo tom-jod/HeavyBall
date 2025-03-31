@@ -33,10 +33,10 @@ def objective(x, penalty):
 
 
 class Model(nn.Module):
-    def __init__(self, initial_x, penalty):
+    def __init__(self, penalty):
         super().__init__()
         # Using a tensor with requires_grad=True directly as the parameter
-        self.param = nn.Parameter(torch.tensor(initial_x).float())
+        self.param = nn.Parameter(torch.zeros((16,)))
         self.penalty = penalty
 
     def forward(self):
@@ -66,13 +66,12 @@ def main(
 ):
     penalty = configs.get(config, {}).get("penalty", 1e6)
     dtype = [getattr(torch, d) for d in dtype]
-    initial_x = 0.0  # Start within the feasible region
 
     # Clean up old plots if any (though this benchmark doesn't plot)
     for path in pathlib.Path(".").glob("constrained_optimization*.png"):
         path.unlink()
 
-    model = Model(initial_x, penalty)
+    model = Model(penalty)
     model.double()  # Use double for precision if needed
 
     # No external data needed for this simple objective

@@ -413,6 +413,10 @@ def get_orthogonal_matrix_QR(GG: List[Tensor], Q: List[Tensor], exp_avg: Optiona
     :param Q: List of current eigenbases (updated in-place to Q_new).
     :param exp_avg: Exponential moving average in the old eigenspace (updated in-place if provided).
     """
+    if exp_avg.dim() == 0:  # preconditioning doesn't make sense here
+        Q.clear()
+        return
+
     if isinstance(Q, list) and not Q:
         return
 
@@ -1374,7 +1378,7 @@ def precond_init_scale(scale, scale_scale, scale_power, grad, hessian_vector, ve
     for x in (grad, hessian_vector, vector):
         if x is None:
             continue
-        if torch.allclose(x, torch.zeros_like(x)).item():
+        if torch.allclose(x, torch.zeros_like(x)):
             raise ValueError(f"Grad or HVP is all 0s, causing NaNs in precond_init_scale computation.{manual_hint}")
         if not torch.isfinite(x).all().item():
             raise ValueError("Grad or HVP is not finite")
@@ -1650,7 +1654,7 @@ def extract_from_flat_update(params: List[Tensor], update: Tensor):
 @decorator_knowngood
 def flatten(x: List[Tensor], remaining: int = 0) -> Tensor:
     last_dim = x[0].shape[-remaining:] if remaining else []
-    return torch.cat([i.reshape(-1, *last_dim) for i in x], 0)
+    return torch.cat([i.reshape(-1, *last_dim) for i in x if i.numel()], 0)
 
 
 @decorator_knowngood
@@ -1734,7 +1738,7 @@ def psgd_lb(A: torch.Tensor, max_abs: torch.Tensor, max_svd: int = 64) -> torch.
     Code originally from @evanatyourservice
     """
     if min(A.shape) <= max_svd:
-        return torch.linalg.norm(A, ord=2)  # SVD needs ~25% more runtime for size=32, but is 100% accurate
+        return torch.linalg.norm(A, ord=2)  # SVD needs ~120% more runtime for size=64, but 0% error instead of 5%
 
     Y = _random_projection(A, max_abs)
     Q, _ = torch.linalg.qr(Y)
