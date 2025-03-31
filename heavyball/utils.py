@@ -1336,6 +1336,10 @@ def divided_root(x: torch.Tensor, y: torch.Tensor, pow0: float, pow1: float, eps
     return stable_exp(_lse_mean(x, pow0, eps) - _lse_mean(y, pow1, eps))
 
 
+class PrecondInitError(ValueError):
+    pass
+
+
 def precond_init_scale(scale, scale_scale, scale_power, grad, hessian_vector, vector, scale_max: float = 100):
     automatic_scale = True
     manual_hint = " Set it manually using `precond_init_scale=0.1`"
@@ -1373,20 +1377,22 @@ def precond_init_scale(scale, scale_scale, scale_power, grad, hessian_vector, ve
             return scale
 
     if not automatic_scale:
-        raise ValueError("The manually set precond_init_scale is not finite")
+        raise PrecondInitError("The manually set precond_init_scale is not finite")
 
     for x in (grad, hessian_vector, vector):
         if x is None:
             continue
         if torch.allclose(x, torch.zeros_like(x)):
-            raise ValueError(f"Grad or HVP is all 0s, causing NaNs in precond_init_scale computation.{manual_hint}")
+            raise PrecondInitError(
+                f"Grad or HVP is all 0s, causing NaNs in precond_init_scale computation.{manual_hint}"
+            )
         if not torch.isfinite(x).all().item():
-            raise ValueError("Grad or HVP is not finite")
+            raise PrecondInitError("Grad or HVP is not finite")
 
     if np.isfinite(scale):
         return scale
 
-    raise ValueError(f"Computed precond_init_scale is not finite.{manual_hint}")
+    raise PrecondInitError(f"Computed precond_init_scale is not finite.{manual_hint}")
 
 
 def init_lra(grad, scale, scale_scale, scale_power, rank, hessian_vector, vector, dtype=None):

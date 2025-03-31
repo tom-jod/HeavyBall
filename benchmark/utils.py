@@ -16,6 +16,7 @@ from torch._dynamo import config
 
 import heavyball.utils
 from heavyball import chainable as C
+from heavyball.utils import PrecondInitError
 
 config.cache_size_limit = 2**16
 
@@ -293,6 +294,7 @@ class Objective:
         self.best_at = 0
         self.avg = None
         self.use_cudnn = True
+        self.set_precond_init_scale = False
 
     def _inner(self, params):
         params = {
@@ -302,6 +304,8 @@ class Objective:
             "eps": 1e-8,
             "precond_lr": params[3],  # we never have both precond_lr and shampoo_beta
         }
+        if self.set_precond_init_scale:
+            params["precond_init_scale"] = 0.1
         self.m = copy.deepcopy(self.model)
         o = get_optim(self.opt, self.m.parameters(), **params, weight_decay=self.weight_decay, **self.kwargs)
         torch_hist = torch.empty(self.group, dtype=torch.float64, device="cuda")
@@ -321,7 +325,11 @@ class Objective:
                     loss.backward()
                     return loss
 
-                loss = o.step(_closure)
+                try:
+                    loss = o.step(_closure)
+                except PrecondInitError:
+                    self.set_precond_init_scale = True
+                    return self._inner(params)
                 o.zero_grad()
 
                 with torch.no_grad():
