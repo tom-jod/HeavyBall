@@ -40,7 +40,7 @@ class Model(nn.Module):
         self.penalty = penalty
 
     def forward(self):
-        return objective(self.param, self.penalty)
+        return objective(self.param, self.penalty).mean()
 
 
 def win_condition(model, loss):
