@@ -7,10 +7,17 @@ import torch
 from tabulate import tabulate
 from torch import Tensor
 
-from heavyball.utils import _max_select, set_torch
+from heavyball.utils import decorator_knowngood, set_torch
 from heavyball.utils import psgd_lb as _lb_random_sketch
 
 set_torch()
+
+
+@decorator_knowngood
+def _max_select(to_index: Tensor):
+    to_argmax = to_index.square().sum(0)
+    idx = to_argmax.argmax()
+    return to_index.index_select(1, idx).flatten().contiguous()
 
 
 def psgd_lb(A: Tensor, max_abs: Tensor):
@@ -18,7 +25,7 @@ def psgd_lb(A: Tensor, max_abs: Tensor):
     ~1.5 power iter steps & vector norm.
     Adapted from Evan Walters (https://github.com/evanatyourservice)
     """
-    x = _max_select(A, torch.einsum("ij,ij->j", A, A))  # / max_abs
+    x = _max_select(A)  # / max_abs
     x = torch.einsum("i,ij->j", x, A)
     x /= x.norm()
     x = torch.einsum("i,ji,jk->k", x, A, A)
@@ -30,7 +37,7 @@ def psgd_lb_single(A: Tensor, max_abs: Tensor):
     ~1.5 power iter steps & vector norm.
     Adapted from Evan Walters (https://github.com/evanatyourservice)
     """
-    x = _max_select(A, torch.einsum("ij,ij->j", A, A))  # / max_abs
+    x = _max_select(A)  # / max_abs
     x = torch.einsum("i,ij->j", x, A)
     x /= x.norm()
     x = torch.einsum("i,ji->j", x, A)
@@ -84,17 +91,12 @@ def time_function(
     # Warmup
     for _ in range(num_warmup):
         _ = test_func()
-        if device == "cuda":
-            torch.cuda.synchronize()
+    torch.cuda.synchronize()
 
-    # Timing
-    if device == "cuda":
-        torch.cuda.synchronize()
     start_time = time.time()
     for _ in range(num_repeats):
         _ = test_func()
-        if device == "cuda":
-            torch.cuda.synchronize()
+    torch.cuda.synchronize()
     end_time = time.time()
 
     return (end_time - start_time) / num_repeats * 1000  # Convert to ms
@@ -120,7 +122,7 @@ def benchmark_method(
     else:
         method_norm = method_func(A, max_abs)
 
-    rel_error = torch.abs((method_norm - ground_truth_norm) / ground_truth_norm).item()
+    rel_error = ((method_norm - ground_truth_norm) / ground_truth_norm).item()
 
     # Time the ground truth method for comparison
     ground_truth_time = time_function(calculate_ground_truth, A, max_abs, num_repeats, num_warmup, device=device)
@@ -376,18 +378,16 @@ def main():
         (512, 512),
         (1024, 1024),
         (2048, 2048),
-        # Non-square matrices
-        (16, 1024),
-        (128, 1024),
+        (4096, 4096),
     ]
 
     k_values = [1, 2, 4, 8, 16, 32, 64, 128, 256]
     dtype = torch.float32
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+    device = "cuda"
 
     # Set number of repeats based on device (fewer for CPU)
-    num_repeats = 32 if device == "cuda" else 3
-    num_warmup = 8
+    num_repeats = 64
+    num_warmup = 4
 
     # Run benchmarks for fixed methods (psgd_lb and psgd_lb_single)
     print("\n=== Benchmarking fixed methods (psgd_lb and psgd_lb_single) ===")

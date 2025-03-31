@@ -111,12 +111,16 @@ def get_color_for_cell(normalized_value, success, best_in_row=False):
 
 
 def to_bool(x):
-    return x.fillna(False).astype(bool)
+    if isinstance(x, pd.Series):
+        return x.fillna(False).astype(bool)
+    if np.isfinite(x):
+        return x > 0
+    return False
 
 
 def create_visual_matrix(success_matrix, attempts_matrix, runtime_matrix, loss_matrix):
     plt.style.use("default")
-    fig = plt.figure(figsize=(20, 15), facecolor="white")
+    fig = plt.figure(figsize=(80, 60), facecolor="white")
 
     # Create grid for multiple panels with adjusted width ratios
     gs = plt.GridSpec(

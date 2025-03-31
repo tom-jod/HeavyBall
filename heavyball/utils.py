@@ -1725,16 +1725,11 @@ def psgd_calc_A_and_conjB(exprA, G, Q, conjB):  # conjB ("V", "vector") == randn
 
 
 @decorator_knowngood
-def _max_select(to_index: Tensor, to_argmax: Tensor):
-    idx = to_argmax.argmax()
-    return to_index.index_select(1, idx).flatten().contiguous()
-
-
-@decorator_knowngood
 def _random_projection(x: Tensor, scale: Tensor):
     k = 2 ** math.ceil(math.log2(math.log2(min(x.shape))))  # next-largest-power-of-2 of log2-of-size
-    projection = torch.randn(x.size(1), k, device=x.device, dtype=x.dtype)
-    return x @ projection / scale
+    norm = x.square().sum(0)
+    indices = torch.topk(norm, k, largest=True).indices
+    return x.index_select(1, indices).contiguous() / scale
 
 
 def psgd_lb(A: torch.Tensor, max_abs: torch.Tensor, max_svd: int = 64) -> torch.Tensor:
