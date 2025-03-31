@@ -45,7 +45,7 @@ class Model(nn.Module):
 
 def win_condition(model, loss):
     with torch.no_grad():
-        success = ((model.param - TARGET_X).abs() < TOLERANCE).all()
+        success = ((model.param - TARGET_X).abs() < TOLERANCE).all().item()
         return success, {}
 
 
