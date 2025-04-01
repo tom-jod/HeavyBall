@@ -8,8 +8,6 @@ from torch import Tensor
 
 from . import utils
 
-balance_probability: float = 0.1
-
 
 def _key_in_state(state, key):
     if isinstance(key, str):
@@ -514,12 +512,12 @@ def scale_by_soap(group, update, grad, param, exp_avg, exp_avg_sq, Q, GG, inner:
     return precond
 
 
-def _update_psgd_precond(cached, Q_cache, group, param, grad, Q_mat, Q, exprs, prob: Optional[callable] = None):
+def _update_psgd_precond(cached, Q_cache, group, param, grad, Q, exprs, prob: Optional[callable] = None):
     if prob is None:
         prob = utils.precond_update_prob_schedule()
 
     if not group["is_preconditioning"]:
-        return Q_mat
+        return
 
     if utils.hasattr_none(param, "vector"):
         vector, hessian_vector = param.vector, param.hessian_vector
@@ -529,7 +527,6 @@ def _update_psgd_precond(cached, Q_cache, group, param, grad, Q_mat, Q, exprs, p
         vector, hessian_vector = utils.dampen_grad(grad)
 
     utils.psgd_update_precond(
-        Q_mat,
         exprs,
         hessian_vector,
         group["precond_lr"],
@@ -538,66 +535,46 @@ def _update_psgd_precond(cached, Q_cache, group, param, grad, Q_mat, Q, exprs, p
         vector,
     )
 
-    if grad.dim() > 1 and precond_schedule(group, balance_probability, f"balance_prob_{id(Q)}"):
-        if group["store_triu_as_line"]:
-            utils.psgd_balance_Q([q_ for _, q_ in Q])
-        else:
-            utils.psgd_balance_Q(Q)
-
     if isinstance(prob, float):
         float_prob = prob
     else:
         float_prob = prob(group.get(f"cumulative_prob_{id(Q)}_prob_step", 1))
     group["is_cached"] = should_use_cache = cached and float_prob < 0.5
 
-    if should_use_cache:  # caching adds extra ops and is not worth the overhead when we precondition at every step
-        return _update_psgd_cache(cached, Q_cache, Q_mat)
-    return Q_mat
+    if not should_use_cache or not cached:
+        return  # caching adds extra ops and is not worth the overhead when we precondition at every step
 
-
-def _update_psgd_cache(cached, Q_cache, q):
-    if not cached:
-        return q
-
-    for c_, q_ in zip(Q_cache, q):
+    for c_, q_ in zip(Q_cache, utils.line_to_triu(Q) if group["store_triu_as_line"] else Q):
         if q_.ndim == 2:
             torch.matmul(q_.T, q_, out=c_)
         else:
             torch.mul(q_, q_, out=c_)
-    return Q_cache
 
 
-def _cached_psgd_precond_grad(group, cache_expr, exprs, update, Q_mat, Q_cache, grad):
+def _cached_psgd_precond_grad(group, cache_expr, exprs, update, Q, Q_cache, grad):
+    kwargs = {"ea": update, "caution": group["caution"], "grad": grad}
     if group.get("is_cached", False):
-        out = utils.precond_grad_cached_(cache_expr, update, *Q_cache, caution=group["caution"], grad=grad)
+        out = utils.precond_grad_cached_(cache_expr, cached_q=Q_cache, **kwargs)
     else:
-        out = utils.psgd_precond_grad(exprs[-1], update, *Q_mat, caution=group["caution"], grad=grad)
+        out = utils.psgd_precond_grad(exprs[-1], preconds=Q, store_triu_as_line=group["store_triu_as_line"], **kwargs)
     group["caution"] = False  # we already cautioned here - shouldn't do it again
     return out
 
 
 def _fused_cached_psgd_precond_grad(group, grad, param, cache_expr, exprs, update, Q_mat, Q_cache):
+    kwargs = {
+        "ea": update,
+        "caution": group["caution"],
+        "grad": grad,
+        "param": param,
+        "lr": group["lr"],
+        "decay": group["weight_decay"],
+    }
     if group.get("is_cached", False):
-        utils.fused_precond_grad_cached_(
-            cache_expr,
-            update,
-            param,
-            group["lr"],
-            grad,
-            group["weight_decay"],
-            group["caution"],
-            *Q_cache,
-        )
+        utils.fused_precond_grad_cached_(cache_expr, cached_q=Q_cache, **kwargs)
     else:
         utils.fused_psgd_precond_grad(
-            exprs[-1],
-            update,
-            param,
-            group["lr"],
-            grad,
-            group["weight_decay"],
-            group["caution"],
-            *Q_mat,
+            exprs[-1], preconds=Q_mat, store_triu_as_line=group["store_triu_as_line"], **kwargs
         )
 
 
@@ -663,19 +640,17 @@ def scale_by_psgd(
     prob: Optional[callable] = None,
 ):
     update = update.to(memory_format=torch.contiguous_format)
-    Q_mat = utils.line_to_triu(Q) if group["store_triu_as_line"] else Q
-    Q_mat = _update_psgd_precond(
+    _update_psgd_precond(
         cached,
         Q_cache,
         group,
         param,
         update if group["momentum_into_precond_update"] else grad,
-        Q_mat,
         Q,
         exprs,
         prob,
     )
-    return _cached_psgd_precond_grad(group, cache_expr, exprs, update, Q_mat, Q_cache, grad)
+    return _cached_psgd_precond_grad(group, cache_expr, exprs, update, Q, Q_cache, grad)
 
 
 @general_guard("Q", "exprs", ("Q_cache", None), ("cache_expr", None), init_fn=_init_psgd_kron, skip_first=False)
@@ -700,7 +675,6 @@ def scale_by_delayed_psgd(
         group,
         param,
         update if group["momentum_into_precond_update"] else grad,
-        Q_mat,
         Q,
         exprs,
         prob,
@@ -722,14 +696,12 @@ def update_by_psgd(
     cached: bool = False,
     prob: Optional[callable] = None,
 ):
-    Q_mat = utils.line_to_triu(Q) if group["store_triu_as_line"] else Q
     Q_mat = _update_psgd_precond(
         cached,
         Q_cache,
         group,
         param,
         update if group["momentum_into_precond_update"] else grad,
-        Q_mat,
         Q,
         exprs,
         prob,
@@ -765,7 +737,6 @@ def update_by_delayed_psgd(
         group,
         param,
         update if group["momentum_into_precond_update"] else grad,
-        Q_mat,
         Q,
         exprs,
         prob,

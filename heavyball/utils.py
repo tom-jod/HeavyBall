@@ -1499,19 +1499,22 @@ def init_Q_exprs(
 
 @decorator_knowngood
 def psgd_balance_Q(Q):
-    norms = [q.norm(float("inf")).log() for q in Q]
+    norms = [promote(q.norm(float("inf"))).log() for q in Q]
     geometric_mean = sum([n for n in norms]) / len(Q)
     for q, n in zip(Q, norms):
         q *= (geometric_mean - n).exp()
 
 
-@decorator
-def psgd_balance_lra(U: Tensor, V: Tensor):
-    u_norm = promote(torch.linalg.vector_norm(U))
-    v_norm = promote(torch.linalg.vector_norm(V))
-    scale = (u_norm / v_norm) ** 0.5
-    U.div_(scale)
-    V.mul_(scale)
+@decorator_knowngood
+def _lra_flatten_and_balance(U: List[Tensor], V: List[Tensor], d: List[Tensor]):
+    u_norm = sum(u.square().sum() for u in U)
+    v_norm = sum(v.square().sum() for v in V)
+    scale = (u_norm / v_norm) ** 0.25  # sqrt of L2 norms; sqrt, as it's 2 factors
+    for u in U:
+        u.div_(scale)
+    for v in V:
+        v.mul_(scale)
+    return multi_flatten((U, 1), (V, 1), (d, 0))
 
 
 @decorator
@@ -1535,7 +1538,7 @@ def update_lra_precond_(
     """
     U_orig, V_orig, d_orig = U, V, d
 
-    U, V, d = flatten(U, 1), flatten(V, 1), flatten(d)
+    U, V, d = _lra_flatten_and_balance(U, V, d)
 
     dtype = min_dtype([U, V, vector, hessian_vector])
     U, V, vector, hessian_vector = U.to(dtype), V.to(dtype), vector.to(dtype), hessian_vector.to(dtype)
@@ -1664,6 +1667,11 @@ def flatten(x: List[Tensor], remaining: int = 0) -> Tensor:
 
 
 @decorator_knowngood
+def multi_flatten(*xs: Tuple[List[Tensor], int]):
+    return [flatten(x, i) for x, i in xs]
+
+
+@decorator_knowngood
 def dampen_multiple(g: List[Tensor], damp: float = 2**-13):
     vs = []
     gs = []
@@ -1763,45 +1771,47 @@ def _prescale_term_(term1: Tensor, fac: Tensor, norm: Tensor, lower_bound: Tenso
 
 
 @decorator_knowngood
-def _compilable_stochastic_multiply_div_(x: Tensor, fac: Tensor, y: Tensor, z: Tensor):
-    copy_stochastic_(x, promote(x) * promote(fac) * promote(y) / promote(z).clamp(min=tiny_bf16))
+def _compilable_term_extract_(
+    terms: List[Tuple[Tensor, Tensor]], Q: List[Tensor], oq: "TriuOrLine", precond_lr: Tensor
+):
+    out = []
+    for q, o, (x, y) in zip(Q, oq, terms):
+        x = promote(x)
+        y = promote(y)
+        summed = x + y
+        diff = x - y
+        local_norm = summed.norm(float("inf"))
+        if q.ndim < 2:  # we don't have to handle triu_as_line here because the storage backend for diag is the same
+            diff = diff * precond_lr * promote(q) / local_norm.clamp(min=tiny_bf16)
+            copy_stochastic_(q, promote(q) - diff)
+        else:
+            out.append((diff, summed, local_norm, q, o))
+    return out
 
 
-@decorator_knowngood
-def _compilable_add_sub_(x: Tensor, y: Tensor):
-    x = promote(x)
-    y = promote(y)
-    diff = x - y
-    summed = x + y
-    return diff, summed, summed.norm(float("inf"))
+def _balance_to_triu(Q: "TriuOrLine"):
+    if isinstance(Q[0], tuple):
+        psgd_balance_Q([o[1] for o in Q])
+        return line_to_triu(Q)
+    psgd_balance_Q(Q)
+    return Q
 
 
 @decorator
-def psgd_update_precond(Q, exprs, G, precond_lr, oq, store_triu_as_line, V):
+def psgd_update_precond(exprs, G, precond_lr, oq, store_triu_as_line, V):
     """Update Kronecker product preconditioner Q with pair (V, G)."""
     exprA, exprGs, _ = exprs
+    Q = _balance_to_triu(oq)
+
     A, conjB = psgd_calc_A_and_conjB(exprA, G, Q, V)
     precond_lr = scalar_guard(precond_lr, G)
 
-    global_norm = 0
-
-    terms = []
-    for q, exprG, o in zip(Q, exprGs, oq):
-        term1 = torch.einsum(exprG, A, A)
-        term2 = torch.einsum(exprG, conjB, conjB)
-        term1, term2, norm = _compilable_add_sub_(term1, term2)
-        terms.append((term1, term2, norm))
-        global_norm = global_norm + norm.log()
-
-    global_norm = (global_norm / len(Q)).exp()
-    global_norm = torch.where(torch.logical_and(global_norm > 0, torch.isfinite(global_norm)), global_norm, 0)
-    for q, o, (term1, term2, local_norm) in zip(Q, oq, terms):
-        if q.dim() < 2:
-            _compilable_stochastic_multiply_div_(term1, precond_lr, q, global_norm)
-        else:
-            lower_bound = psgd_lb(term2, local_norm)  # local_norm for numerical stability
-            _prescale_term_(term1, precond_lr, lower_bound, global_norm)
-            torch.mm(term1, q.to(term1.dtype), out=term1)
+    terms = [(torch.einsum(exprG, A, A), torch.einsum(exprG, conjB, conjB)) for exprG in exprGs]
+    terms = _compilable_term_extract_(terms, Q, oq, precond_lr)
+    for term1, term2, local_norm, q, o in terms:
+        lower_bound = psgd_lb(term2, local_norm)
+        _prescale_term_(term1, precond_lr, lower_bound, local_norm)
+        torch.mm(term1, q.to(term1.dtype), out=term1)
         if store_triu_as_line:
             _subtract_from_line_(o[1], term1)
         else:
@@ -1987,7 +1997,7 @@ def _triu_shape(numel):
     return n, n
 
 
-@decorator
+@decorator_knowngood
 def line_to_triu(Q_list: List[Tuple[Optional[List[int]], Tensor]]):
     new = []
     for shape, q in Q_list:
@@ -2024,7 +2034,12 @@ def psgd_should_update(
 
 @decorator_knowngood
 def precond_grad_cached_(
-    expr: str, ea: Tensor, *cached_q: Tensor, caution: bool = False, grad: Optional[Tensor] = None, cast: bool = True
+    expr: str,
+    ea: Tensor,
+    cached_q: List[Tensor],
+    caution: bool = False,
+    grad: Optional[Tensor] = None,
+    cast: bool = True,
 ):
     if caution:
         ea = _compilable_cautioning(grad, ea)
@@ -2037,21 +2052,35 @@ def precond_grad_cached_(
     return new
 
 
+TriuOrLine = Union[List[Tensor], List[Tuple[Optional[List[int]], Tensor]]]
+
+
 @decorator_knowngood
-def _compilable_fused_precond_grad_cached_(expr: str, ea: Tensor, param, lr, grad, decay, caution, *cached_q: Tensor):
-    precond = precond_grad_cached_(expr, ea, *cached_q, caution=caution, grad=grad, cast=False)
+def _compilable_fused_precond_grad_cached_(
+    expr: str, ea: Tensor, param, lr, grad, decay, caution, cached_q: List[Tensor]
+):
+    precond = precond_grad_cached_(expr, ea, cached_q, caution=caution, grad=grad, cast=False)
     update_param_(param, precond, lr, decay, caution=False)
 
 
-def fused_precond_grad_cached_(expr: str, ea: Tensor, param, lr, grad, decay, caution, *cached_q: Tensor):
+def fused_precond_grad_cached_(expr: str, ea: Tensor, param, lr, grad, decay, caution, cached_q: List[Tensor]):
     lr = scalar_guard(lr, param[0])
-    _compilable_fused_precond_grad_cached_(expr, ea, param, lr, grad, decay, caution, *cached_q)
+    _compilable_fused_precond_grad_cached_(expr, ea, param, lr, grad, decay, caution, cached_q)
 
 
 @decorator_knowngood
-def psgd_precond_grad(expr: str, ea: Tensor, *preconds: Tensor, caution: bool = False, grad: Optional[Tensor] = None):
+def psgd_precond_grad(
+    expr: str,
+    ea: Tensor,
+    preconds: TriuOrLine,
+    caution: bool = False,
+    grad: Optional[Tensor] = None,
+    store_triu_as_line: bool = False,
+):
     if caution:
         ea = _compilable_cautioning(grad, ea)
+    if store_triu_as_line:
+        preconds = line_to_triu(preconds)
     md = min_dtype(list(preconds) + [ea])
     args = [q.to(md) for q in preconds]
     args = args + args + [ea.to(md)]
@@ -2060,14 +2089,18 @@ def psgd_precond_grad(expr: str, ea: Tensor, *preconds: Tensor, caution: bool = 
 
 
 @decorator_knowngood
-def _compilable_fused_psgd_precond_grad(expr: str, ea: Tensor, param, lr, grad, decay, caution, *preconds: Tensor):
-    precond = psgd_precond_grad(expr, ea, *preconds, caution=caution, grad=grad)
+def _compilable_fused_psgd_precond_grad(
+    expr: str, ea: Tensor, param, lr, grad, decay, caution, preconds: TriuOrLine, store_triu_as_line: bool = False
+):
+    precond = psgd_precond_grad(expr, ea, preconds, caution=caution, grad=grad, store_triu_as_line=store_triu_as_line)
     update_param_(param, precond, lr, decay, caution=False, grad=grad)
 
 
-def fused_psgd_precond_grad(expr: str, ea: Tensor, param, lr, grad, decay, caution, *preconds: Tensor):
+def fused_psgd_precond_grad(
+    expr: str, ea: Tensor, param, lr, grad, decay, caution, preconds: TriuOrLine, store_triu_as_line: bool = False
+):
     lr = scalar_guard(lr, param[0])
-    _compilable_fused_psgd_precond_grad(expr, ea, param, lr, grad, decay, caution, *preconds)
+    _compilable_fused_psgd_precond_grad(expr, ea, param, lr, grad, decay, caution, preconds, store_triu_as_line)
 
 
 @decorator_knowngood
