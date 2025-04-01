@@ -1783,15 +1783,24 @@ def psgd_update_precond(Q, exprs, G, precond_lr, oq, store_triu_as_line, V):
     A, conjB = psgd_calc_A_and_conjB(exprA, G, Q, V)
     precond_lr = scalar_guard(precond_lr, G)
 
+    global_norm = 0
+
+    terms = []
     for q, exprG, o in zip(Q, exprGs, oq):
         term1 = torch.einsum(exprG, A, A)
         term2 = torch.einsum(exprG, conjB, conjB)
         term1, term2, norm = _compilable_add_sub_(term1, term2)
+        terms.append((term1, term2, norm))
+        global_norm = global_norm + norm.log()
+
+    global_norm = (global_norm / len(Q)).exp()
+    global_norm = torch.where(torch.logical_and(global_norm > 0, torch.isfinite(global_norm)), global_norm, 0)
+    for q, o, (term1, term2, local_norm) in zip(Q, oq, terms):
         if q.dim() < 2:
-            _compilable_stochastic_multiply_div_(term1, precond_lr, q, norm)
+            _compilable_stochastic_multiply_div_(term1, precond_lr, q, global_norm)
         else:
-            lower_bound = psgd_lb(term2, norm)
-            _prescale_term_(term1, precond_lr, lower_bound, norm)
+            lower_bound = psgd_lb(term2, local_norm)  # local_norm for numerical stability
+            _prescale_term_(term1, precond_lr, lower_bound, global_norm)
             torch.mm(term1, q.to(term1.dtype), out=term1)
         if store_triu_as_line:
             _subtract_from_line_(o[1], term1)
