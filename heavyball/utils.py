@@ -1791,11 +1791,12 @@ def _compilable_term_extract_(
             new.append((d, s, n, q, o))
             continue
 
-        # we don't have to handle triu_as_line here because the storage backend for diag is the same
-        pq = promote(q)
-        new_pq = pq - d * precond_lr * pq / n.clamp(min=tiny_bf16)
-        new_pq = stochastic_round_(q, new_pq)
-        q.copy_(torch.where(can_update, new_pq, q))
+        if isinstance(o, tuple):
+            o = o[1]
+        po = promote(o)
+        new_po = po - d * precond_lr * po / n.clamp(min=tiny_bf16)
+        new_po = stochastic_round_(o, new_po)
+        o.copy_(torch.where(can_update, new_po, o))
 
     return new, can_update
 
