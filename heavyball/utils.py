@@ -718,24 +718,28 @@ def project(grad, Q, back: bool):
 @contextlib.contextmanager
 def patch_backward():
     @contextlib.contextmanager
-    def _inner(module):
+    def patch_module(module):
         original = module.backward
+        try:
+            signature = inspect.signature(original)
 
-        signature = inspect.signature(original)
+            @functools.wraps(original)
+            def patched_backward(*args, **kwargs):
+                new_kwargs = signature.bind(*args)
+                new_kwargs.apply_defaults()
+                new_kwargs = new_kwargs.arguments
+                new_kwargs.update(kwargs)
+                new_kwargs["create_graph"] = True
+                return original(**new_kwargs)
 
-        def patched_backward(*args, **kwargs):
-            new_kwargs = signature.bind(*args)
-            new_kwargs.apply_defaults()
-            new_kwargs = new_kwargs.arguments
-            new_kwargs.update(kwargs)
-            new_kwargs["create_graph"] = True
-            return original(**new_kwargs)
+            module.backward = patched_backward
+            yield
+        finally:
+            module.backward = original
 
-        module.backward = patched_backward
-        yield
-        module.backward = original
-
-    with _inner(torch.Tensor), _inner(torch.autograd):
+    with contextlib.ExitStack() as stack:
+        stack.enter_context(patch_module(torch.Tensor))
+        stack.enter_context(patch_module(torch.autograd))
         yield
 
 
