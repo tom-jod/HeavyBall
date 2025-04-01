@@ -1740,14 +1740,14 @@ def _random_projection(x: Tensor, scale: Tensor):
     return x.index_select(1, indices).contiguous() / scale
 
 
-def psgd_lb(A: torch.Tensor, max_abs: torch.Tensor, max_svd: int = 64) -> torch.Tensor:
+def psgd_lb(A: torch.Tensor, max_abs: torch.Tensor, max_svd: int = 32) -> torch.Tensor:
     """
     Spectral norm estimate via randomized subspace iteration
 
     Code originally from @evanatyourservice
     """
     if min(A.shape) <= max_svd:
-        return torch.linalg.norm(A, ord=2)  # SVD needs ~120% more runtime for size=64, but 0% error instead of 5%
+        return torch.linalg.norm(A, ord=2)  # SVD needs ~25% more runtime for size=32, but 0% error instead of 5%
 
     Y = _random_projection(A, max_abs)
     Q, _ = torch.linalg.qr(Y)
@@ -1801,6 +1801,7 @@ def _compilable_term_extract_(
     return new, can_update
 
 
+@decorator_knowngood
 def _balance_to_triu(Q: "TriuOrLine"):
     if isinstance(Q[0], tuple):
         psgd_balance_Q([o[1] for o in Q])
