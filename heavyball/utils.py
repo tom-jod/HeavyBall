@@ -1497,12 +1497,12 @@ def init_Q_exprs(
     return [Q, (exprA, tuple(exprGs), exprP)]
 
 
-@decorator
-def psgd_balance_Q(Q_in):
-    norms = torch.stack([q.norm(float("inf")) for q in Q_in])
-    geometric_mean = norms.log().mean().exp()
-    norms = geometric_mean / norms
-    torch._foreach_mul_(Q_in, list(norms))
+@decorator_knowngood
+def psgd_balance_Q(Q):
+    norms = [q.norm(float("inf")).log() for q in Q]
+    geometric_mean = sum([n for n in norms]) / len(Q)
+    for q, n in zip(Q, norms):
+        q *= (geometric_mean - n).exp()
 
 
 @decorator
