@@ -1710,14 +1710,12 @@ def _psgd_calc_scalars_(Qs: List[Tensor], conjB: Tensor):
 
 
 @decorator_knowngood
-def _reshape_conjB(
-    solved: Tensor, transposed_shape: List[int], original_shape: List[int], last_dim: int, new_dim: int, new_shape: int
-):
+def _reshape_conjB(solved: Tensor, transposed_shape: List[int], original_shape: List[int], last_dim: int, new_dim: int):
     solved = solved.reshape(transposed_shape)
     solved = solved.transpose(-1, last_dim)
     solved = solved.reshape(original_shape)
     solved = solved.transpose(-1, new_dim)
-    return solved.reshape(new_shape).contiguous(), solved.shape
+    return solved.contiguous(), solved.shape
 
 
 def psgd_calc_A_and_conjB(exprA, G, Q, conjB):  # conjB ("V", "vector") == randn during hvp/whitening
@@ -1727,12 +1725,10 @@ def psgd_calc_A_and_conjB(exprA, G, Q, conjB):  # conjB ("V", "vector") == randn
     prev_i = -1
     qs, conjB = _psgd_calc_scalars_(Q, conjB)
     for i, tri_q in qs:
-        conjB, transposed_shape = _reshape_conjB(
-            conjB, transposed_shape, original_shape, prev_i, i, [-1, tri_q.size(0)]
-        )
+        conjB, transposed_shape = _reshape_conjB(conjB, transposed_shape, original_shape, prev_i, i)
         prev_i = i
         conjB = solve(tri_q, conjB, upper=True, left=False)
-    conjB, _ = _reshape_conjB(conjB, transposed_shape, original_shape, prev_i, -1, G.shape)
+    conjB, _ = _reshape_conjB(conjB, transposed_shape, original_shape, prev_i, -1)
     return A, conjB
 
 
@@ -1830,7 +1826,7 @@ def psgd_update_precond(exprs, G, precond_lr, oq, store_triu_as_line, V):
     for term1, term2, local_norm, q, o in terms:
         lower_bound = psgd_lb(term2, local_norm)
         _prescale_term_(term1, precond_lr, local_norm, lower_bound, can_update)
-        torch.mm(term1, q.to(term1.dtype), out=term1)
+        term1 = term1 @ q.to(term1.dtype)
         if store_triu_as_line:
             _subtract_from_line_(o[1], term1)
         else:
