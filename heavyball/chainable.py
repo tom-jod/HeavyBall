@@ -667,8 +667,7 @@ def scale_by_delayed_psgd(
     cached: bool = False,
     prob: Optional[callable] = None,
 ):
-    Q_mat = utils.line_to_triu(Q) if group["store_triu_as_line"] else Q
-    precond = _cached_psgd_precond_grad(group, cache_expr, exprs, update, Q_mat, Q_cache, grad)
+    precond = _cached_psgd_precond_grad(group, cache_expr, exprs, update, Q, Q_cache, grad)
     _ = _update_psgd_precond(
         cached,
         Q_cache,
@@ -729,8 +728,7 @@ def update_by_delayed_psgd(
     cached: bool = False,
     prob: Optional[callable] = None,
 ):
-    Q_mat = utils.line_to_triu(Q) if group["store_triu_as_line"] else Q
-    _fused_cached_psgd_precond_grad(group, update, param, cache_expr, exprs, update, Q_mat, Q_cache)
+    _fused_cached_psgd_precond_grad(group, update, param, cache_expr, exprs, update, Q, Q_cache)
     _ = _update_psgd_precond(
         cached,
         Q_cache,
