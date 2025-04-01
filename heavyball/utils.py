@@ -1824,6 +1824,8 @@ def psgd_update_precond(exprs, G, precond_lr, oq, store_triu_as_line, V):
     precond_lr = scalar_guard(precond_lr, G)
 
     terms = [(torch.einsum(exprG, A, A), torch.einsum(exprG, conjB, conjB)) for exprG in exprGs]
+    del A, conjB, V
+
     terms, can_update = _compilable_term_extract_(terms, Q, oq, precond_lr)
     for term1, term2, local_norm, q, o in terms:
         lower_bound = psgd_lb(term2, local_norm)

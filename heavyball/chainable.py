@@ -102,7 +102,7 @@ class GeneralGuard(FunctionTransform):  # We can't guard against reuse in the ge
             skip_update |= _inplace_guard_(st, self.names, lambda: self.init_fn(st, group, u, g, p, **kwargs))
             vars.append([st[name] if isinstance(name, str) else st.get(name[0], name[1]) for name in self.names])
         if skip_update and self.skip_first:
-            raise SkipUpdate
+            raise SkipUpdate from None
         return self.fn(state, group, update, grad, param, *args, *zip(*vars), **kwargs)
 
 
@@ -122,7 +122,7 @@ class NoStateNoForeach(FunctionTransform):
                 skip_update = True
                 pass
         if skip_update:
-            raise SkipUpdate
+            raise SkipUpdate from None
         return updates
 
 
@@ -219,7 +219,7 @@ def update_by_adam(group, update, grad, param, exp_avg, exp_avg_sq):
         group["weight_decay"],
         group["caution"],
     )
-    raise SkipUpdate
+    raise SkipUpdate from None
 
 
 @zero_guard("exp_avg", "exp_avg_sq")
@@ -244,7 +244,7 @@ def update_by_laprop(group, update, grad, param, exp_avg, exp_avg_sq):
         group["weight_decay"],
         group["caution"],
     )
-    raise SkipUpdate
+    raise SkipUpdate from None
 
 
 @no_state
@@ -269,7 +269,7 @@ def update_by_schedule_free(group, update, grad, param, z):
         group["step"],
         group["weight_decay"],
     )
-    raise SkipUpdate
+    raise SkipUpdate from None
 
 
 @zero_guard("exp_avg", "exp_avg_sq")
@@ -277,7 +277,7 @@ def update_by_schedule_free(group, update, grad, param, z):
 def update_by_adopt(group, update, grad, param, exp_avg, exp_avg_sq):
     if group["step"] == 1:
         utils.scale_by_exp_avg_sq_(exp_avg_sq, update, 0, group["eps"])
-        raise SkipUpdate
+        raise SkipUpdate from None
 
     if group["step"] == 2:
         update = utils.promote(update)
@@ -289,7 +289,7 @@ def update_by_adopt(group, update, grad, param, exp_avg, exp_avg_sq):
             utils.beta_debias(utils.get_beta2(group), group["step"]),
             group["eps"],
         )
-        raise SkipUpdate
+        raise SkipUpdate from None
 
     utils.fused_adopt_(
         param,
@@ -305,7 +305,7 @@ def update_by_adopt(group, update, grad, param, exp_avg, exp_avg_sq):
         group["weight_decay"],
         group["caution"],
     )
-    raise SkipUpdate
+    raise SkipUpdate from None
 
 
 @zero_guard("exp_avg", "exp_avg_sq")
@@ -313,7 +313,7 @@ def update_by_adopt(group, update, grad, param, exp_avg, exp_avg_sq):
 def scale_by_adopt(group, update, grad, param, exp_avg, exp_avg_sq):
     if group["step"] == 1:
         utils.scale_by_exp_avg_sq_(exp_avg_sq, update, 0, group["eps"])
-        raise SkipUpdate
+        raise SkipUpdate from None
 
     if group["step"] == 2:
         update = utils.promote(update)
@@ -325,7 +325,7 @@ def scale_by_adopt(group, update, grad, param, exp_avg, exp_avg_sq):
             utils.beta_debias(utils.get_beta2(group), group["step"]),
             group["eps"],
         )
-        raise SkipUpdate
+        raise SkipUpdate from None
 
     return utils.adopt(
         update,
@@ -534,6 +534,7 @@ def _update_psgd_precond(cached, Q_cache, group, param, grad, Q, exprs, prob: Op
         group["store_triu_as_line"],
         vector,
     )
+    del vector, hessian_vector
 
     if isinstance(prob, float):
         float_prob = prob
@@ -607,7 +608,7 @@ def scale_by_psgd_lra(group, update, grad, param, U, V, d):
 def update_by_psgd_lra(group, update, grad, param, U, V, d):
     u, v, d = _update_lra(group, U, V, d, param, update if group["momentum_into_precond_update"] else grad, False)
     utils.apply_lra_update(param, update, u, v, d)
-    raise SkipUpdate
+    raise SkipUpdate from None
 
 
 @general_guard("U", "V", "d", init_fn=_init_psgd_lra, skip_first=False)
@@ -622,7 +623,7 @@ def scale_by_delayed_psgd_lra(group, update, grad, param, U, V, d):
 def update_by_delayed_psgd_lra(group, update, grad, param, U, V, d):
     u, v, d = _update_lra(group, U, V, d, param, update if group["momentum_into_precond_update"] else grad, True)
     utils.apply_lra_update(param, update, u, v, d)
-    raise SkipUpdate
+    raise SkipUpdate from None
 
 
 @general_guard("Q", "exprs", ("Q_cache", None), ("cache_expr", None), init_fn=_init_psgd_kron, skip_first=False)
@@ -706,7 +707,7 @@ def update_by_psgd(
         prob,
     )
     _fused_cached_psgd_precond_grad(group, update, param, cache_expr, exprs, update, Q_mat, Q_cache)
-    raise SkipUpdate
+    raise SkipUpdate from None
 
 
 @no_state
@@ -739,7 +740,7 @@ def update_by_delayed_psgd(
         exprs,
         prob,
     )
-    raise SkipUpdate
+    raise SkipUpdate from None
 
 
 def palm_beta2(state, group, update, grad, param):
