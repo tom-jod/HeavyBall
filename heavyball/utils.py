@@ -1764,10 +1764,10 @@ def _subtract_from_line_(state: Tensor, term: Tensor):
 
 
 @decorator_knowngood
-def _prescale_term_(term1: Tensor, fac: Tensor, norm: Tensor, lower_bound: Tensor):
+def _prescale_term_(term1: Tensor, fac: Tensor, norm: Tensor, lower_bound: Tensor, success: Tensor):
     out = promote(term1).triu() * fac
-    out = out / torch.where(norm > 0, lower_bound, norm).clamp(tiny_bf16)
-    copy_stochastic_(term1, out)
+    out = out / torch.where(success, lower_bound, norm).clamp(tiny_bf16)
+    copy_stochastic_(term1, torch.where(success, out, 0))  # fill matrix with 0s if step would cause NaN
 
 
 @decorator_knowngood
@@ -1775,18 +1775,29 @@ def _compilable_term_extract_(
     terms: List[Tuple[Tensor, Tensor]], Q: List[Tensor], oq: "TriuOrLine", precond_lr: Tensor
 ):
     out = []
-    for q, o, (x, y) in zip(Q, oq, terms):
+    can_update = torch.ones((), dtype=torch.bool, device=Q[0].device)
+    for x, y in terms:
         x = promote(x)
         y = promote(y)
         summed = x + y
         diff = x - y
         local_norm = summed.norm(float("inf"))
-        if q.ndim < 2:  # we don't have to handle triu_as_line here because the storage backend for diag is the same
-            diff = diff * precond_lr * promote(q) / local_norm.clamp(min=tiny_bf16)
-            copy_stochastic_(q, promote(q) - diff)
-        else:
-            out.append((diff, summed, local_norm, q, o))
-    return out
+        can_update = torch.logical_and(local_norm > 0, can_update)
+        out.append((diff, summed, local_norm))
+
+    new = []
+    for (d, s, n), q, o in zip(out, Q, oq):
+        if q.ndim >= 2:
+            new.append((d, s, n, q, o))
+            continue
+
+        # we don't have to handle triu_as_line here because the storage backend for diag is the same
+        pq = promote(q)
+        new_pq = pq - d * precond_lr * pq / n.clamp(min=tiny_bf16)
+        new_pq = stochastic_round_(q, new_pq)
+        q.copy_(torch.where(can_update, new_pq, q))
+
+    return new, can_update
 
 
 def _balance_to_triu(Q: "TriuOrLine"):
@@ -1807,10 +1818,10 @@ def psgd_update_precond(exprs, G, precond_lr, oq, store_triu_as_line, V):
     precond_lr = scalar_guard(precond_lr, G)
 
     terms = [(torch.einsum(exprG, A, A), torch.einsum(exprG, conjB, conjB)) for exprG in exprGs]
-    terms = _compilable_term_extract_(terms, Q, oq, precond_lr)
+    terms, can_update = _compilable_term_extract_(terms, Q, oq, precond_lr)
     for term1, term2, local_norm, q, o in terms:
         lower_bound = psgd_lb(term2, local_norm)
-        _prescale_term_(term1, precond_lr, lower_bound, local_norm)
+        _prescale_term_(term1, precond_lr, local_norm, lower_bound, can_update)
         torch.mm(term1, q.to(term1.dtype), out=term1)
         if store_triu_as_line:
             _subtract_from_line_(o[1], term1)
