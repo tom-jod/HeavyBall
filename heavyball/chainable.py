@@ -8,7 +8,7 @@ from torch import Tensor
 
 from . import utils
 
-balance_probability: float = 0.01
+balance_probability: float = 0.1
 
 
 def _key_in_state(state, key):
