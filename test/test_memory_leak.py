@@ -32,14 +32,16 @@ class LayerNorm2dParam(nn.Module):
         return F.layer_norm(x, [x.size(-1)], weight, bias)
 
 
-@pytest.mark.parametrize("opt", ["NewtonHybrid2PSGDKron"])
-@pytest.mark.parametrize("size,depth", [(64, 2)])
-@pytest.mark.parametrize("mars", [True])
-@pytest.mark.parametrize("cached", [True])
-@pytest.mark.parametrize("delayed", [True])
-@pytest.mark.parametrize("merge_dims", [True])
-@pytest.mark.parametrize("split", [False])
-@pytest.mark.parametrize("finite_differences", [False])
+@pytest.mark.parametrize(
+    "opt", ["NewtonHybrid2PSGDKron"]
+)  # leak with NewtonHybrid2PSGDKron, but not ForeachCachedNewtonPSGD or ForeachCachedPSGDKron
+@pytest.mark.parametrize("size,depth", [(64, 2)])  # happens across all sizes
+@pytest.mark.parametrize("mars", [False])  # happens with True and False
+@pytest.mark.parametrize("cached", [False])  # happens with True and False
+@pytest.mark.parametrize("delayed", [False])  # happens with True and False
+@pytest.mark.parametrize("merge_dims", [False])  # happens with True and False
+@pytest.mark.parametrize("split", [True])  # happens with True and False
+@pytest.mark.parametrize("finite_differences", [False])  # only happens with False - does not happen with True
 def test_memory(
     opt,
     size,
