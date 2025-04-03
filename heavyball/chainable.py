@@ -535,6 +535,7 @@ def _update_psgd_precond(cached, Q_cache, group, param, grad, Q, velocity, exprs
         group["store_triu_as_line"],
         velocity,
         utils.beta_debias(utils.get_beta2(group), group["step"]),
+        group["ortho_method"],
         vector,
     )
     del vector, hessian_vector

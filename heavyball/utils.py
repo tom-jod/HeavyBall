@@ -1836,6 +1836,7 @@ def psgd_update_precond(
     store_triu_as_line: bool,
     velocity: Optional[List[Tensor]],
     beta2: float,
+    ortho_method: Optional[str],
     V: Tensor,
 ):
     """Update Kronecker product preconditioner Q with pair (V, G)."""
@@ -1851,6 +1852,13 @@ def psgd_update_precond(
     terms, can_update = _compilable_term_extract_(terms, Q, oq, precond_lr, velocity, beta2)
     for grad, summed, local_norm, q, original_q in terms:
         lower_bound = psgd_lb(summed, local_norm)
+        if ortho_method is not None:
+            method = ortho_method.split("-")
+            if len(method) == 1:
+                method, scale = method[0], "scale"
+            else:
+                method, scale = method
+            inplace_orthogonal_(grad, method, grad, scale)
         _prescale_term_(grad, precond_lr, local_norm, lower_bound, can_update)
         grad = grad @ q.to(grad.dtype)
         if store_triu_as_line:
