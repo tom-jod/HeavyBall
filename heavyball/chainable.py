@@ -355,7 +355,8 @@ def _init_psgd_kron(state, group, update, grad, param, cached: bool = False, pro
         dtype=getattr(torch, group["q_dtype"]),
     )
     state["Q"] = utils.triu_to_line(Q) if group["store_triu_as_line"] else Q
-
+    if group["adaptive"]:
+        state["velocity"] = [torch.zeros((), device=q.device, dtype=q.dtype) for q in Q]
     if not cached:
         return
 
@@ -512,7 +513,7 @@ def scale_by_soap(group, update, grad, param, exp_avg, exp_avg_sq, Q, GG, inner:
     return precond
 
 
-def _update_psgd_precond(cached, Q_cache, group, param, grad, Q, exprs, prob: Optional[callable] = None):
+def _update_psgd_precond(cached, Q_cache, group, param, grad, Q, velocity, exprs, prob: Optional[callable] = None):
     if prob is None:
         prob = utils.precond_update_prob_schedule()
 
@@ -532,6 +533,8 @@ def _update_psgd_precond(cached, Q_cache, group, param, grad, Q, exprs, prob: Op
         group["precond_lr"],
         Q,
         group["store_triu_as_line"],
+        velocity,
+        utils.beta_debias(utils.get_beta2(group), group["step"]),
         vector,
     )
     del vector, hessian_vector
@@ -626,7 +629,9 @@ def update_by_delayed_psgd_lra(group, update, grad, param, U, V, d):
     raise SkipUpdate from None
 
 
-@general_guard("Q", "exprs", ("Q_cache", None), ("cache_expr", None), init_fn=_init_psgd_kron, skip_first=False)
+@general_guard(
+    "Q", "exprs", ("Q_cache", None), ("cache_expr", None), ("velocity", None), init_fn=_init_psgd_kron, skip_first=False
+)
 @no_state_no_foreach
 def scale_by_psgd(
     group,
@@ -637,6 +642,7 @@ def scale_by_psgd(
     exprs,
     Q_cache,
     cache_expr: str,
+    velocity: Optional[List[Tensor]],
     cached: bool = False,
     prob: Optional[callable] = None,
 ):
@@ -648,13 +654,16 @@ def scale_by_psgd(
         param,
         update if group["momentum_into_precond_update"] else grad,
         Q,
+        velocity,
         exprs,
         prob,
     )
     return _cached_psgd_precond_grad(group, cache_expr, exprs, update, Q, Q_cache, grad)
 
 
-@general_guard("Q", "exprs", ("Q_cache", None), ("cache_expr", None), init_fn=_init_psgd_kron, skip_first=False)
+@general_guard(
+    "Q", "exprs", ("Q_cache", None), ("cache_expr", None), ("velocity", None), init_fn=_init_psgd_kron, skip_first=False
+)
 @no_state_no_foreach
 def scale_by_delayed_psgd(
     group,
@@ -665,6 +674,7 @@ def scale_by_delayed_psgd(
     exprs,
     Q_cache,
     cache_expr: str,
+    velocity: Optional[List[Tensor]],
     cached: bool = False,
     prob: Optional[callable] = None,
 ):
@@ -676,13 +686,16 @@ def scale_by_delayed_psgd(
         param,
         update if group["momentum_into_precond_update"] else grad,
         Q,
+        velocity,
         exprs,
         prob,
     )
     return precond
 
 
-@general_guard("Q", "exprs", ("Q_cache", None), ("cache_expr", None), init_fn=_init_psgd_kron, skip_first=False)
+@general_guard(
+    "Q", "exprs", ("Q_cache", None), ("cache_expr", None), ("velocity", None), init_fn=_init_psgd_kron, skip_first=False
+)
 @no_state_no_foreach
 def update_by_psgd(
     group,
@@ -693,6 +706,7 @@ def update_by_psgd(
     exprs,
     Q_cache,
     cache_expr: str,
+    velocity: Optional[List[Tensor]],
     cached: bool = False,
     prob: Optional[callable] = None,
 ):
@@ -703,6 +717,7 @@ def update_by_psgd(
         param,
         update if group["momentum_into_precond_update"] else grad,
         Q,
+        velocity,
         exprs,
         prob,
     )
@@ -715,7 +730,9 @@ def sign(group, update, grad, param, graft: bool = True):
     return utils.sign_(update, graft)
 
 
-@general_guard("Q", "exprs", ("Q_cache", None), ("cache_expr", None), init_fn=_init_psgd_kron, skip_first=False)
+@general_guard(
+    "Q", "exprs", ("Q_cache", None), ("cache_expr", None), ("velocity", None), init_fn=_init_psgd_kron, skip_first=False
+)
 @no_state_no_foreach
 def update_by_delayed_psgd(
     group,
@@ -726,6 +743,7 @@ def update_by_delayed_psgd(
     exprs,
     Q_cache,
     cache_expr: str,
+    velocity: Optional[List[Tensor]],
     cached: bool = False,
     prob: Optional[callable] = None,
 ):
@@ -737,6 +755,7 @@ def update_by_delayed_psgd(
         param,
         update if group["momentum_into_precond_update"] else grad,
         Q,
+        velocity,
         exprs,
         prob,
     )

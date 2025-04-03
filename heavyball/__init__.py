@@ -492,7 +492,8 @@ class ForeachPSGDKron(C.BaseOpt):
         self,
         params,
         lr=0.001,
-        beta=0.9,
+        beta=None,
+        betas=(0.9, 0.999),
         weight_decay=0.0,
         preconditioner_update_probability=None,
         max_size_triangular=2048,
@@ -515,6 +516,7 @@ class ForeachPSGDKron(C.BaseOpt):
         exp_avg_input: Optional[bool] = C.use_default,
         gradient_clipping: C.str_or_fn = C.use_default,
         update_clipping: C.str_or_fn = C.use_default,  #
+        adaptive: bool = False,
         # expert parameters
         precond_init_scale=None,
         precond_init_scale_scale: float = 1,

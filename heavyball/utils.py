@@ -1576,7 +1576,7 @@ def update_lra_precond_(
 
     nablaD = Ph * hessian_vector - vector * invPv
     divisor = (Ph.square() + vector.square()) * (hessian_vector.square() + invPv.square())
-    divisor = divisor.add(eps).sqrt().max()
+    divisor = divisor.max().clamp(min=eps).sqrt()
     d_step = step / divisor
 
     apply_flat_add(d_orig, d * nablaD, -d_step)
@@ -1599,7 +1599,6 @@ def update_lra_precond_(
         a = torch.einsum("b,r->br", a, atV)
         b = torch.einsum("b,r->br", b, btV)
     apply_flat_add(U_orig if precond_u else V_orig, b - a, precond_step)
-
     if not delayed:
         stochastic_add_([d], [d * nablaD], -d_step)
         stochastic_add_([U if precond_u else V], [b - a], precond_step)
@@ -1772,9 +1771,16 @@ def _prescale_term_(term1: Tensor, fac: Tensor, norm: Tensor, lower_bound: Tenso
 
 @decorator_knowngood
 def _compilable_term_extract_(
-    terms: List[Tuple[Tensor, Tensor]], Q: List[Tensor], oq: "TriuOrLine", precond_lr: Tensor
+    terms: List[Tuple[Tensor, Tensor]],
+    Q: List[Tensor],
+    oq: "TriuOrLine",
+    precond_lr: Tensor,
+    velocity: Optional[List[Tensor]],
+    beta: Tensor,
 ):
     out = []
+    if velocity is None:
+        velocity = [None] * len(Q)
     can_update = torch.ones((), dtype=torch.bool, device=Q[0].device)
     for x, y in terms:
         x = promote(x)
@@ -1786,7 +1792,18 @@ def _compilable_term_extract_(
         out.append((diff, summed, local_norm))
 
     new = []
-    for (d, s, n), q, o in zip(out, Q, oq):
+    for (d, s, n), q, o, v in zip(out, Q, oq, velocity):
+        if d.ndim == 2:
+            d = d.triu()
+        if v is not None:
+            if d.ndim < 2:
+                numel = max(1, d.numel())  # handle scalar case
+            else:
+                numel = d.size(0) * (d.size(0) + 1) / 2  # ones_like(d).triu().sum()
+            norm = d.square()
+            v_ = promote(v) * beta + (1 - beta) * (norm / numel).sum()  # AdamMini
+            d = d / v_.sqrt().clamp(min=1e-8)
+            copy_stochastic_(v, v_)
         if q.ndim >= 2:
             new.append((d, s, n, q, o))
             continue
@@ -1811,26 +1828,35 @@ def _balance_to_triu(Q: "TriuOrLine"):
 
 
 @decorator
-def psgd_update_precond(exprs, G, precond_lr, oq, store_triu_as_line, V):
+def psgd_update_precond(
+    exprs: Tuple[str, List[str], str],
+    G: Tensor,
+    precond_lr: float,
+    oq: "TriuOrLine",
+    store_triu_as_line: bool,
+    velocity: Optional[List[Tensor]],
+    beta2: float,
+    V: Tensor,
+):
     """Update Kronecker product preconditioner Q with pair (V, G)."""
     exprA, exprGs, _ = exprs
     Q = _balance_to_triu(oq)
 
     A, conjB = psgd_calc_A_and_conjB(exprA, G, Q, V)
-    precond_lr = scalar_guard(precond_lr, G)
+    precond_lr, beta2 = scalar_guard(precond_lr, beta2, G)
 
     terms = [(torch.einsum(exprG, A, A), torch.einsum(exprG, conjB, conjB)) for exprG in exprGs]
     del A, conjB, V
 
-    terms, can_update = _compilable_term_extract_(terms, Q, oq, precond_lr)
-    for term1, term2, local_norm, q, o in terms:
-        lower_bound = psgd_lb(term2, local_norm)
-        _prescale_term_(term1, precond_lr, local_norm, lower_bound, can_update)
-        term1 = term1 @ q.to(term1.dtype)
+    terms, can_update = _compilable_term_extract_(terms, Q, oq, precond_lr, velocity, beta2)
+    for grad, summed, local_norm, q, original_q in terms:
+        lower_bound = psgd_lb(summed, local_norm)
+        _prescale_term_(grad, precond_lr, local_norm, lower_bound, can_update)
+        grad = grad @ q.to(grad.dtype)
         if store_triu_as_line:
-            _subtract_from_line_(o[1], term1)
+            _subtract_from_line_(original_q[1], grad)
         else:
-            stochastic_add_(o, term1, -1)
+            stochastic_add_(original_q, grad, -1)
 
 
 @decorator_knowngood
