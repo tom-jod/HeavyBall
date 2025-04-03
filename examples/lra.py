@@ -1,12 +1,11 @@
-import math
 import os
 from datetime import datetime
-from typing import Optional
 
 import matplotlib.pyplot as plt
 import torch
 import torch.nn as nn
 import tqdm
+from preconditioned_stochastic_gradient_descent import LRA
 from torch.nn import functional as F
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
@@ -15,7 +14,6 @@ from torchvision.transforms import v2
 from torchvision.utils import make_grid
 
 import heavyball
-from heavyball import chainable as C
 
 heavyball.utils.compile_mode = None
 heavyball.utils.set_torch()
@@ -108,83 +106,6 @@ def mean(updates):
     return [sum(us) / len(us) for us in zip(*updates)]
 
 
-class BranchedPSGD(C.BaseOpt):
-    delayed: bool = False
-    cached: bool = True
-    exp_avg_input: bool = True
-    hvp_interval = 2
-    hessian_approx = True
-
-    def __init__(
-        self,
-        params,
-        lr=0.001,
-        beta=0.9,
-        weight_decay=0.0,  #
-        # Kron:
-        preconditioner_update_probability=None,
-        max_size_triangular=2048,
-        min_ndim_triangular=2,
-        memory_save_mode=None,  #
-        # LRA:
-        rank: Optional[int] = None,
-        eps: float = 1e-8,  #
-        momentum_into_precond_update=True,
-        warmup_steps: int = 0,
-        merge_dims: bool = False,
-        split: bool = False,
-        store_triu_as_line: bool = True,
-        foreach: bool = True,
-        q_dtype="float32",
-        stochastic_schedule: bool = False,
-        storage_dtype: str = "float32",
-        mars: bool = False,
-        caution: bool = False,
-        mars_gamma: float = 0.0025,
-        delayed: Optional[bool] = C.use_default,
-        cached: Optional[bool] = C.use_default,
-        exp_avg_input: Optional[bool] = C.use_default,
-        gradient_clipping: C.str_or_fn = C.use_default,
-        update_clipping: C.str_or_fn = C.use_default,  #
-        initial_d: float = 1e-6,
-        lr_lr: float = 0.1,  # expert parameters
-        precond_init_scale=None,
-        precond_init_scale_scale=1,
-        precond_lr=0.1,
-    ):
-        defaults = locals()
-        defaults.pop("self")
-        self.precond_schedule = (
-            defaults.pop("preconditioner_update_probability") or heavyball.utils.precond_update_prob_schedule()
-        )
-        params = defaults.pop("params")
-
-        if rank is None:
-            heavyball.utils.warn_once(
-                f"{rank=}. It will be set to log2(param_count). This requires `params` to be of type list. Currently, {type(params)=}"
-            )
-            params = list(params)
-            defaults["rank"] = round(math.log2(sum(p.numel() for p in params)))
-            heavyball.utils.warn_once(f"rank was set to {defaults['rank']}")
-
-        delayed = C.default(delayed, self.delayed)
-        exp_avg_input = C.default(exp_avg_input, self.cached)
-        update_clipping = C.default(update_clipping, heavyball.utils.trust_region_clip_)
-
-        branches = C.create_branch([[C.scale_by_psgd], [C.scale_by_psgd_lra]], mean)
-
-        super().__init__(
-            params,
-            defaults,
-            foreach,
-            gradient_clipping,
-            update_clipping,
-            False,  #
-            *(C.exp_avg,) * exp_avg_input,
-            branches,
-        )
-
-
 def main(epochs: int, batch: int):
     # Setup tensorboard logging
     log_dir = os.path.join("runs", f"soap_{datetime.now().strftime('%Y%m%d_%H%M%S')}")
@@ -192,8 +113,19 @@ def main(epochs: int, batch: int):
 
     torch.manual_seed(0x12783)
     model = Autoencoder().cuda()
-    optimizer = BranchedPSGD(model.parameters(), lr=1e-3, mars=True)
-
+    # optimizer = heavyball.ForeachPSGDLRA(
+    #     model.parameters(), lr=1e-3, mars=True,precond_init_scale=1, precond_lr=0.1
+    # )
+    optimizer = LRA(
+        model.parameters(),
+        rank_of_approximation=20,
+        preconditioner_init_scale=1,
+        lr_params=1e-4,
+        lr_preconditioner=0.1,
+        exact_hessian_vector_product=False,
+        preconditioner_type="whitening",
+        momentum=0.9,
+    )
     transform = v2.Compose([v2.ToImage(), v2.ToDtype(torch.float32), RandomPad(4)])
     trainset = list(MNIST(root="./data", train=True, download=True, transform=transform)) * epochs
     dataloader = DataLoader(trainset, batch_size=batch, shuffle=True, num_workers=8, drop_last=True, pin_memory=True)
@@ -208,11 +140,10 @@ def main(epochs: int, batch: int):
         def _closure():
             output = model(img)
             loss = F.mse_loss(output, img)
-            loss.backward()
+            # loss.backward()
             return loss
 
         loss = optimizer.step(_closure)
-        optimizer.zero_grad()
         losses.append(loss.detach())
         if len(losses) >= 64:
             for loss in losses:
@@ -223,4 +154,4 @@ def main(epochs: int, batch: int):
 
 
 if __name__ == "__main__":
-    main(epochs=10, batch=128)
+    main(epochs=2000, batch=64)

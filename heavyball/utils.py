@@ -1621,14 +1621,40 @@ def dampen_grad(g: Tensor, damp: float = 2**-13):
 
 
 @decorator_knowngood
-def apply_lra_update(params: List[Tensor], update: Tensor, U: Tensor, V: Tensor, d: Tensor):
+def _compilable_lra_update_(
+    params: List[Tensor],
+    update: Tensor,
+    U: Tensor,
+    V: Tensor,
+    d: Tensor,
+    lr: Tensor,
+    decay: Tensor,
+    caution: bool,
+    grads: List[Tensor],
+):
     update = lra_precond(U, V, d, update)
     start = 0
     update = update.flatten()
-    for p in params:
+    for p, g in zip(params, grads):
         size = p.numel()
-        copy_stochastic_(p, update[start : start + size].view_as(p))
+        update_param_(p, update[start : start + size].view_as(p), lr, decay, caution, g)
         start += size
+
+
+def apply_lra_update(
+    params: List[Tensor],
+    update: Tensor,
+    U: Tensor,
+    V: Tensor,
+    d: Tensor,
+    lr: float,
+    decay: float,
+    caution: bool,
+    grads: List[Tensor],
+):
+    params, grads = list_guard(params, grads)
+    lr, decay = scalar_guard(lr, decay, params[0])
+    _compilable_lra_update_(params, update, U, V, d, lr, decay, caution, grads)
 
 
 @decorator_knowngood

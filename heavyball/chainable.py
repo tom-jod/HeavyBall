@@ -611,7 +611,7 @@ def scale_by_psgd_lra(group, update, grad, param, U, V, d):
 @no_state
 def update_by_psgd_lra(group, update, grad, param, U, V, d):
     u, v, d = _update_lra(group, U, V, d, param, update if group["momentum_into_precond_update"] else grad, False)
-    utils.apply_lra_update(param, update, u, v, d)
+    utils.apply_lra_update(param, update, u, v, d, group["lr"], group["weight_decay"], group["caution"], grad)
     raise SkipUpdate from None
 
 
@@ -626,7 +626,7 @@ def scale_by_delayed_psgd_lra(group, update, grad, param, U, V, d):
 @no_state
 def update_by_delayed_psgd_lra(group, update, grad, param, U, V, d):
     u, v, d = _update_lra(group, U, V, d, param, update if group["momentum_into_precond_update"] else grad, True)
-    utils.apply_lra_update(param, update, u, v, d)
+    utils.apply_lra_update(param, update, u, v, d, group["lr"], group["weight_decay"], group["caution"], grad)
     raise SkipUpdate from None
 
 
