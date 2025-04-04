@@ -1515,13 +1515,12 @@ def psgd_balance_Q(Q):
 
 @decorator_knowngood
 def _lra_flatten_and_balance(U: List[Tensor], V: List[Tensor], d: List[Tensor]):
-    u_norm = sum(u.square().sum() for u in U)
-    v_norm = sum(v.square().sum() for v in V)
+    u_norm = sum(u.square().sum().double() for u in U)
+    v_norm = sum(v.square().sum().double() for v in V)
     scale = (u_norm / v_norm) ** 0.25  # sqrt of L2 norms; sqrt, as it's 2 factors
-    for u in U:
-        u.div_(scale)
-    for v in V:
-        v.mul_(scale)
+    scale = torch.where(torch.logical_and(torch.isfinite(scale), scale > 1e-6), scale, 1)
+    stochastic_multiply_(U, [1 / scale] * len(U))
+    stochastic_multiply_(V, [scale] * len(V))
     return multi_flatten((U, 1), (V, 1), (d, 0))
 
 
@@ -1571,15 +1570,15 @@ def _compilable_d_step(
 
     divisor = (a0.square() + a1.square()) * (b0.square() + b1.square())
     idx = divisor.bfloat16().flatten().argmax()
-    a = a0[idx].double().square() + a1[idx].double().square()
-    b = b0[idx].double().square() + b1[idx].double().square()
-    divisor = (a * b).sqrt().clamp(min=1e-4)
+    a = a0.index_select(0, idx).double().square() + a1.index_select(0, idx).double().square()
+    b = b0.index_select(0, idx).double().square() + b1.index_select(0, idx).double().square()
+    divisor = (a * b).sqrt().clamp(min=eps)
     step = -step / divisor
 
     # fused update(s)
     apply_flat_add(d_orig, nablaD, step)
     if not delayed:
-        stochastic_add_([d], [d * nablaD], step)
+        copy_stochastic_(d, promote(d) - nablaD * step)
 
 
 def update_lra_precond_(
