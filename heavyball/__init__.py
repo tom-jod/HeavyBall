@@ -548,6 +548,78 @@ class ForeachPSGDKron(C.BaseOpt):
         )
 
 
+class Kronos(C.BaseOpt):
+    """
+    Originally from Omead Pooladzandi and Evan Walters, 2025
+    Modified under Creative Commons Attribution 4.0 International
+    Source available at https://github.com/opooladz/kronos/blob/6ad80957655c31096cba8e090caa6b7aa971277c/kronos.py
+    """
+
+    delayed: bool = False
+    cached: bool = False
+    exp_avg_input: bool = True
+
+    def __init__(
+        self,
+        params,
+        lr=0.001,
+        beta=None,
+        betas=(0.9, 0.999),
+        weight_decay=0.0,
+        preconditioner_update_probability=None,
+        max_size_triangular=2048,
+        min_ndim_triangular=2,
+        memory_save_mode="one_diag",
+        momentum_into_precond_update=True,
+        warmup_steps: int = 0,
+        merge_dims: bool = False,
+        split: bool = False,
+        store_triu_as_line: bool = True,
+        foreach: bool = True,
+        q_dtype="float32",
+        stochastic_schedule: bool = False,
+        storage_dtype: str = "float32",
+        mars: bool = False,
+        caution: bool = False,
+        mars_gamma: float = 0.0025,
+        delayed: Optional[bool] = C.use_default,
+        cached: Optional[bool] = C.use_default,
+        exp_avg_input: Optional[bool] = C.use_default,
+        gradient_clipping: C.str_or_fn = C.use_default,
+        update_clipping: C.str_or_fn = C.use_default,  #
+        adaptive: bool = False,
+        ortho_method: Optional[str] = None,  # If None, no orthogonalization
+        # expert parameters
+        precond_init_scale=None,
+        precond_init_scale_scale: float = 1,
+        precond_init_scale_power: Optional[float] = None,
+        precond_lr: float = 0.1,
+    ):
+        defaults = locals()
+        defaults.pop("self")
+        self.precond_schedule = (
+            defaults.pop("preconditioner_update_probability") or utils.precond_update_prob_schedule()
+        )
+        params = defaults.pop("params")
+
+        delayed = C.default(delayed, self.delayed)
+        cached = C.default(cached, self.cached)
+        exp_avg_input = C.default(exp_avg_input, self.exp_avg_input)
+        update_clipping = C.default(update_clipping, utils.trust_region_clip_)
+
+        super().__init__(
+            params,
+            defaults,
+            foreach,
+            gradient_clipping,
+            update_clipping,
+            False,  #
+            *(C.exp_avg,) * exp_avg_input,  #
+            C.sign,
+            functools.partial(C.scale_by_delayed_psgd if delayed else C.scale_by_psgd, cached=cached),
+        )
+
+
 class ForeachPurePSGD(ForeachPSGDKron):
     exp_avg_input: bool = False
 
@@ -720,4 +792,5 @@ __all__ = [
     "NewtonPSGDLRA",
     "NewtonHybrid2PSGDLRA",
     "NewtonHybrid2PSGDKron",
+    "Kronos",
 ]

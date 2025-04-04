@@ -382,7 +382,6 @@ def _init_psgd_lra(state, group, update, grad, param, cached: bool = False, prob
         getattr(param, "vector", None),
         dtype=getattr(torch, group["q_dtype"]),
     )
-    group["preconditioning_step"] = 0
 
 
 def precond_schedule(group, prob: Union[callable, float, None] = None, name: str = "cumulative_prob"):
@@ -587,7 +586,7 @@ def _update_lra(
     group, U: List[Tensor], V: List[Tensor], d: List[Tensor], params: List[Tensor], grads: List[Tensor], delayed: bool
 ):
     if not group["is_preconditioning"]:
-        return utils.flatten(U, 1), utils.flatten(V, 1), utils.flatten(d)
+        return utils.multi_flatten((U, 1), (V, 1), (d, 0))
 
     if utils.hasattr_none(params[0], "hessian_vector"):
         vector = utils.flatten([p.vector for p in params])
