@@ -12,12 +12,9 @@ from typing import Callable, List, Optional, Tuple, Union
 import numpy as np
 import torch
 from torch import Tensor
-from torch._dynamo import config
 from torch._dynamo.exc import TorchDynamoException
 from torch.backends import cudnn, opt_einsum
 from torch.utils._pytree import tree_map
-
-config.cache_size_limit = 2**16
 
 compile_mode = "max-autotune-no-cudagraphs"
 dynamic = False
@@ -1011,6 +1008,8 @@ class StatefulOptimizer(torch.optim.Optimizer):
         # we assume that parameters are constant and that there are no excessive recompiles
         with torch.no_grad(), torch._dynamo.utils.disable_cache_limit():
             for group in self.param_groups:
+                if "param_count" not in group:
+                    group["param_count"] = sum(p.numel() for p in group["params"])
                 group["is_preconditioning"] = self._is_preconditioning
                 self._step(group)
                 if self.use_ema:
@@ -1399,10 +1398,15 @@ def precond_init_scale(scale, scale_scale, scale_power, grad, hessian_vector, ve
     raise PrecondInitError(f"Computed precond_init_scale is not finite.{manual_hint}")
 
 
-def init_lra(grad, scale, scale_scale, scale_power, rank, hessian_vector, vector, dtype=None):
+def init_lra(
+    grad, param_count, scale, scale_scale, scale_power, rank, hessian_vector, vector, dtype=None, eps: float = 10
+):
+    # "+10 to 1) avoid /0; 2) make sure that norm(U*V') << 1 even when rank_of_approximation=1" from @lixilinx at
+    # https://github.com/lixilinx/psgd_torch/blob/590cd3f125552998ed20028be096652540e2a200/preconditioned_stochastic_gradient_descent.py#L829C11-L829C14
     scale = precond_init_scale(scale, scale_scale, scale_power, grad, hessian_vector, vector)
-    U = torch.randn((*grad.shape, rank), dtype=dtype, device=grad.device)
-    V = torch.randn((*grad.shape, rank), dtype=dtype, device=grad.device)
+    uv_scale = (param_count * (rank + eps)) ** -0.5
+    U = torch.randn((*grad.shape, rank), dtype=dtype, device=grad.device) * uv_scale
+    V = torch.randn((*grad.shape, rank), dtype=dtype, device=grad.device) * uv_scale
     d = torch.full_like(grad, scale, dtype=dtype, device=grad.device)
     return U, V, d
 
@@ -1527,6 +1531,57 @@ def low_rank_mm(U: Tensor, V: Tensor, x: Tensor) -> Tensor:
     return x + torch.einsum("br,gr,g->b", U.to(dtype), V.to(dtype), x.to(dtype)).to(x.dtype)
 
 
+@decorator_knowngood
+def _compilable_d_step(
+    d: Tensor,
+    d_orig: List[Tensor],
+    invQtv: Tensor,
+    vector: Tensor,
+    inverse_precond_vector: Tensor,
+    hessian_vector: Tensor,
+    precond_hessian_vector: Tensor,
+    eps: Tensor,
+    step: Tensor,
+    delayed: bool,
+):
+    precond_hessian_vector = promote(precond_hessian_vector)
+    hessian_vector = promote(hessian_vector)
+    vector = promote(vector)
+    inverse_precond_vector = promote(inverse_precond_vector)
+    invQtv = promote(invQtv)
+    inverse_precond_vector = invQtv - inverse_precond_vector
+
+    nablaD = promote(d).square() * precond_hessian_vector * hessian_vector - vector * inverse_precond_vector
+
+    """
+    1) Sketching
+        1.1) multiply, square, etc. in high precision (to avoid numerical errors + doesn't increase cost)
+        1.2) reduced-precision selection of largest element (halves memory traffic)
+    2) Computation
+        2.1) select relevant indices
+        2.2) redo 1.1 in double precision for scalar values
+        2.3) return high-precision normalized step-size
+    overall, this should REDUCE the cost of the operation compared to baseline (-> less memory traffic) while
+    improving precision
+    """
+    a0 = promote(d) * precond_hessian_vector
+    a1 = vector
+    b0 = inverse_precond_vector / promote(d)
+    b1 = hessian_vector
+
+    divisor = (a0.square() + a1.square()) * (b0.square() + b1.square())
+    idx = divisor.bfloat16().flatten().argmax()
+    a = a0[idx].double().square() + a1[idx].double().square()
+    b = b0[idx].double().square() + b1[idx].double().square()
+    divisor = (a * b).sqrt().clamp(min=1e-4)
+    step = -step / divisor
+
+    # fused update(s)
+    apply_flat_add(d_orig, nablaD, step)
+    if not delayed:
+        stochastic_add_([d], [d * nablaD], step)
+
+
 def update_lra_precond_(
     U: List[Tensor],
     V: List[Tensor],
@@ -1536,6 +1591,7 @@ def update_lra_precond_(
     eps: float,
     step: float,
     delayed: bool,
+    precond_u: bool,
 ):
     """
     Adapted from https://github.com/lixilinx/psgd_torch/blob/6dbea94915679d08a289928e6431b6ce07931aaf/preconditioned_stochastic_gradient_descent.py#L657
@@ -1550,7 +1606,7 @@ def update_lra_precond_(
     eps = scalar_guard(eps, vector)
 
     Qh = low_rank_mm(U, V, d * hessian_vector)
-    Ph = d * low_rank_mm(V, U, Qh)
+    Ph = low_rank_mm(V, U, Qh)
     rank = U.size(1)
 
     VtU = torch.einsum("br,bn->rn", V, U)  # (rank, rank)
@@ -1571,25 +1627,19 @@ def update_lra_precond_(
         return U.to(U_orig[0].dtype), V.to(V_orig[0].dtype), d.to(d_orig[0].dtype)
 
     invQtv = invQtv - V @ torch.linalg.lu_solve(LU, pivots, (U.T @ invQtv).view(-1, 1), adjoint=True).flatten()
-    invPv = invQtv - U @ torch.linalg.lu_solve(LU, pivots, (V.T @ invQtv).view(-1, 1)).flatten()
-    invPv = invPv / d
+    invPv = U @ torch.linalg.lu_solve(LU, pivots, (V.T @ invQtv).view(-1, 1)).flatten()
 
-    nablaD = Ph * hessian_vector - vector * invPv
-    divisor = (Ph.square() + vector.square()) * (hessian_vector.square() + invPv.square())
-    divisor = divisor.max().clamp(min=eps).sqrt()
-    d_step = step / divisor
-
-    apply_flat_add(d_orig, d * nablaD, -d_step)
+    eps, step = scalar_guard(eps, step, vector)
+    _compilable_d_step(d, d_orig, invQtv, vector, invPv, hessian_vector, Ph, eps, step, delayed)
 
     a, b = Qh, invQtv
 
-    precond_u = random.random() < 0.5  # update either U or V, not both at the same time
     precond = V if precond_u else U
     atV = torch.einsum("b,br->r", a, precond)  # o == one
     btV = torch.einsum("b,br->r", b, precond)
     atVVt = torch.einsum("r,br->b", atV, precond)
     btVVt = torch.einsum("r,br->b", btV, precond)
-    precond_step = step / (a.norm() * atVVt.norm() + b.norm() * btVVt.norm() + eps)
+    precond_step = step / (a.norm() * atVVt.norm() + b.norm() * btVVt.norm()).clamp(min=eps)
     if precond_u:
         a = torch.einsum("b,r,rg->bg", a, atV, IpVtU)
         b = torch.einsum("b,r,rg->bg", b, btV, IpVtU)
@@ -1600,7 +1650,6 @@ def update_lra_precond_(
         b = torch.einsum("b,r->br", b, btV)
     apply_flat_add(U_orig if precond_u else V_orig, b - a, precond_step)
     if not delayed:
-        stochastic_add_([d], [d * nablaD], -d_step)
         stochastic_add_([U if precond_u else V], [b - a], precond_step)
     return U.to(U_orig[0].dtype), V.to(V_orig[0].dtype), d.to(d_orig[0].dtype)
 

@@ -374,6 +374,7 @@ def _init_psgd_kron(state, group, update, grad, param, cached: bool = False, pro
 def _init_psgd_lra(state, group, update, grad, param, cached: bool = False, prob: Optional[callable] = None):
     state["U"], state["V"], state["d"] = utils.init_lra(
         grad,
+        group["param_count"],
         group["precond_init_scale"],
         group["precond_init_scale_scale"],
         group["precond_init_scale_power"],
@@ -596,7 +597,10 @@ def _update_lra(
             del p.hessian_vector
     else:
         vector, hessian_vector = utils.dampen_multiple(grads)
-    return utils.update_lra_precond_(U, V, d, vector, hessian_vector, group["eps"], group["precond_lr"], delayed)
+    precond_step = group["precond_step"] = group.get("precond_step", -1) + 1
+    return utils.update_lra_precond_(
+        U, V, d, vector, hessian_vector, group["eps"], group["precond_lr"], delayed, bool(precond_step % 2)
+    )
 
 
 @general_guard("U", "V", "d", init_fn=_init_psgd_lra, skip_first=False)
