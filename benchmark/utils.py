@@ -302,6 +302,7 @@ class Objective:
         params = {
             "lr": params[0],
             "betas": (1 - params[1], 1 - params[2]),
+            "beta": 1 - params[1],
             "shampoo_beta": 1 - params[3],
             "eps": 1e-8,
             "precond_lr": params[3],  # we never have both precond_lr and shampoo_beta
@@ -430,6 +431,15 @@ def trial(
     if opt.startswith("mars-"):
         opt = opt[len("mars-") :]
         kwargs["mars"] = True
+    if opt.startswith("unscaled-"):
+        opt = opt[len("unscaled-") :]
+        kwargs["unscaled"] = True
+    if opt.startswith("adaptive-"):
+        opt = opt[len("adaptive-") :]
+        kwargs["adaptive"] = True
+    if opt.startswith("ortho-"):
+        opt = opt[len("ortho-") :]
+        kwargs["ortho_method"] = "graft"
     opt = getattr(heavyball, opt)
     if "soap" not in opt.__name__.lower() and method != "qr":
         return
