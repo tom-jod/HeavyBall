@@ -106,6 +106,42 @@ class ForeachSFAdamW(C.ScheduleFree):
         )
 
 
+class MSAMLaProp(C.MSAM):
+    def __init__(
+        self,
+        params,
+        lr=0.0025,
+        betas=(0.9, 0.99),
+        eps=1e-6,
+        weight_decay=0,
+        warmup_steps=0,
+        r=0.0,
+        weight_lr_power=2.0,
+        foreach: bool = True,
+        storage_dtype: str = "float32",
+        mars: bool = False,
+        caution: bool = False,
+        mars_gamma: float = 0.0025,
+        gradient_clipping: C.str_or_fn = C.use_default,
+        update_clipping: C.str_or_fn = C.use_default,
+        palm: bool = C.use_default,
+        beta2_scale: float = 0.8,
+    ):
+        defaults = locals()
+        defaults.pop("self")
+        params = defaults.pop("params")
+        super().__init__(
+            params,
+            defaults,
+            foreach,
+            gradient_clipping,
+            update_clipping,
+            palm,
+            C.scale_by_exp_avg_sq,
+            C.update_by_msam,
+        )
+
+
 class PaLMForeachSFAdamW(ForeachSFAdamW):
     palm: bool = True
 
@@ -720,4 +756,5 @@ __all__ = [
     "NewtonPSGDLRA",
     "NewtonHybrid2PSGDLRA",
     "NewtonHybrid2PSGDKron",
+    "MSAMLaProp",
 ]
