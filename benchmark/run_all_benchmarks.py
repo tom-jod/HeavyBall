@@ -297,7 +297,7 @@ def main(
     workers = min(parallelism, total_tasks)
     for idx in range(workers):
         p = multiprocessing.Process(
-            target=worker, args=(task_queue, result_queue, idx, difficulties, timeout), daemon=True
+            target=worker, args=(task_queue, result_queue, idx, difficulties, timeout), daemon=False
         )
         p.start()
         processes.append(p)
