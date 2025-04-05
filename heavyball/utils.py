@@ -1939,7 +1939,9 @@ def _compilable_term_extract_(
 @decorator_knowngood
 def _balance_to_triu(Q: "TriuOrLine"):
     if isinstance(Q[0], tuple):
+        psgd_balance_Q([o[1] for o in Q])
         return line_to_triu(Q)
+    psgd_balance_Q(Q)
     return Q
 
 
