@@ -155,6 +155,14 @@ def write_progress(results, opt, output):
                     f.write(f"\n### {r['name']} - {r['opt']}\n```\n{r['error']}\n```\n")
 
 
+def run_with_timeout(result_q, script, opt, steps, dtype, trials, seed, difficulty):
+    try:
+        res = run_benchmark(script, opt, steps, dtype, trials, seed, difficulty)
+        result_q.put((res, ""))
+    except Exception as e:
+        result_q.put((None, str(e)))
+
+
 def worker(task_queue, result_queue, worker_index, difficulties: list, timeout: int):
     os.environ["CUDA_VISIBLE_DEVICES"] = str(worker_index % torch.cuda.device_count())
     torch.set_num_threads(1)
@@ -181,15 +189,9 @@ def worker(task_queue, result_queue, worker_index, difficulties: list, timeout: 
                 result = None
                 try:
                     result_q = multiprocessing.Queue()
-
-                    def run_with_timeout():
-                        try:
-                            res = run_benchmark(script, o, steps, dtype, trials, seed, d)
-                            result_q.put((res, ""))
-                        except Exception as e:
-                            result_q.put((None, str(e)))
-
-                    p = multiprocessing.Process(target=run_with_timeout)
+                    p = multiprocessing.Process(
+                        target=run_with_timeout, args=(result_q, script, o, steps, dtype, trials, seed, d)
+                    )
                     p.start()
                     p.join(timeout)
                     if p.is_alive():
