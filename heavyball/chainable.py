@@ -302,6 +302,25 @@ def update_by_schedule_free(group, update, grad, param, z):
     raise SkipUpdate from None
 
 
+@copy_guard(2, "z")
+@zero_guard("exp_avg")
+@no_state
+def update_by_msam(group, update, grad, param, z, exp_avg):
+    utils.msam_(
+        group["lr"],
+        utils.beta_debias(utils.get_beta1(group), group["step"]),
+        param,
+        z,
+        update,
+        grad,
+        exp_avg,
+        group["caution"],
+        group["weight_decay"],
+        group["sam_step_size"],
+    )
+    raise SkipUpdate from None
+
+
 @zero_guard("exp_avg", "exp_avg_sq")
 @no_state
 def update_by_adopt(group, update, grad, param, exp_avg, exp_avg_sq):
@@ -1056,3 +1075,27 @@ class ScheduleFree(BaseOpt):
                         p32 = utils.promote(p.data)
                         p32.lerp_(end=z, weight=1 - beta1)
                         utils.copy_stochastic_(p.data, p32)
+
+
+class MSAM(BaseOpt):
+    def eval(self):
+        for group in self.param_groups:
+            group["train_mode"] = train_mode = not group.get("train_mode")
+            if not train_mode:
+                for p in group["params"]:
+                    state = self.state_(p)
+                    if "z" in state:
+                        p_copy = p.data.clone()
+                        utils.copy_stochastic_(p.data, state["z"])
+                        utils.copy_stochastic_(state["z"], p_copy)
+
+    def train(self):
+        for group in self.param_groups:
+            group["train_mode"] = train_mode = not group.get("train_mode")
+            if train_mode:
+                for p in group["params"]:
+                    state = self.state_(p)
+                    if "z" in state:
+                        p_copy = p.data.clone()
+                        utils.copy_stochastic_(p.data, state["z"])
+                        utils.copy_stochastic_(state["z"], p_copy)

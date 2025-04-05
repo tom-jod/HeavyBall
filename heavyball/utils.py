@@ -119,6 +119,47 @@ def schedule_free_(
     return weight_sum
 
 
+@decorator_knowngood
+def _compilable_msam(
+    lr: Tensor,
+    beta1: Tensor,
+    param: List[Tensor],
+    z: List[Tensor],
+    update: List[Tensor],
+    grad: List[Tensor],
+    exp_avg: List[Tensor],
+    caution: bool,
+    decay: Tensor,
+    sam_step_size: Tensor,
+):
+    exp_avg32 = _lerp(exp_avg, update, beta1)
+    for u_, g_, z_, p_ in zip(exp_avg32, grad, z, param):
+        u_ = u_.view_as(z_)
+        z32_ = promote(z_)
+        if caution:
+            u_ = _compilable_cautioning(promote(g_), u_)
+        z32_ = z32_ * (1 - decay * lr) + u_ * -lr
+        copy_stochastic_(z_, z32_)
+        copy_stochastic_(p_, z32_ + u_ / u_.norm().clamp(min=1e-8) * -sam_step_size)
+
+
+def msam_(
+    lr: float,
+    beta1: float,
+    param: List[Tensor],
+    z: List[Tensor],
+    update: List[Tensor],
+    grad: List[Tensor],
+    exp_avg: List[Tensor],
+    caution: bool,
+    weight_decay: float,
+    sam_step_size: float,
+):
+    param, z, update, grad, exp_avg = list_guard(param, z, update, grad, exp_avg)
+    lr, beta1, weight_decay, sam_step_size = scalar_guard(lr, beta1, weight_decay, sam_step_size, exp_avg[0])
+    _compilable_msam(lr, beta1, param, z, update, grad, exp_avg, caution, weight_decay, sam_step_size)
+
+
 def append_or_extend(base, new):
     if isinstance(new, list):
         base.extend(new)
