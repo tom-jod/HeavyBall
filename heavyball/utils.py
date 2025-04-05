@@ -1851,7 +1851,7 @@ def _compilable_term_extract_(
     precond_lr: Tensor,
     velocity: Optional[List[Tensor]],
     beta: Tensor,
-):
+) -> List[Tuple[Tensor, Tensor, Tensor, Tensor, "TriuOrLine"]]:
     out = []
     if velocity is None:
         velocity = [None] * len(Q)
@@ -1895,9 +1895,7 @@ def _compilable_term_extract_(
 @decorator_knowngood
 def _balance_to_triu(Q: "TriuOrLine"):
     if isinstance(Q[0], tuple):
-        psgd_balance_Q([o[1] for o in Q])
         return line_to_triu(Q)
-    psgd_balance_Q(Q)
     return Q
 
 
@@ -1934,6 +1932,78 @@ def psgd_update_precond(
                 method, scale = method
             inplace_orthogonal_(grad, method, grad, scale)
         _prescale_term_(grad, precond_lr, local_norm, lower_bound, can_update)
+        grad = grad @ q.to(grad.dtype)
+        if store_triu_as_line:
+            _subtract_from_line_(original_q[1], grad)
+        else:
+            stochastic_add_(original_q, grad, -1)
+
+
+@decorator_knowngood
+def _compilable_unscaled_term_extract_(
+    terms: List[Tuple[Tensor, Tensor]],
+    Q: List[Tensor],
+    oq: "TriuOrLine",
+    precond_lr: Tensor,
+    velocity: Optional[List[Tensor]],
+    beta: Tensor,
+) -> List[Tuple[Tensor, Tensor, "TriuOrLine"]]:
+    if velocity is None:
+        velocity = [None] * len(Q)
+    out = [promote(x) - promote(y) for x, y in terms]
+
+    new = []
+    for d, q, o, v in zip(out, Q, oq, velocity):
+        if d.ndim == 2:
+            d = d.triu()
+        if v is not None:
+            if d.ndim < 2:
+                numel = max(1, d.numel())  # handle scalar case
+            else:
+                numel = d.size(0) * (d.size(0) + 1) / 2  # ones_like(d).triu().sum()
+            norm = d.square()
+            v_ = promote(v) * beta + (1 - beta) * (norm / numel).sum()  # AdamMini
+            d = d / v_.sqrt().clamp(min=1e-8)
+            copy_stochastic_(v, v_)
+        d = promote(d) * precond_lr
+        if q.ndim >= 2:
+            new.append((d, q, o))
+            continue
+
+        if isinstance(o, tuple):
+            o = o[1]
+        po = promote(o)
+        new_po = po - d * po
+        new_po = stochastic_round_(o, new_po)
+        o.copy_(new_po)
+
+    return new
+
+
+@decorator
+def unscaled_psgd_update_precond(
+    exprs: Tuple[str, List[str], str],
+    G: Tensor,
+    precond_lr: float,
+    oq: "TriuOrLine",
+    store_triu_as_line: bool,
+    velocity: Optional[List[Tensor]],
+    beta2: float,
+    _ortho_method: Optional[str],
+    V: Tensor,
+):
+    """Update Kronecker product preconditioner Q with pair (V, G)."""
+    exprA, exprGs, _ = exprs
+    Q = _balance_to_triu(oq)
+
+    A, conjB = psgd_calc_A_and_conjB(exprA, G, Q, V)
+    precond_lr, beta2 = scalar_guard(precond_lr, beta2, G)
+
+    terms = [(torch.einsum(exprG, A, A), torch.einsum(exprG, conjB, conjB)) for exprG in exprGs]
+    del A, conjB, V
+
+    terms = _compilable_unscaled_term_extract_(terms, Q, oq, precond_lr, velocity, beta2)
+    for grad, q, original_q in terms:
         grad = grad @ q.to(grad.dtype)
         if store_triu_as_line:
             _subtract_from_line_(original_q[1], grad)

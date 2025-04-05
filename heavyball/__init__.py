@@ -518,6 +518,7 @@ class ForeachPSGDKron(C.BaseOpt):
         update_clipping: C.str_or_fn = C.use_default,  #
         adaptive: bool = False,
         ortho_method: Optional[str] = None,  # If None, no orthogonalization
+        unscaled: bool = False,
         # expert parameters
         precond_init_scale=None,
         precond_init_scale_scale: float = 1,
@@ -589,6 +590,7 @@ class Kronos(C.BaseOpt):
         update_clipping: C.str_or_fn = C.use_default,  #
         adaptive: bool = False,
         ortho_method: Optional[str] = None,  # If None, no orthogonalization
+        unscaled: bool = False,
         # expert parameters
         precond_init_scale=None,
         precond_init_scale_scale: float = 1,

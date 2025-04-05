@@ -557,7 +557,7 @@ def _update_psgd_precond(cached, Q_cache, group, param, grad, Q, velocity, exprs
     else:
         vector, hessian_vector = utils.dampen_grad(grad)
 
-    utils.psgd_update_precond(
+    (utils.unscaled_psgd_update_precond if group.get("unscaled") else utils.psgd_update_precond)(
         exprs,
         hessian_vector,
         group["precond_lr"],
@@ -596,7 +596,7 @@ def _cached_psgd_precond_grad(group, cache_expr, exprs, update, Q, Q_cache, grad
     return out
 
 
-def _fused_cached_psgd_precond_grad(group, grad, param, cache_expr, exprs, update, Q_mat, Q_cache):
+def _fused_cached_psgd_precond_grad(group, grad, param, cache_expr, exprs, update, Q, Q_cache):
     kwargs = {
         "ea": update,
         "caution": group["caution"],
@@ -608,9 +608,7 @@ def _fused_cached_psgd_precond_grad(group, grad, param, cache_expr, exprs, updat
     if group.get("is_cached", False):
         utils.fused_precond_grad_cached_(cache_expr, cached_q=Q_cache, **kwargs)
     else:
-        utils.fused_psgd_precond_grad(
-            exprs[-1], preconds=Q_mat, store_triu_as_line=group["store_triu_as_line"], **kwargs
-        )
+        utils.fused_psgd_precond_grad(exprs[-1], preconds=Q, store_triu_as_line=group["store_triu_as_line"], **kwargs)
 
 
 def _update_lra(
@@ -713,7 +711,7 @@ def scale_by_delayed_psgd(
     prob: Optional[callable] = None,
 ):
     precond = _cached_psgd_precond_grad(group, cache_expr, exprs, update, Q, Q_cache, grad)
-    _ = _update_psgd_precond(
+    _update_psgd_precond(
         cached,
         Q_cache,
         group,
@@ -744,7 +742,7 @@ def update_by_psgd(
     cached: bool = False,
     prob: Optional[callable] = None,
 ):
-    Q_mat = _update_psgd_precond(
+    _update_psgd_precond(
         cached,
         Q_cache,
         group,
@@ -755,7 +753,7 @@ def update_by_psgd(
         exprs,
         prob,
     )
-    _fused_cached_psgd_precond_grad(group, update, param, cache_expr, exprs, update, Q_mat, Q_cache)
+    _fused_cached_psgd_precond_grad(group, update, param, cache_expr, exprs, update, Q, Q_cache)
     raise SkipUpdate from None
 
 
@@ -782,7 +780,7 @@ def update_by_delayed_psgd(
     prob: Optional[callable] = None,
 ):
     _fused_cached_psgd_precond_grad(group, update, param, cache_expr, exprs, update, Q, Q_cache)
-    _ = _update_psgd_precond(
+    _update_psgd_precond(
         cached,
         Q_cache,
         group,
