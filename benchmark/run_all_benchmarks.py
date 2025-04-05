@@ -155,7 +155,7 @@ def write_progress(results, opt, output):
                     f.write(f"\n### {r['name']} - {r['opt']}\n```\n{r['error']}\n```\n")
 
 
-def worker(task_queue, result_queue, worker_index, difficulties: list):
+def worker(task_queue, result_queue, worker_index, difficulties: list, timeout: int):
     os.environ["CUDA_VISIBLE_DEVICES"] = str(worker_index % torch.cuda.device_count())
     torch.set_num_threads(1)
     os.environ["OMP_NUM_THREADS"] = "1"
@@ -180,10 +180,26 @@ def worker(task_queue, result_queue, worker_index, difficulties: list):
                 exc = ""
                 result = None
                 try:
-                    result = run_benchmark(script, o, steps, dtype, trials, seed, d)
+                    result_q = multiprocessing.Queue()
+
+                    def run_with_timeout():
+                        try:
+                            res = run_benchmark(script, o, steps, dtype, trials, seed, d)
+                            result_q.put((res, ""))
+                        except Exception as e:
+                            result_q.put((None, str(e)))
+
+                    p = multiprocessing.Process(target=run_with_timeout)
+                    p.start()
+                    p.join(timeout)
+                    if p.is_alive():
+                        p.terminate()
+                        p.join()
+                        exc = f"Benchmark timed out after {timeout} seconds"
+                    elif not result_q.empty():
+                        result, exc = result_q.get()
                 except Exception as e:
                     exc = str(e)
-                    pass
 
                 if result is not None:
                     result_queue.put(result)
@@ -195,7 +211,7 @@ def worker(task_queue, result_queue, worker_index, difficulties: list):
                         "name": f"{script.replace('.py', '')}-{d_}",
                         "opt": o,
                         "success": False,
-                        "runtime": 0,
+                        "runtime": timeout if "timed out" in exc else 0,
                         "attempts": 0,
                         "loss": float("inf"),
                         "error": str(exc),
@@ -213,7 +229,7 @@ def worker(task_queue, result_queue, worker_index, difficulties: list):
 def main(
     opt: list[str] = typer.Option([], help="Optimizers"),
     steps: int = 100_000,
-    timeout: int = 3600 * 4,
+    timeout: int = 3600,
     output: str = "benchmark_results.md",
     trials: int = 1000,
     dtype: str = "float32",
@@ -280,7 +296,9 @@ def main(
     processes = []
     workers = min(parallelism, total_tasks)
     for idx in range(workers):
-        p = multiprocessing.Process(target=worker, args=(task_queue, result_queue, idx, difficulties), daemon=True)
+        p = multiprocessing.Process(
+            target=worker, args=(task_queue, result_queue, idx, difficulties, timeout), daemon=True
+        )
         p.start()
         processes.append(p)
         time.sleep(3)  # we can't start too many processes very quickly - otherwise there's errors with the cuda context
