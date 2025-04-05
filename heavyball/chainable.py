@@ -1,7 +1,8 @@
+import copy
 import functools
 import math
 import random
-from typing import List, Literal, Optional, Union
+from typing import Iterable, List, Literal, Optional, Union
 
 import torch
 from torch import Tensor
@@ -37,6 +38,7 @@ class FunctionTransform:
     def __init__(self, fn):
         self.fn = fn
         self.fn_name = self.get_fn().__name__
+        self.transform_idx = None
 
     def __call__(self, state, group, update, grad, param, *args, **kwargs):
         raise NotImplementedError
@@ -47,7 +49,11 @@ class FunctionTransform:
         return self.fn
 
     def val_name(self, name):
-        return f"{self.fn_name}_{name}"
+        assert self.transform_idx is not None
+        return f"{self.fn_name}_{name}_{self.transform_idx}"
+
+    def __repr__(self):
+        return f"{self.__class__.__name__}({self.fn}, transform_idx={self.transform_idx})"
 
 
 def _zero_guard(state, key, ref, dtype):
@@ -87,14 +93,31 @@ class CopyGuard(FunctionTransform):
         return self.fn(state, group, update, grad, param, *args, *vars, **kwargs)
 
 
-class GeneralGuard(FunctionTransform):  # We can't guard against reuse in the general case
+class GeneralGuard(FunctionTransform):
     def __init__(self, fn, names, init_fn, skip_first: bool = True):
         super().__init__(fn)
         self.names = names
         self.init_fn = init_fn
         self.skip_first = skip_first
 
-    def __call__(self, state, group, update, grad, param, *args, **kwargs):
+    @functools.lru_cache(maxsize=1)
+    def named_to_anonymous(self):
+        return {n: self.val_name(n) for n in self.names}
+
+    @functools.lru_cache(maxsize=1)
+    def anonymous_to_named(self):
+        return {self.val_name(n): n for n in self.names}
+
+    def _map(self, state_fn, param, mapping):
+        for p in param:
+            state = state_fn(p)
+            for name, mapped in mapping.items():
+                if mapped in state:
+                    raise ValueError(f"Name {name} already mapped to {mapped}")
+                if name in state:
+                    state[mapped] = state.pop(name)
+
+    def _inner(self, state, group, update, grad, param, *args, **kwargs):
         vars = []
         skip_update = False
         for p, g, u in zip(param, grad, update):
@@ -104,6 +127,13 @@ class GeneralGuard(FunctionTransform):  # We can't guard against reuse in the ge
         if skip_update and self.skip_first:
             raise SkipUpdate from None
         return self.fn(state, group, update, grad, param, *args, *zip(*vars), **kwargs)
+
+    def __call__(self, state, group, update, grad, param, *args, **kwargs):
+        try:
+            self._map(state, param, self.anonymous_to_named())
+            return self._inner(state, group, update, grad, param, *args, **kwargs)
+        finally:
+            self._map(state, param, self.named_to_anonymous())
 
 
 class NoState(FunctionTransform):
@@ -814,12 +844,25 @@ def create_branch(branches: List[List[callable]], merge_fn: callable):
     return _branch
 
 
+def set_indices(fns: Iterable[callable], offset: int = 0):
+    fns = [copy.deepcopy(fn) for fn in fns]
+    for fn in fns:
+        while isinstance(fn, (FunctionTransform, functools.partial)):
+            if isinstance(fn, functools.partial):
+                fn = fn.func
+                continue
+            fn.transform_idx = offset
+            offset += 1
+            fn = fn.fn
+    return fns
+
+
 class ChainOpt(utils.StatefulOptimizer):
     promote: bool = False
 
     def __init__(self, params, defaults, foreach: bool, *fns):
         super().__init__(params, defaults, foreach)
-        self.fns = tuple(fns)
+        self.fns = set_indices(fns)
 
     def _step(self, group):
         if "base_lr" not in group:
