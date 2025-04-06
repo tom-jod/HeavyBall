@@ -178,6 +178,9 @@ def run_with_timeout(result_q, script, opt, steps, dtype, trials, seed, difficul
         result_q.put((None, str(e)))
 
 
+_difficulty_order = ["trivial", "easy", "medium", "hard", "extreme", "nightmare"]
+
+
 def worker(task_queue, result_queue, worker_index, difficulties: list, timeout: int):
     os.environ["CUDA_VISIBLE_DEVICES"] = str(worker_index % torch.cuda.device_count())
     torch.set_num_threads(1)
@@ -188,6 +191,8 @@ def worker(task_queue, result_queue, worker_index, difficulties: list, timeout: 
     dummy = torch.zeros(1, device="cuda")
     del dummy
     torch.cuda.empty_cache()
+
+    difficulties = [d for d in _difficulty_order if d in difficulties]
 
     while True:
         try:
@@ -256,9 +261,7 @@ def main(
     mars: bool = False,
     unscaled_caution: bool = False,
     seeds: int = 4,
-    difficulties: list[str] = typer.Option(
-        [], help='"trivial", "easy", "medium", "hard", "extreme", "nightmare" or any combination of these'
-    ),
+    difficulties: list[str] = typer.Option([], help=f"{_difficulty_order} or any combination of these"),
 ):
     multiprocessing.set_start_method("spawn", force=True)  # spawn appears to be safer with CUDA MPS
 
