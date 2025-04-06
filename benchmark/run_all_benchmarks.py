@@ -225,10 +225,13 @@ def worker(task_queue, result_queue, worker_index, difficulties: list, timeout: 
 
                 if result is not None:
                     result_queue.put(result)
-                    continue
+                    if result["success"]:
+                        continue
+                else:
+                    inner_difficulties.insert(0, d)
 
                 # model failed this task - no need to try harder ones
-                for d_ in [d] + list(inner_difficulties):
+                for d_ in inner_difficulties:
                     result = {
                         "name": f"{script.replace('.py', '')}-{d_}",
                         "opt": o,
