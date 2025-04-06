@@ -106,7 +106,7 @@ def run_benchmark(script, opt, steps, dtype, trials, seed, difficulty):
         "attempts": attempts,
         "error": error if error else "",
         "seed": seed,
-        "config_str": config_str,  # Add the parsed config string
+        "config_str": config_str,
     }
 
 
@@ -156,7 +156,7 @@ def write_progress(results, opt, output):
             loss = f"{r['loss']:.2e}"
             attempts = f"{r['attempts']:d}"
             seed = f"{r['seed']}"
-            config_str = f"`{r['config_str']}`" if r["config_str"] else "N/A"
+            config_str = f"`{r['config_str']}`" if r.get("config_str", False) else "N/A"
 
             opt, caution, mars = opt_to_config(r["opt"])
             f.write(
@@ -233,6 +233,7 @@ def worker(task_queue, result_queue, worker_index, difficulties: list, timeout: 
                         "loss": float("inf"),
                         "error": str(exc),
                         "seed": seed,
+                        "config_str": "N/A",
                     }
                     result_queue.put(result)
                 break
