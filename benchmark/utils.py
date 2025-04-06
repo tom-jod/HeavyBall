@@ -304,6 +304,7 @@ class Objective:
             "betas": (1 - params[1], 1 - params[2]),
             "beta": 1 - params[1],
             "shampoo_beta": 1 - params[3],
+            "sam_step_size": params[3],
             "eps": 1e-8,
             "precond_lr": params[3],  # we never have both precond_lr and shampoo_beta
         }
@@ -439,7 +440,7 @@ def trial(
         kwargs["adaptive"] = True
     if opt.startswith("ortho-"):
         opt = opt[len("ortho-") :]
-        kwargs["ortho_method"] = "graft"
+        kwargs["ortho_method"] = "newtonschulz-graft"
     opt = getattr(heavyball, opt)
     if "soap" not in opt.__name__.lower() and method != "qr":
         return
@@ -487,7 +488,7 @@ def trial(
         out = hyperopt.fmin(
             obj.objective,
             (
-                hyperopt.hp.loguniform("lr", np.log(1e-7), np.log(1000)),  #
+                hyperopt.hp.loguniform("lr", np.log(1e-7), np.log(10)),  #
                 hyperopt.hp.loguniform("1mbeta1", np.log(1e-3), np.log(1)),  #
                 hyperopt.hp.loguniform("1mbeta2", np.log(1e-5), np.log(1)),  #
                 hyperopt.hp.loguniform("1mshampoo_beta", np.log(1e-4), np.log(1)),

@@ -126,6 +126,7 @@ class MSAMLaProp(C.MSAM):
         update_clipping: C.str_or_fn = C.use_default,
         palm: bool = C.use_default,
         beta2_scale: float = 0.8,
+        sam_step_size: float = 0.1,
     ):
         defaults = locals()
         defaults.pop("self")
