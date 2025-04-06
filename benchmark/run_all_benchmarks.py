@@ -25,6 +25,13 @@ def last_match(pattern, text):
     return float(last)
 
 
+def parse_config(text):
+    match = re.search(r"Attempt: \d+ \| (.*?) \| Best Loss:", text)
+    if match:
+        return match.group(1).strip()
+    return ""
+
+
 _module_cache = {}
 
 
@@ -87,6 +94,9 @@ def run_benchmark(script, opt, steps, dtype, trials, seed, difficulty):
 
     total_runtime = time.time() - start_time
 
+    # Parse winning config string
+    config_str = parse_config(output)
+
     return {
         "name": f"{script.replace('.py', '')}-{difficulty}",
         "opt": opt,
@@ -96,6 +106,7 @@ def run_benchmark(script, opt, steps, dtype, trials, seed, difficulty):
         "attempts": attempts,
         "error": error if error else "",
         "seed": seed,
+        "config_str": config_str,  # Add the parsed config string
     }
 
 
@@ -133,8 +144,11 @@ def write_progress(results, opt, output):
             f.write(f"| {o} | {caution} | {mars} | {success}/{len(opt_results)} | {runtime:.2f}s | {attempts:.1f} |\n")
 
         f.write("\n## Details\n\n")
-        f.write("| Benchmark | Optimizer | Cautious | Mars | Success | Runtime | Loss | Attempts | Seed |\n")
-        f.write("|-----------|-----------|---------|---|---|----------|------|---|---|\n")
+        # Add Winning Config column
+        f.write(
+            "| Benchmark | Optimizer | Cautious | Mars | Success | Runtime | Loss | Attempts | Seed | Winning Config |\n"
+        )
+        f.write("|-----------|-----------|---------|---|---|----------|------|---|---|----------------|\n")
 
         for r in sorted(results, key=lambda x: (x["name"], x["opt"])):
             mark = "✓" if r["success"] else "✗"
@@ -142,10 +156,11 @@ def write_progress(results, opt, output):
             loss = f"{r['loss']:.2e}"
             attempts = f"{r['attempts']:d}"
             seed = f"{r['seed']}"
+            config_str = f"`{r['config_str']}`" if r["config_str"] else "N/A"
 
             opt, caution, mars = opt_to_config(r["opt"])
             f.write(
-                f"| {r['name']} | {opt} | {caution} | {mars} | {mark} | {runtime} | {loss} | {attempts} | {seed} |\n"
+                f"| {r['name']} | {opt} | {caution} | {mars} | {mark} | {runtime} | {loss} | {attempts} | {seed} | {config_str} |\n"
             )
 
         if any(not r["success"] for r in results):
