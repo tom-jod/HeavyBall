@@ -90,20 +90,24 @@ class PrecondGradAccumGuard(FunctionTransform):
         utils.zero_(state)
 
     def __call__(self, state, group, update, grad, param, *args, **kwargs):
+        base_grad = update if group.get("momentum_into_precond_update", True) else grad
         if not group.get("precond_grad_accum", False):
-            return self.fn(state, group, update, grad, param, *args, update, **kwargs)
+            return self.fn(state, group, update, grad, param, *args, base_grad, **kwargs)
 
         flat_state = [_zero_guard(state(p), "precond_grad_accum", p, _storage_dtype(group)) for p in param]
-        self._accum(flat_state, update)
-        if group["is_preconditioning"]:
+        if group["is_preconditioning"] and group["step"] - self.latest_precond > 1:
+            self._accum(flat_state, base_grad)
             utils.stochastic_multiply_(flat_state, 1 / (group["step"] - self.latest_precond))
         else:
-            flat_state = update
-        out = self.fn(state, group, update, grad, param, *args, flat_state, **kwargs)
-
-        if group["is_preconditioning"]:
-            self.latest_precond = group["step"]
-            self._reset(flat_state)
+            if not group["is_preconditioning"]:
+                self._accum(flat_state, base_grad)
+            flat_state = base_grad
+        try:
+            out = self.fn(state, group, update, grad, param, *args, flat_state, **kwargs)
+        finally:
+            if group["is_preconditioning"]:
+                self.latest_precond = group["step"]
+                self._reset(flat_state)
 
         return out
 
@@ -683,16 +687,16 @@ def _update_lra(
 @PrecondGradAccumGuard
 @general_guard("U", "V", "d", init_fn=_init_psgd_lra, skip_first=False)
 @no_state
-def scale_by_psgd_lra(group, update, grad, param, U, V, d):
-    u, v, d = _update_lra(group, U, V, d, param, update if group["momentum_into_precond_update"] else grad, False)
+def scale_by_psgd_lra(group, update, grad, param, update_to_precond, U, V, d):
+    u, v, d = _update_lra(group, U, V, d, param, update_to_precond, False)
     return utils.extract_from_flat_update(param, utils.lra_precond(u, v, d, utils.flatten(update)))
 
 
 @PrecondGradAccumGuard
 @general_guard("U", "V", "d", init_fn=_init_psgd_lra, skip_first=False)
 @no_state
-def update_by_psgd_lra(group, update, grad, param, U, V, d):
-    u, v, d = _update_lra(group, U, V, d, param, update if group["momentum_into_precond_update"] else grad, False)
+def update_by_psgd_lra(group, update, grad, param, update_to_precond, U, V, d):
+    u, v, d = _update_lra(group, U, V, d, param, update_to_precond, False)
     utils.apply_lra_update(param, update, u, v, d, group["lr"], group["weight_decay"], group["caution"], grad)
     raise SkipUpdate from None
 
@@ -700,16 +704,16 @@ def update_by_psgd_lra(group, update, grad, param, U, V, d):
 @PrecondGradAccumGuard
 @general_guard("U", "V", "d", init_fn=_init_psgd_lra, skip_first=False)
 @no_state
-def scale_by_delayed_psgd_lra(group, update, grad, param, U, V, d):
-    u, v, d = _update_lra(group, U, V, d, param, update if group["momentum_into_precond_update"] else grad, True)
+def scale_by_delayed_psgd_lra(group, update, grad, param, update_to_precond, U, V, d):
+    u, v, d = _update_lra(group, U, V, d, param, update_to_precond, True)
     return utils.extract_from_flat_update(param, utils.lra_precond(u, v, d, utils.flatten(update)))
 
 
 @PrecondGradAccumGuard
 @general_guard("U", "V", "d", init_fn=_init_psgd_lra, skip_first=False)
 @no_state
-def update_by_delayed_psgd_lra(group, update, grad, param, U, V, d):
-    u, v, d = _update_lra(group, U, V, d, param, update if group["momentum_into_precond_update"] else grad, True)
+def update_by_delayed_psgd_lra(group, update, grad, param, update_to_precond, U, V, d):
+    u, v, d = _update_lra(group, U, V, d, param, update_to_precond, True)
     utils.apply_lra_update(param, update, u, v, d, group["lr"], group["weight_decay"], group["caution"], grad)
     raise SkipUpdate from None
 
@@ -724,6 +728,7 @@ def scale_by_psgd(
     update,
     grad,
     param,
+    update_to_precond,
     Q,
     exprs,
     Q_cache,
@@ -732,13 +737,12 @@ def scale_by_psgd(
     cached: bool = False,
     prob: Optional[callable] = None,
 ):
-    update = update.to(memory_format=torch.contiguous_format)
     _update_psgd_precond(
         cached,
         Q_cache,
         group,
         param,
-        update if group["momentum_into_precond_update"] else grad,
+        update_to_precond,
         Q,
         velocity,
         exprs,
@@ -757,6 +761,7 @@ def scale_by_delayed_psgd(
     update,
     grad,
     param,
+    update_to_precond,
     Q,
     exprs,
     Q_cache,
@@ -771,7 +776,7 @@ def scale_by_delayed_psgd(
         Q_cache,
         group,
         param,
-        update if group["momentum_into_precond_update"] else grad,
+        update_to_precond,
         Q,
         velocity,
         exprs,
@@ -790,6 +795,7 @@ def update_by_psgd(
     update,
     grad,
     param,
+    update_to_precond,
     Q,
     exprs,
     Q_cache,
@@ -803,7 +809,7 @@ def update_by_psgd(
         Q_cache,
         group,
         param,
-        update if group["momentum_into_precond_update"] else grad,
+        update_to_precond,
         Q,
         velocity,
         exprs,
@@ -828,6 +834,7 @@ def update_by_delayed_psgd(
     update,
     grad,
     param,
+    update_to_precond,
     Q,
     exprs,
     Q_cache,
@@ -842,7 +849,7 @@ def update_by_delayed_psgd(
         Q_cache,
         group,
         param,
-        update if group["momentum_into_precond_update"] else grad,
+        update_to_precond,
         Q,
         velocity,
         exprs,
