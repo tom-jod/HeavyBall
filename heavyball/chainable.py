@@ -78,6 +78,36 @@ class ZeroGuard(FunctionTransform):
         return self.fn(state, group, update, grad, param, *args, *vars, **kwargs)
 
 
+class PrecondGradAccumGuard(FunctionTransform):
+    def __init__(self, fn):
+        super().__init__(fn)
+        self.latest_precond = 0
+
+    def _accum(self, state, new):
+        utils.stochastic_add_(state, new)
+
+    def _reset(self, state):
+        utils.zero_(state)
+
+    def __call__(self, state, group, update, grad, param, *args, **kwargs):
+        if not group.get("precond_grad_accum", False):
+            return self.fn(state, group, update, grad, param, *args, update, **kwargs)
+
+        flat_state = [_zero_guard(state(p), "precond_grad_accum", p, _storage_dtype(group)) for p in param]
+        self._accum(flat_state, update)
+        if group["is_preconditioning"]:
+            utils.stochastic_multiply_(flat_state, 1 / (group["step"] - self.latest_precond))
+        else:
+            flat_state = update
+        out = self.fn(state, group, update, grad, param, *args, flat_state, **kwargs)
+
+        if group["is_preconditioning"]:
+            self.latest_precond = group["step"]
+            self._reset(flat_state)
+
+        return out
+
+
 class CopyGuard(FunctionTransform):
     def __init__(self, fn, index, names):
         super().__init__(fn)
@@ -650,6 +680,7 @@ def _update_lra(
     )
 
 
+@PrecondGradAccumGuard
 @general_guard("U", "V", "d", init_fn=_init_psgd_lra, skip_first=False)
 @no_state
 def scale_by_psgd_lra(group, update, grad, param, U, V, d):
@@ -657,6 +688,7 @@ def scale_by_psgd_lra(group, update, grad, param, U, V, d):
     return utils.extract_from_flat_update(param, utils.lra_precond(u, v, d, utils.flatten(update)))
 
 
+@PrecondGradAccumGuard
 @general_guard("U", "V", "d", init_fn=_init_psgd_lra, skip_first=False)
 @no_state
 def update_by_psgd_lra(group, update, grad, param, U, V, d):
@@ -665,6 +697,7 @@ def update_by_psgd_lra(group, update, grad, param, U, V, d):
     raise SkipUpdate from None
 
 
+@PrecondGradAccumGuard
 @general_guard("U", "V", "d", init_fn=_init_psgd_lra, skip_first=False)
 @no_state
 def scale_by_delayed_psgd_lra(group, update, grad, param, U, V, d):
@@ -672,6 +705,7 @@ def scale_by_delayed_psgd_lra(group, update, grad, param, U, V, d):
     return utils.extract_from_flat_update(param, utils.lra_precond(u, v, d, utils.flatten(update)))
 
 
+@PrecondGradAccumGuard
 @general_guard("U", "V", "d", init_fn=_init_psgd_lra, skip_first=False)
 @no_state
 def update_by_delayed_psgd_lra(group, update, grad, param, U, V, d):
@@ -680,6 +714,7 @@ def update_by_delayed_psgd_lra(group, update, grad, param, U, V, d):
     raise SkipUpdate from None
 
 
+@PrecondGradAccumGuard
 @general_guard(
     "Q", "exprs", ("Q_cache", None), ("cache_expr", None), ("velocity", None), init_fn=_init_psgd_kron, skip_first=False
 )
@@ -712,6 +747,7 @@ def scale_by_psgd(
     return _cached_psgd_precond_grad(group, cache_expr, exprs, update, Q, Q_cache, grad)
 
 
+@PrecondGradAccumGuard
 @general_guard(
     "Q", "exprs", ("Q_cache", None), ("cache_expr", None), ("velocity", None), init_fn=_init_psgd_kron, skip_first=False
 )
@@ -744,6 +780,7 @@ def scale_by_delayed_psgd(
     return precond
 
 
+@PrecondGradAccumGuard
 @general_guard(
     "Q", "exprs", ("Q_cache", None), ("cache_expr", None), ("velocity", None), init_fn=_init_psgd_kron, skip_first=False
 )
@@ -781,6 +818,7 @@ def sign(group, update, grad, param, graft: bool = True):
     return utils.sign_(update, graft)
 
 
+@PrecondGradAccumGuard
 @general_guard(
     "Q", "exprs", ("Q_cache", None), ("cache_expr", None), ("velocity", None), init_fn=_init_psgd_kron, skip_first=False
 )

@@ -1760,6 +1760,12 @@ def apply_flat_update(params: List[Tensor], update: Tensor):
 
 
 @decorator_knowngood
+def zero_(x: List[Tensor]):
+    for i in x:
+        i.zero_()
+
+
+@decorator_knowngood
 def apply_flat_add(params: List[Tensor], update: Tensor, alpha: Tensor):
     start = 0
     update = update.flatten()
