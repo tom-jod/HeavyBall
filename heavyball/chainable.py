@@ -43,6 +43,10 @@ class FunctionTransform:
     def __call__(self, state, group, update, grad, param, *args, **kwargs):
         raise NotImplementedError
 
+    def _guard(self, state, name, dtype, param, template_fn):
+        name = self.val_name(name)
+        return [template_fn(state(p), name, p, dtype) for p in param]
+
     def get_fn(self):
         if utils.hasattr_none(self.fn, "get_fn"):
             return self.fn.get_fn()
@@ -71,10 +75,7 @@ class ZeroGuard(FunctionTransform):
         self.names = names
 
     def __call__(self, state, group, update, grad, param, *args, **kwargs):
-        vars = [
-            [_zero_guard(state(p), self.val_name(name), p, _storage_dtype(group)) for p in param]  #
-            for name in self.names
-        ]
+        vars = [self._guard(state, name, _storage_dtype(group), param, _zero_guard) for name in self.names]
         return self.fn(state, group, update, grad, param, *args, *vars, **kwargs)
 
 
@@ -94,8 +95,7 @@ class PrecondGradAccumGuard(FunctionTransform):
         base_grad = update if group.get("momentum_into_precond_update", True) else grad
         if not group.get("precond_grad_accum", False):
             return self.fn(state, group, update, grad, param, *args, base_grad, **kwargs)
-
-        flat_state = [_zero_guard(state(p), "precond_grad_accum", p, _storage_dtype(group)) for p in param]
+        flat_state = self._guard(state, "precond_grad_accum", _storage_dtype(group), param, _zero_guard)
         if group["is_preconditioning"] and group["step"] - self.latest_precond > 1:
             self.has_data = True
             self._accum(flat_state, base_grad)
