@@ -75,7 +75,7 @@ def run_benchmark(script, opt, steps, dtype, trials, seed, difficulty):
         # Run the main function
         module.main(**arguments)
     except SkipConfig:
-        return
+        raise SkipConfig
     except Exception:
         output = sys.stdout.getvalue()
         error = traceback.format_exc()
@@ -175,7 +175,7 @@ def run_with_timeout(result_q, script, opt, steps, dtype, trials, seed, difficul
         res = run_benchmark(script, opt, steps, dtype, trials, seed, difficulty)
         result_q.put((res, ""))
     except Exception as e:
-        result_q.put((None, str(e)))
+        result_q.put((isinstance(e, SkipConfig), str(e)))
 
 
 _difficulty_order = ["trivial", "easy", "medium", "hard", "extreme", "nightmare"]
@@ -223,7 +223,9 @@ def worker(task_queue, result_queue, worker_index, difficulties: list, timeout: 
                 except Exception as e:
                     exc = str(e)
 
-                if result is not None:
+                if result is True:  # SkipConfig
+                    break
+                if result is not False and result is not None:
                     result_queue.put(result)
                     if result["success"]:
                         continue
