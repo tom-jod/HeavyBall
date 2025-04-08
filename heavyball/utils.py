@@ -610,6 +610,19 @@ def scalar_guard(*args):
     return out
 
 
+def broadcastable_list_guard(*xs):
+    xs = list_guard(*xs)
+    for x in xs:
+        if isinstance(x[0], Tensor):
+            ref = x[0]
+            break
+    else:
+        raise ValueError("No tensor-valued input given")
+    xs = [x if isinstance(x[0], Tensor) else list_guard(scalar_guard(*x, ref)) for x in xs]
+    max_len = max(len(x) for x in xs)
+    return [x if len(x) > 1 else x * max_len for x in xs]
+
+
 @decorator_knowngood
 def _compilable_stochastic_add_(x: List[Tensor], y: List[Tensor], alpha: Union[float, int, Tensor]):
     for x_, y_ in zip(x, y):
@@ -619,7 +632,7 @@ def _compilable_stochastic_add_(x: List[Tensor], y: List[Tensor], alpha: Union[f
 
 
 def stochastic_add_(x: List[Tensor], y: List[Tensor], alpha: Union[float, int, Tensor] = 1):
-    x, y = list_guard(x, y)
+    x, y = broadcastable_list_guard(x, y)
     alpha = scalar_guard(alpha, x[0])
     _compilable_stochastic_add_(x, y, alpha)
 
@@ -633,7 +646,7 @@ def _compilable_stochastic_add_divide_(x: List[Tensor], y: List[Tensor], alpha: 
 
 
 def stochastic_add_divide_(x: List[Tensor], y: List[Tensor], alpha: Union[float, int, Tensor] = 1, divisor: float = 1):
-    x, y = list_guard(x, y)
+    x, y = broadcastable_list_guard(x, y)
     alpha, divisor = scalar_guard(alpha, divisor, x[0])
     _compilable_stochastic_add_divide_(x, y, alpha, divisor)
 
@@ -647,7 +660,7 @@ def _compilable_stochastic_multiply_(x: List[Tensor], y: List[Tensor]):
 
 
 def stochastic_multiply_(x: List[Tensor], y: List[Tensor]):
-    x, y = list_guard(x, y)
+    x, y = broadcastable_list_guard(x, y)
     _compilable_stochastic_multiply_(x, y)
 
 

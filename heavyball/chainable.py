@@ -82,6 +82,7 @@ class PrecondGradAccumGuard(FunctionTransform):
     def __init__(self, fn):
         super().__init__(fn)
         self.latest_precond = 0
+        self.has_data = False
 
     def _accum(self, state, new):
         utils.stochastic_add_(state, new)
@@ -96,10 +97,12 @@ class PrecondGradAccumGuard(FunctionTransform):
 
         flat_state = [_zero_guard(state(p), "precond_grad_accum", p, _storage_dtype(group)) for p in param]
         if group["is_preconditioning"] and group["step"] - self.latest_precond > 1:
+            self.has_data = True
             self._accum(flat_state, base_grad)
             utils.stochastic_multiply_(flat_state, 1 / (group["step"] - self.latest_precond))
         else:
             if not group["is_preconditioning"]:
+                self.has_data = True
                 self._accum(flat_state, base_grad)
             flat_state = base_grad
         try:
@@ -107,7 +110,8 @@ class PrecondGradAccumGuard(FunctionTransform):
         finally:
             if group["is_preconditioning"]:
                 self.latest_precond = group["step"]
-                self._reset(flat_state)
+                if self.has_data:
+                    self._reset(flat_state)
 
         return out
 
