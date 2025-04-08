@@ -31,6 +31,8 @@ base_args = {
     "beta": 0.9,
     "max_size_triangular": 2**16,
     "split": False,
+    "precond_grad_accum": True,
+    "momentum_into_precond_update": True,
     "eps": 1e-8,
     "weight_decay": 0,
 }
@@ -58,8 +60,7 @@ class FailureCounter:
         old_state = inp.reshape(1, -1, 1)  # vertical
         new_state = other.reshape(1, 1, -1)  # horizontal
 
-        comparison = new_state * (1 - self.minimal_improvement.reshape(-1, 1, 1)) < old_state
-        return comparison
+        return new_state * (1 - self.minimal_improvement.reshape(-1, 1, 1)) < old_state
 
     def new(self):
         return FailureCounter(self.mapping, self.broadcast)
@@ -67,18 +68,17 @@ class FailureCounter:
     def __call__(self, comparison, failure_scale: float = 1):
         failed = torch.any(comparison, axis=tuple(range(1, comparison.ndim)))
         self.consecutive_failures.copy_(torch.where(failed, self.consecutive_failures + 1, 0))
-        return torch.any(
-            self.consecutive_failures >= (self.max_consecutive_failures.view(-1, 1) * failure_scale).flatten()
-        )
+        mask = self.consecutive_failures >= (self.max_consecutive_failures.view(-1, 1) * failure_scale).flatten()
+        return torch.any(mask)
 
 
 class Validator:
-    ema_index: int = 0
-    global_warmup: int = 128
-    ema_patience: float = 1
+    ema_index: int = 4
+    warmup: int = 128
+    ema_patience: float = 2
     ema_start: int = 0
 
-    def __init__(self, ema_mapping, global_min_mapping, global_avg_mapping, steps, emas: int = 20):
+    def __init__(self, ema_mapping, global_mapping, steps, emas: int = 20):
         self.step = 0
         self.emas = emas
 
@@ -89,12 +89,17 @@ class Validator:
         self.triu_indices = torch.triu_indices(self.emas, self.emas, offset=1)
 
         self.global_min_loss = torch.tensor((float("inf"),) * steps, dtype=torch.float64, device="cuda")
-        self.global_min_failures = FailureCounter(global_min_mapping, steps)
+        self.global_min_failures = FailureCounter({1: 0}, steps)
 
         self.global_avg_loss = torch.zeros_like(self.global_min_loss)
         self.global_avg_step = torch.zeros_like(self.global_avg_loss)
+
+        self.weighting = torch.arange(1, 1 + self.global_min_loss.size(0), device="cuda")
+        self.weighting = self.weighting.clamp(min=self.warmup).view(1, -1)
+        self.weighting = functools.reduce(torch.minimum, [self.weighting**p * f for f, p in global_mapping.items()])
+
         self.seen_until = np.zeros((), dtype=np.int64)  # seen_until has to be shared
-        self.global_avg_failures = FailureCounter(global_avg_mapping, steps)
+        self.global_avg_failures = FailureCounter({1: 0}, steps)
 
     def new(self):
         new = copy.copy(self)
@@ -114,12 +119,8 @@ class Validator:
 
     def _global_min(self):
         loss = self.ema_states[self.ema_index]
-        comparison = self.global_min_failures.compare(loss, self.global_min_loss).view(-1, 1)
-        global_failed = self.global_min_failures(
-            comparison,
-            torch.arange(1, 1 + self.global_min_loss.size(0), device="cuda").view(1, -1).clamp(min=self.global_warmup),
-        )
-
+        comparison = self.global_min_failures.compare(loss, self.global_min_loss)
+        global_failed = self.global_min_failures(comparison.view(-1, 1), self.weighting)
         loss_slice = self.global_min_loss[self.step - 1 :]
         loss_slice.copy_(torch.where(torch.logical_and(loss < loss_slice, torch.isfinite(loss)), loss, loss_slice))
         return global_failed
@@ -132,10 +133,7 @@ class Validator:
 
         comparison = self.global_avg_failures.compare(loss, self.global_avg_loss).view(-1, 1)
         comparison[self.seen_until - 1 :].fill_(False)
-        return self.global_avg_failures(
-            comparison,
-            torch.arange(1, 1 + self.global_avg_loss.size(0), device="cuda").view(1, -1).clamp(min=self.global_warmup),
-        )
+        return self.global_avg_failures(comparison, self.weighting)
 
     def _local_convergence(self):
         comparison = self.ema_failures.compare(self.ema_states, self.ema_states)
@@ -146,6 +144,8 @@ class Validator:
         self._update_ema(loss)
 
         outputs = [self._global_min(), self._global_avg(), self._local_convergence()]
+        if self.step < self.warmup:
+            return torch.zeros_like(outputs[0])
         return functools.reduce(torch.logical_or, outputs)
 
 
@@ -266,28 +266,22 @@ class Objective:
         self.kwargs = kwargs
         self.ema_index = ema_index
 
+        # up to 32768 consecutive times can the new loss be (1 - 1e-7)x larger than the preceding loss
         self.validator = Validator(
-            {
-                32768: 1e-7,
-                16384: 1e-6,
-                8192: 1e-5,
-                4096: 1e-4,
-                1024: 1e-3,
-                512: 1e-2,
-                256: 0,
-                128: -1e-4,
-                64: -1e-3,
-                32: -0.01,
-                16: -0.1,
-                8: -0.33,
-                4: -0.5,
-                2: -0.75,
-                1: -0.99,
+            {  # We can't check for improvement, as it's not guaranteed - "1% in 1k steps" may not happen
+                256: 0,  # 0 improvement in 256 steps
+                128: -1e-4,  # 1.01x over 128 steps
+                64: -1e-3,  # 1.06x over 64 steps
+                32: -0.01,  # 1.4x over 32 steps
+                16: -0.1,  # 5.4x over 16 steps
+                8: -0.33,  # 24x over 8 steps
+                4: -0.5,  # 16x over 4 steps
+                2: -0.75,  # 16x over 2 steps
+                1: -0.99,  # 100x over 1 step
             },
-            {2: 0},
-            {6: 0},
+            {1: 2, 4: 1.5, 16: 1},  # step_count^2 * 1 | step_count ^ 1.5 * 4 | step_count ^ 1 * 16
             steps,
-        )  # same loss as best after 3x as many steps; 6x higher loss at same step - for every per-step minimum
+        )
         self.m = None
         self.attempt = 0
         self.best_loss = None
@@ -306,7 +300,8 @@ class Objective:
             "shampoo_beta": 1 - params[3],
             "sam_step_size": params[3],
             "eps": 1e-8,
-            "precond_lr": params[3],  # we never have both precond_lr and shampoo_beta
+            "precond_lr": params[3],
+            # we never have both precond_lr and shampoo_beta
         }
         if self.set_precond_init_scale:
             params["precond_init_scale"] = 0.1
