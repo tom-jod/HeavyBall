@@ -14,10 +14,10 @@ set_torch()
 
 
 configs = {
-    "trivial": {"length": 4},
-    "easy": {"length": 6},
-    "medium": {"length": 8},
-    "hard": {"length": 10},
+    "trivial": {"length": 2},
+    "easy": {"length": 4},
+    "medium": {"length": 6},
+    "hard": {"length": 9},
     "extreme": {"length": 12},
     "nightmare": {"length": 14},
 }
@@ -70,7 +70,7 @@ def main(
     model = Model(size, depth).cuda()
 
     def data():
-        inp = torch.randn((batch, length, 1), device="cuda", dtype=dtype[0])
+        inp = torch.randn((batch, 2 * length, 1), device="cuda", dtype=dtype[0])
         inp = inp > 0
         i0, i1 = inp.chunk(2, 1)
         xored = torch.logical_xor(i0, i1)
