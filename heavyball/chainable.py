@@ -910,15 +910,31 @@ def create_branch(branches: List[List[callable]], merge_fn: callable):
     return _branch
 
 
-def set_indices(fns: Iterable[callable], offset: int = 0):
+def set_indices(fns: Iterable[callable], retain: bool = True, offset: int = 0):
+    if retain:
+        if offset:
+            raise ValueError("offset cannot be retained")
+
+        offset = -1
+        for fn in fns:
+            while isinstance(fn, (FunctionTransform, functools.partial)):
+                if isinstance(fn, functools.partial):
+                    fn = fn.func
+                    continue
+                if fn.transform_idx is not None:
+                    offset = max(offset, fn.transform_idx)
+                fn = fn.fn
+        offset += 1  # if we found nothing, this will be 0. if we found something, we START at N+1
+
     fns = [copy.deepcopy(fn) for fn in fns]
     for fn in fns:
         while isinstance(fn, (FunctionTransform, functools.partial)):
             if isinstance(fn, functools.partial):
                 fn = fn.func
                 continue
-            fn.transform_idx = offset
-            offset += 1
+            if not retain or fn.transform_idx is None:
+                fn.transform_idx = offset
+                offset += 1
             fn = fn.fn
     return fns
 
@@ -928,7 +944,19 @@ class ChainOpt(utils.StatefulOptimizer):
 
     def __init__(self, params, defaults, foreach: bool, *fns):
         super().__init__(params, defaults, foreach)
-        self.fns = set_indices(fns)
+        self.fns = fns
+
+    @property
+    def fns(self):
+        return self._fns
+
+    @fns.setter
+    def fns(self, value):
+        self._fns = value
+        self._set_indices(retain=True)
+
+    def _set_indices(self, retain=True):
+        self._fns = set_indices(self.fns, retain)
 
     def _step(self, group):
         if "base_lr" not in group:
