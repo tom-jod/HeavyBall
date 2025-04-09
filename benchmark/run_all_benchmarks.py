@@ -170,14 +170,6 @@ def write_progress(results, opt, output):
                     f.write(f"\n### {r['name']} - {r['opt']}\n```\n{r['error']}\n```\n")
 
 
-def run_with_timeout(result_q, script, opt, steps, dtype, trials, seed, difficulty):
-    try:
-        res = run_benchmark(script, opt, steps, dtype, trials, seed, difficulty)
-        result_q.put((res, ""))
-    except Exception as e:
-        result_q.put((isinstance(e, SkipConfig), str(e)))
-
-
 _difficulty_order = ["trivial", "easy", "medium", "hard", "extreme", "nightmare"]
 
 
@@ -205,22 +197,11 @@ def worker(task_queue, result_queue, worker_index, difficulties: list, timeout: 
             inner_difficulties = difficulties.copy()
             for _ in range(len(difficulties)):
                 d = inner_difficulties.pop(0)
-                exc = ""
-                result = None
                 try:
-                    result_q = multiprocessing.Queue()
-                    p = multiprocessing.Process(
-                        target=run_with_timeout, args=(result_q, script, o, steps, dtype, trials, seed, d)
-                    )
-                    p.start()
-                    p.join(timeout)
-                    if p.is_alive():
-                        p.terminate()
-                        p.join()
-                        exc = f"Benchmark timed out after {timeout} seconds"
-                    elif not result_q.empty():
-                        result, exc = result_q.get()
+                    result = run_benchmark(script, o, steps, dtype, trials, seed, d)
+                    exc = ""
                 except Exception as e:
+                    result = isinstance(e, SkipConfig)
                     exc = str(e)
 
                 if result is True:  # SkipConfig
