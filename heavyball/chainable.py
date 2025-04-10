@@ -828,6 +828,12 @@ def sign(group, update, grad, param, graft: bool = True):
     return utils.sign_(update, graft)
 
 
+@no_state
+def global_clip(group, update, grad, param, clip_fn: Optional[callable] = None):
+    assert clip_fn is not None
+    return clip_fn(update)
+
+
 @PrecondGradAccumGuard
 @general_guard(
     "Q", "exprs", ("Q_cache", None), ("cache_expr", None), ("velocity", None), init_fn=_init_psgd_kron, skip_first=False
