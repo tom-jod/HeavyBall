@@ -2378,7 +2378,7 @@ def fused_precond_grad_cached_(ea: Tensor, param, lr, grad, decay, caution, cach
 @functools.lru_cache(maxsize=None)
 def precond_grad_expr(Q_dim, grad_dim):
     expr = [
-        f"{c.upper()}{c2},{c2}{c}" if q_ == 2 else f"{c},{c}" for c, c2, q_ in zip(einsum_base, einsum_base[13:], Q_dim)
+        f"{c2}{c.upper()},{c2}{c}" if q_ == 2 else f"{c},{c}" for c, c2, q_ in zip(einsum_base, einsum_base[13:], Q_dim)
     ]
     expr = ",".join(expr)
     grad_expr = "".join(c for c, _ in zip(einsum_base, range(grad_dim)))
