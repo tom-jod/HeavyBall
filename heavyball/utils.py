@@ -2401,7 +2401,7 @@ def psgd_precond_grad(
     md = min_dtype(list(preconds) + [ea])
     args = [q.to(md) for q in preconds]
     expr = precond_grad_expr(ndim_tuple(args), ea.ndim)
-    new = torch.einsum(expr, *args, *args, ea.to(md))
+    new = torch.einsum(expr, *[a for a in args for _ in (0, 1)], ea.to(md))
     return new.to(ea.dtype)
 
 
