@@ -1977,7 +1977,6 @@ def calcG_expr(q_dim, g_dim):
         else:
             out = base[i]
         exprs.append(f"{base},{''.join(new)}->{out}")
-    print(exprs)
     return exprs
 
 

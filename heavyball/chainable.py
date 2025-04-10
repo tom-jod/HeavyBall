@@ -167,11 +167,8 @@ class GeneralGuard(FunctionTransform):
         return self.fn(state, group, update, grad, param, *args, *zip(*vars), **kwargs)
 
     def __call__(self, state, group, update, grad, param, *args, **kwargs):
-        print("\n\n\n\n")
         try:
-            print(state(param[0]))
             self._map(state, param, self.anonymous_to_named())
-            print(state(param[0]))
             return self._inner(state, group, update, grad, param, *args, **kwargs)
         finally:
             self._map(state, param, self.named_to_anonymous())
