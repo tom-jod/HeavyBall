@@ -167,8 +167,11 @@ class GeneralGuard(FunctionTransform):
         return self.fn(state, group, update, grad, param, *args, *zip(*vars), **kwargs)
 
     def __call__(self, state, group, update, grad, param, *args, **kwargs):
+        print("\n\n\n\n")
         try:
+            print(state(param[0]))
             self._map(state, param, self.anonymous_to_named())
+            print(state(param[0]))
             return self._inner(state, group, update, grad, param, *args, **kwargs)
         finally:
             self._map(state, param, self.named_to_anonymous())
@@ -429,7 +432,7 @@ def _init_soap(state, group, update, grad, param, inner: str = ""):
 
 
 def _init_psgd_kron(state, group, update, grad, param, cached: bool = False, prob: Optional[callable] = None):
-    Q, state["exprs"] = utils.init_Q_exprs(
+    Q = utils.init_Q_exprs(
         grad,
         group["precond_init_scale"],
         group["precond_init_scale_scale"],
@@ -448,14 +451,6 @@ def _init_psgd_kron(state, group, update, grad, param, cached: bool = False, pro
         return
 
     state["Q_cache"] = [torch.empty_like(q) for q in Q]
-
-    expr = [f"{c.upper()}{c}" if q_.ndim == 2 else c for c, q_ in zip(utils.einsum_base, Q)]
-    expr = ",".join(expr)
-    grad_expr = "".join(c for c, _ in zip(utils.einsum_base, grad.shape))
-    out_expr = "".join(c.upper() if c.upper() in expr else c for c in grad_expr)
-    expr = f"{expr},{grad_expr}->{out_expr}"
-
-    state["cache_expr"] = expr
 
 
 def _init_psgd_lra(state, group, update, grad, param, cached: bool = False, prob: Optional[callable] = None):
@@ -600,7 +595,7 @@ def scale_by_soap(group, update, grad, param, exp_avg, exp_avg_sq, Q, GG, inner:
     return precond
 
 
-def _update_psgd_precond(cached, Q_cache, group, param, grad, Q, velocity, exprs, prob: Optional[callable] = None):
+def _update_psgd_precond(cached, Q_cache, group, param, grad, Q, velocity, prob: Optional[callable] = None):
     if prob is None:
         prob = utils.precond_update_prob_schedule()
 
@@ -615,7 +610,6 @@ def _update_psgd_precond(cached, Q_cache, group, param, grad, Q, velocity, exprs
         vector, hessian_vector = utils.dampen_grad(grad)
 
     (utils.unscaled_psgd_update_precond if group.get("unscaled") else utils.psgd_update_precond)(
-        exprs,
         hessian_vector,
         group["precond_lr"],
         Q,
@@ -643,17 +637,17 @@ def _update_psgd_precond(cached, Q_cache, group, param, grad, Q, velocity, exprs
             torch.mul(q_, q_, out=c_)
 
 
-def _cached_psgd_precond_grad(group, cache_expr, exprs, update, Q, Q_cache, grad):
+def _cached_psgd_precond_grad(group, update, Q, Q_cache, grad):
     kwargs = {"ea": update, "caution": group["caution"], "grad": grad}
     if group.get("is_cached", False):
-        out = utils.precond_grad_cached_(cache_expr, cached_q=Q_cache, **kwargs)
+        out = utils.precond_grad_cached_(cached_q=Q_cache, **kwargs)
     else:
-        out = utils.psgd_precond_grad(exprs[-1], preconds=Q, store_triu_as_line=group["store_triu_as_line"], **kwargs)
+        out = utils.psgd_precond_grad(preconds=Q, store_triu_as_line=group["store_triu_as_line"], **kwargs)
     group["caution"] = False  # we already cautioned here - shouldn't do it again
     return out
 
 
-def _fused_cached_psgd_precond_grad(group, grad, param, cache_expr, exprs, update, Q, Q_cache):
+def _fused_cached_psgd_precond_grad(group, grad, param, update, Q, Q_cache):
     kwargs = {
         "ea": update,
         "caution": group["caution"],
@@ -663,9 +657,9 @@ def _fused_cached_psgd_precond_grad(group, grad, param, cache_expr, exprs, updat
         "decay": group["weight_decay"],
     }
     if group.get("is_cached", False):
-        utils.fused_precond_grad_cached_(cache_expr, cached_q=Q_cache, **kwargs)
+        utils.fused_precond_grad_cached_(cached_q=Q_cache, **kwargs)
     else:
-        utils.fused_psgd_precond_grad(exprs[-1], preconds=Q, store_triu_as_line=group["store_triu_as_line"], **kwargs)
+        utils.fused_psgd_precond_grad(preconds=Q, store_triu_as_line=group["store_triu_as_line"], **kwargs)
 
 
 def _update_lra(
@@ -723,9 +717,7 @@ def update_by_delayed_psgd_lra(group, update, grad, param, update_to_precond, U,
 
 
 @PrecondGradAccumGuard
-@general_guard(
-    "Q", "exprs", ("Q_cache", None), ("cache_expr", None), ("velocity", None), init_fn=_init_psgd_kron, skip_first=False
-)
+@general_guard("Q", ("Q_cache", None), ("velocity", None), init_fn=_init_psgd_kron, skip_first=False)
 @no_state_no_foreach
 def scale_by_psgd(
     group,
@@ -734,31 +726,17 @@ def scale_by_psgd(
     param,
     update_to_precond,
     Q,
-    exprs,
     Q_cache,
-    cache_expr: str,
     velocity: Optional[List[Tensor]],
     cached: bool = False,
     prob: Optional[callable] = None,
 ):
-    _update_psgd_precond(
-        cached,
-        Q_cache,
-        group,
-        param,
-        update_to_precond,
-        Q,
-        velocity,
-        exprs,
-        prob,
-    )
-    return _cached_psgd_precond_grad(group, cache_expr, exprs, update, Q, Q_cache, grad)
+    _update_psgd_precond(cached, Q_cache, group, param, update_to_precond, Q, velocity, prob)
+    return _cached_psgd_precond_grad(group, update, Q, Q_cache, grad)
 
 
 @PrecondGradAccumGuard
-@general_guard(
-    "Q", "exprs", ("Q_cache", None), ("cache_expr", None), ("velocity", None), init_fn=_init_psgd_kron, skip_first=False
-)
+@general_guard("Q", ("Q_cache", None), ("velocity", None), init_fn=_init_psgd_kron, skip_first=False)
 @no_state_no_foreach
 def scale_by_delayed_psgd(
     group,
@@ -767,32 +745,18 @@ def scale_by_delayed_psgd(
     param,
     update_to_precond,
     Q,
-    exprs,
     Q_cache,
-    cache_expr: str,
     velocity: Optional[List[Tensor]],
     cached: bool = False,
     prob: Optional[callable] = None,
 ):
-    precond = _cached_psgd_precond_grad(group, cache_expr, exprs, update, Q, Q_cache, grad)
-    _update_psgd_precond(
-        cached,
-        Q_cache,
-        group,
-        param,
-        update_to_precond,
-        Q,
-        velocity,
-        exprs,
-        prob,
-    )
+    precond = _cached_psgd_precond_grad(group, update, Q, Q_cache, grad)
+    _update_psgd_precond(cached, Q_cache, group, param, update_to_precond, Q, velocity, prob)
     return precond
 
 
 @PrecondGradAccumGuard
-@general_guard(
-    "Q", "exprs", ("Q_cache", None), ("cache_expr", None), ("velocity", None), init_fn=_init_psgd_kron, skip_first=False
-)
+@general_guard("Q", ("Q_cache", None), ("velocity", None), init_fn=_init_psgd_kron, skip_first=False)
 @no_state_no_foreach
 def update_by_psgd(
     group,
@@ -801,25 +765,13 @@ def update_by_psgd(
     param,
     update_to_precond,
     Q,
-    exprs,
     Q_cache,
-    cache_expr: str,
     velocity: Optional[List[Tensor]],
     cached: bool = False,
     prob: Optional[callable] = None,
 ):
-    _update_psgd_precond(
-        cached,
-        Q_cache,
-        group,
-        param,
-        update_to_precond,
-        Q,
-        velocity,
-        exprs,
-        prob,
-    )
-    _fused_cached_psgd_precond_grad(group, update, param, cache_expr, exprs, update, Q, Q_cache)
+    _update_psgd_precond(cached, Q_cache, group, param, update_to_precond, Q, velocity, prob)
+    _fused_cached_psgd_precond_grad(group, update, param, update, Q, Q_cache)
     raise SkipUpdate from None
 
 
@@ -835,9 +787,7 @@ def global_clip(group, update, grad, param, clip_fn: Optional[callable] = None):
 
 
 @PrecondGradAccumGuard
-@general_guard(
-    "Q", "exprs", ("Q_cache", None), ("cache_expr", None), ("velocity", None), init_fn=_init_psgd_kron, skip_first=False
-)
+@general_guard("Q", ("Q_cache", None), ("velocity", None), init_fn=_init_psgd_kron, skip_first=False)
 @no_state_no_foreach
 def update_by_delayed_psgd(
     group,
@@ -846,25 +796,13 @@ def update_by_delayed_psgd(
     param,
     update_to_precond,
     Q,
-    exprs,
     Q_cache,
-    cache_expr: str,
     velocity: Optional[List[Tensor]],
     cached: bool = False,
     prob: Optional[callable] = None,
 ):
-    _fused_cached_psgd_precond_grad(group, update, param, cache_expr, exprs, update, Q, Q_cache)
-    _update_psgd_precond(
-        cached,
-        Q_cache,
-        group,
-        param,
-        update_to_precond,
-        Q,
-        velocity,
-        exprs,
-        prob,
-    )
+    _fused_cached_psgd_precond_grad(group, update, param, update, Q, Q_cache)
+    _update_psgd_precond(cached, Q_cache, group, param, update_to_precond, Q, velocity, prob)
     raise SkipUpdate from None
 
 
@@ -949,6 +887,7 @@ class ChainOpt(utils.StatefulOptimizer):
     promote: bool = False
 
     def __init__(self, params, defaults, foreach: bool, *fns):
+        defaults = {k: v for k, v in defaults.items() if v is not use_default}
         super().__init__(params, defaults, foreach)
         self.fns = fns
 

@@ -1,8 +1,10 @@
+import collections
 import contextlib
 import functools
 import gc
 import inspect
 import math
+import pickle
 import random
 import re
 import string
@@ -824,18 +826,47 @@ class StatefulOptimizer(torch.optim.Optimizer):
         super().__init__(params, {**defaults, "foreach": foreach})
         self.use_ema = use_ema
         self.mapping = {}
-        self._inner_group = {"stochastic_schedule": self.stochastic_schedule}
-        self._precond_rng = random.Random(0x12312)
+        self.mapping_inverse = {}
+        self.inner_group = {"stochastic_schedule": self.stochastic_schedule}
+        self.precond_rng = random.Random(0x12312)
         self._is_preconditioning = None
 
         if self.hessian_approx and self.compile_step:
             raise ValueError("Hessian approximation can't be used with compile_step.")
 
+        self.register_state_dict_post_hook(StatefulOptimizer._store_stats)
+        self.register_load_state_dict_pre_hook(StatefulOptimizer._load_stats)
+
+    def _store_stats(self, state_dict: dict[str, any]):
+        state_dict["heavyball"] = {
+            "inner_group": self.inner_group,
+            "precond_rng": pickle.dumps(self.precond_rng),
+            "use_ema": self.use_ema,
+            "ema_decay": self.ema_decay,
+            "compile_step": self.compile_step,
+            "hessian_approx": self.hessian_approx,
+            "precond_schedule": pickle.dumps(self.precond_schedule),
+            "stochastic_schedule": self.stochastic_schedule,
+            "fallback_to_finite_differences": self.fallback_to_finite_differences,
+            "_fallback_enabled": self._fallback_enabled,
+            "hvp_interval": self.hvp_interval,
+        }
+
+    def _load_stats(self, state_dict):
+        sd = state_dict.pop("heavyball", {})
+        for k, v in sd.items():
+            if k in ("precond_rng", "precond_schedule"):
+                v = pickle.loads(v)
+            setattr(self, k, v)
+
     def get_groups(self, group):
         return [group]
 
     def state_(self, arg: Tensor):
-        return self.state[arg]
+        state_param, index = self.mapping_inverse[arg]
+        if state_param not in self.state:
+            self.state[state_param] = collections.defaultdict(dict)
+        return self.state[state_param][index]
 
     def mars_correct_list(self, group, p_list, g_list, mars_gamma, beta):
         for p, g in zip(p_list, g_list):
@@ -868,6 +899,8 @@ class StatefulOptimizer(torch.optim.Optimizer):
                 p_views = self.mapping[p]
             else:
                 self.mapping[p] = p_views = merge_group(group, p)
+                for i, pv in enumerate(p_views):
+                    self.mapping_inverse[pv] = (p, i)
 
             vector = getattr(p, "vector", None)
             hessian_vector = getattr(p, "hessian_vector", None)
@@ -1016,7 +1049,7 @@ class StatefulOptimizer(torch.optim.Optimizer):
                 raise ValueError("Hessian approximation requires a closure.")
             return None
 
-        step = self._inner_group["total_hvp_steps"] = self._inner_group.get("total_hvp_steps", 0) + 1
+        step = self.inner_group["total_hvp_steps"] = self.inner_group.get("total_hvp_steps", 0) + 1
         if not hessian_approx or (step - 1) % self.hvp_interval == 0:  # hvp in 0th step for better precond init
             with torch.enable_grad():
                 loss = closure()
@@ -1056,7 +1089,7 @@ class StatefulOptimizer(torch.optim.Optimizer):
         if self.precond_schedule is None:
             self._is_preconditioning = False
         else:
-            self._is_preconditioning = psgd_should_update(self._inner_group, self.precond_schedule, self._precond_rng)
+            self._is_preconditioning = psgd_should_update(self.inner_group, self.precond_schedule, self.precond_rng)
         loss = self._handle_closure(closure)
 
         # we assume that parameters are constant and that there are no excessive recompiles
@@ -1485,20 +1518,12 @@ def init_Q_exprs(
     https://github.com/lixilinx/psgd_torch/blob/1943e66596111e78157ca1b72b31c1dfdf0653ef/preconditioned_stochastic_gradient_descent.py#L2208-L2227
     """
     scale = precond_init_scale(scale, scale_scale, scale_power, grad, hessian_vector, vector)
-    letters = string.ascii_lowercase + string.ascii_uppercase
     dtype = dtype if dtype is not None else grad.dtype
     shape = grad.shape
 
     if len(shape) == 0:  # scalar
         Q = [scale * torch.ones_like(grad, dtype=dtype)]
-        exprA = ",->"
-        exprGs = [",->"]
-        exprP = ",,->"
-        return [Q, (exprA, tuple(exprGs), exprP)]
-
-    # Tensor
-    if len(shape) > 13:
-        raise ValueError(f"Got tensor with dim {len(grad.shape)}; Einstein runs out of letters!")
+        return Q
 
     scale = scale ** (1 / len(shape))
 
@@ -1523,43 +1548,14 @@ def init_Q_exprs(
         )
 
     Q = []
-    piece1A, piece2A, piece3A = ([], "", "")
-    exprGs = []
-    piece1P, piece2P, piece3P, piece4P = ([], [], "", "")
     for i, (size, dim_d) in enumerate(zip(shape, dim_diag)):
         if size == 1 or size > max_size or len(shape) < min_ndim_triangular or dim_d:
             # use diagonal matrix as preconditioner for this dim
             Q.append(scale * torch.ones(size, dtype=promote(dtype), device=grad.device))
-
-            piece1A.append(letters[i])
-            piece2A = piece2A + letters[i]
-            piece3A = piece3A + letters[i]
-            piece1 = "".join([(letters[i + 13] if j == i else letters[j]) for j in range(len(shape))])
-            subscripts = piece1 + "," + piece1 + "->" + letters[i + 13]
-            exprGs.append(subscripts)
-            piece1P.append(letters[i + 13])
-            piece2P.append(letters[i + 13])
-            piece3P = piece3P + letters[i + 13]
-            piece4P = piece4P + letters[i + 13]
         else:
             # use triangular matrix as preconditioner for this dim
             Q.append(scale * torch.eye(size, dtype=dtype, device=grad.device))
-            piece1A.append(letters[i] + letters[i + 13])
-            piece2A = piece2A + letters[i + 13]
-            piece3A = piece3A + letters[i]
-            piece1 = "".join([(letters[i + 13] if j == i else letters[j]) for j in range(len(shape))])
-            piece2 = "".join([(letters[i + 26] if j == i else letters[j]) for j in range(len(shape))])
-            subscripts = piece1 + "," + piece2 + "->" + letters[i + 13] + letters[i + 26]
-            exprGs.append(subscripts)
-            a, b, c = (letters[i], letters[i + 13], letters[i + 26])
-            piece1P.append(a + b)
-            piece2P.append(a + c)
-            piece3P = piece3P + c
-            piece4P = piece4P + b
-
-    exprA = ",".join(piece1A) + "," + piece2A + "->" + piece3A
-    exprP = ",".join(piece1P) + "," + ",".join(piece2P) + "," + piece3P + "->" + piece4P
-    return [Q, (exprA, tuple(exprGs), exprP)]
+    return Q
 
 
 @decorator_knowngood
@@ -1854,7 +1850,12 @@ def _reshape_conjB(solved: Tensor, transposed_shape: List[int], original_shape: 
     return solved.contiguous(), solved.shape
 
 
-def psgd_calc_A_and_conjB(exprA, G, Q, conjB):  # conjB ("V", "vector") == randn during hvp/whitening
+def ndim_tuple(Q: list[Tensor]) -> tuple:
+    return tuple(q.ndim for q in Q)
+
+
+def psgd_calc_A_and_conjB(G, Q, conjB):  # conjB ("V", "vector") == randn during hvp/whitening
+    exprA = cached_precond_grad_expr(ndim_tuple(Q), G.ndim)  # calcA expr and cached precond expr are the same
     A = casted_einsum(exprA, *Q, G)
     solve = torch.compiler.disable(torch.linalg.solve_triangular)
     transposed_shape = original_shape = conjB.shape
@@ -1964,9 +1965,24 @@ def _balance_to_triu(Q: "TriuOrLine"):
     return Q
 
 
+@functools.lru_cache(maxsize=None)
+def calcG_expr(q_dim, g_dim):
+    exprs = []
+    base = einsum_base[:g_dim]
+    for i, q in enumerate(q_dim):
+        new = list(base)
+        if q == 2:
+            new[i] = "Z"
+            out = f"{base[i]}Z"
+        else:
+            out = base[i]
+        exprs.append(f"{base},{''.join(new)}->{out}")
+    print(exprs)
+    return exprs
+
+
 @decorator
 def psgd_update_precond(
-    exprs: Tuple[str, List[str], str],
     G: Tensor,
     precond_lr: float,
     oq: "TriuOrLine",
@@ -1977,12 +1993,12 @@ def psgd_update_precond(
     V: Tensor,
 ):
     """Update Kronecker product preconditioner Q with pair (V, G)."""
-    exprA, exprGs, _ = exprs
     Q = _balance_to_triu(oq)
 
-    A, conjB = psgd_calc_A_and_conjB(exprA, G, Q, V)
+    A, conjB = psgd_calc_A_and_conjB(G, Q, V)
     precond_lr, beta2 = scalar_guard(precond_lr, beta2, G)
 
+    exprGs = calcG_expr(ndim_tuple(Q), G.ndim)
     terms = [(torch.einsum(exprG, A, A), torch.einsum(exprG, conjB, conjB)) for exprG in exprGs]
     del A, conjB, V
 
@@ -2047,7 +2063,6 @@ def _compilable_unscaled_term_extract_(
 
 @decorator
 def unscaled_psgd_update_precond(
-    exprs: Tuple[str, List[str], str],
     G: Tensor,
     precond_lr: float,
     oq: "TriuOrLine",
@@ -2058,12 +2073,12 @@ def unscaled_psgd_update_precond(
     V: Tensor,
 ):
     """Update Kronecker product preconditioner Q with pair (V, G)."""
-    exprA, exprGs, _ = exprs
     Q = _balance_to_triu(oq)
 
-    A, conjB = psgd_calc_A_and_conjB(exprA, G, Q, V)
+    A, conjB = psgd_calc_A_and_conjB(G, Q, V)
     precond_lr, beta2 = scalar_guard(precond_lr, beta2, G)
 
+    exprGs = calcG_expr(ndim_tuple(Q), G.ndim)
     terms = [(torch.einsum(exprG, A, A), torch.einsum(exprG, conjB, conjB)) for exprG in exprGs]
     del A, conjB, V
 
@@ -2273,7 +2288,7 @@ def triu_to_line(Q_list: List[Tensor]):
         if q.dim() < 2:
             out.append((None, q))
         else:
-            out.append((q.shape, q[tuple(torch.triu_indices(*q.shape))]))
+            out.append((tuple(q.shape), q[tuple(torch.triu_indices(*q.shape))]))
     return out
 
 
@@ -2318,9 +2333,17 @@ def psgd_should_update(
     return int(group[name]) > int(cumulative_prob)
 
 
+@functools.lru_cache(maxsize=None)
+def cached_precond_grad_expr(Q_dim, grad_dim):
+    expr = [f"{c.upper()}{c}" if q_ == 2 else c for c, q_ in zip(einsum_base, Q_dim)]
+    expr = ",".join(expr)
+    grad_expr = "".join(c for c, _ in zip(einsum_base, range(grad_dim)))
+    out_expr = "".join(c.upper() if c.upper() in expr else c for c in grad_expr)
+    return f"{expr},{grad_expr}->{out_expr}"
+
+
 @decorator_knowngood
 def precond_grad_cached_(
-    expr: str,
     ea: Tensor,
     cached_q: List[Tensor],
     caution: bool = False,
@@ -2332,6 +2355,7 @@ def precond_grad_cached_(
     md = min_dtype(list(cached_q) + [ea])
     args = [q.to(md) for q in cached_q]
     args = args + [ea.to(md)]
+    expr = cached_precond_grad_expr(ndim_tuple(cached_q), grad.ndim)
     new = torch.einsum(expr, *args)
     if cast:
         return new.to(ea.dtype)
@@ -2342,21 +2366,29 @@ TriuOrLine = Union[List[Tensor], List[Tuple[Optional[List[int]], Tensor]]]
 
 
 @decorator_knowngood
-def _compilable_fused_precond_grad_cached_(
-    expr: str, ea: Tensor, param, lr, grad, decay, caution, cached_q: List[Tensor]
-):
-    precond = precond_grad_cached_(expr, ea, cached_q, caution=caution, grad=grad, cast=False)
+def _compilable_fused_precond_grad_cached_(ea: Tensor, param, lr, grad, decay, caution, cached_q: List[Tensor]):
+    precond = precond_grad_cached_(ea, cached_q, caution=caution, grad=grad, cast=False)
     update_param_(param, precond, lr, decay, caution=False)
 
 
-def fused_precond_grad_cached_(expr: str, ea: Tensor, param, lr, grad, decay, caution, cached_q: List[Tensor]):
+def fused_precond_grad_cached_(ea: Tensor, param, lr, grad, decay, caution, cached_q: List[Tensor]):
     lr = scalar_guard(lr, param[0])
-    _compilable_fused_precond_grad_cached_(expr, ea, param, lr, grad, decay, caution, cached_q)
+    _compilable_fused_precond_grad_cached_(ea, param, lr, grad, decay, caution, cached_q)
+
+
+@functools.lru_cache(maxsize=None)
+def precond_grad_expr(Q_dim, grad_dim):
+    expr = [
+        f"{c.upper()}{c2},{c2}{c}" if q_ == 2 else f"{c},{c}" for c, c2, q_ in zip(einsum_base, einsum_base[13:], Q_dim)
+    ]
+    expr = ",".join(expr)
+    grad_expr = "".join(c for c, _ in zip(einsum_base, range(grad_dim)))
+    out_expr = "".join(c.upper() if c.upper() in expr else c for c in grad_expr)
+    return f"{expr},{grad_expr}->{out_expr}"
 
 
 @decorator_knowngood
 def psgd_precond_grad(
-    expr: str,
     ea: Tensor,
     preconds: TriuOrLine,
     caution: bool = False,
@@ -2369,24 +2401,24 @@ def psgd_precond_grad(
         preconds = line_to_triu(preconds)
     md = min_dtype(list(preconds) + [ea])
     args = [q.to(md) for q in preconds]
-    args = args + args + [ea.to(md)]
-    new = torch.einsum(expr, *args)
+    expr = precond_grad_expr(ndim_tuple(args), ea.ndim)
+    new = torch.einsum(expr, *args, *args, ea.to(md))
     return new.to(ea.dtype)
 
 
 @decorator_knowngood
 def _compilable_fused_psgd_precond_grad(
-    expr: str, ea: Tensor, param, lr, grad, decay, caution, preconds: TriuOrLine, store_triu_as_line: bool = False
+    ea: Tensor, param, lr, grad, decay, caution, preconds: TriuOrLine, store_triu_as_line: bool = False
 ):
-    precond = psgd_precond_grad(expr, ea, preconds, caution=caution, grad=grad, store_triu_as_line=store_triu_as_line)
+    precond = psgd_precond_grad(ea, preconds, caution=caution, grad=grad, store_triu_as_line=store_triu_as_line)
     update_param_(param, precond, lr, decay, caution=False, grad=grad)
 
 
 def fused_psgd_precond_grad(
-    expr: str, ea: Tensor, param, lr, grad, decay, caution, preconds: TriuOrLine, store_triu_as_line: bool = False
+    ea: Tensor, param, lr, grad, decay, caution, preconds: TriuOrLine, store_triu_as_line: bool = False
 ):
     lr = scalar_guard(lr, param[0])
-    _compilable_fused_psgd_precond_grad(expr, ea, param, lr, grad, decay, caution, preconds, store_triu_as_line)
+    _compilable_fused_psgd_precond_grad(ea, param, lr, grad, decay, caution, preconds, store_triu_as_line)
 
 
 @decorator_knowngood
@@ -2438,7 +2470,15 @@ def caution(g, update):
     return _compilable_cautioning(g, update)
 
 
-def precond_update_prob_schedule(max_prob=1.0, min_prob=0.03, decay=0.999, flat_start=1000):
+def _inner_precond_update_prob_schedule(
+    n: int, max_prob: float = 1.0, min_prob: float = 0.03, decay: float = 0.999, flat_start: float = 1000
+):
+    return max(min_prob, max_prob * decay ** max(n - flat_start, 0))
+
+
+def precond_update_prob_schedule(
+    max_prob: float = 1.0, min_prob: float = 0.03, decay: float = 0.999, flat_start: float = 1000
+):
     """Anneal preconditioner update probability during beginning of training.
 
     PSGD benefits from more preconditioner updates at the beginning of training,
@@ -2449,11 +2489,9 @@ def precond_update_prob_schedule(max_prob=1.0, min_prob=0.03, decay=0.999, flat_
     `min_prob` by ~4000 steps. Default settings work very well for most models and
     training regimes.
     """
-
-    def _schedule(n):
-        return max(min_prob, max_prob * decay ** max(n - flat_start, 0))
-
-    return _schedule
+    return functools.partial(
+        _inner_precond_update_prob_schedule, max_prob=max_prob, min_prob=min_prob, decay=decay, flat_start=flat_start
+    )
 
 
 def merge_group(group, *tensors):
