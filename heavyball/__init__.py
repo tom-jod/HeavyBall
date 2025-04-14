@@ -630,7 +630,7 @@ class ForeachPSGDKron(C.BaseOpt):
         adaptive: bool = False,
         ortho_method: Optional[str] = None,  # If None, no orthogonalization
         precond_grad_accum: bool = False,
-        unscaled: bool = False,  #
+        lower_bound_beta: float = 0.9,  # 0.0 recovers pre-2.0.0 PSGD
         # expert parameters
         precond_init_scale=None,
         precond_init_scale_scale: float = 1,

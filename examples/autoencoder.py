@@ -1,7 +1,6 @@
 import os
 from datetime import datetime
 
-import matplotlib.pyplot as plt
 import torch
 import torch.nn as nn
 import tqdm
@@ -14,7 +13,7 @@ from torchvision.utils import make_grid
 
 import heavyball
 
-heavyball.utils.compile_mode = "default"
+heavyball.utils.compile_mode = None
 heavyball.utils.set_torch()
 
 
@@ -55,35 +54,17 @@ class Block(nn.Sequential):
 
 
 class Autoencoder(nn.Module):
-    def __init__(self, kernel: int = 5, stride: int = 2, hidden: int = 8, intermediate: int = 256):
+    def __init__(self, kernel: int = 3, stride: int = 2, hidden: int = 2, intermediate: int = 128):
         super(Autoencoder, self).__init__()
         self.enc = Block(1, intermediate, hidden, kernel, stride, False, 5)
-        self.balancer = nn.BatchNorm2d(hidden, affine=False)
         self.dec = Block(hidden, intermediate, 1, kernel, stride, True, 5)
 
     def forward(self, x):
-        x = self.enc(x)
-        x = self.balancer(x).sigmoid()
-        label = (x + torch.rand_like(x)) > 1
-        x = label.detach().float() + x - x.detach()
+        x = self.enc(x).sigmoid()
+        # label = x > torch.rand_like(x)
+        # x = label.detach().float() + x - x.detach()
         out = self.dec(x)
         return out
-
-
-def plot_samples(model, data, epoch, save_dir="samples"):
-    os.makedirs(save_dir, exist_ok=True)
-    model.eval()
-    with torch.no_grad():
-        samples = model(data.cuda())
-        # Create a grid of original and reconstructed images
-        comparison = torch.cat([data, samples.cpu() * 255.0], dim=0)
-        grid = make_grid(comparison, nrow=8, normalize=True, padding=2)
-        plt.figure(figsize=(10, 5))
-        plt.imshow(grid.permute(1, 2, 0))
-        plt.axis("off")
-        plt.savefig(os.path.join(save_dir, f"epoch_{epoch}.png"))
-        plt.close()
-    model.train()
 
 
 class RandomPad(nn.Module):
@@ -103,27 +84,51 @@ class RandomPad(nn.Module):
         return new
 
 
-def main(epochs: int, batch: int):
+class FastMNIST(torch.utils.data.Dataset):
+    def __init__(self, train: bool):
+        transform = v2.Compose([v2.ToImage(), v2.ToDtype(torch.float32)])
+        data = list(MNIST(root="./data", train=train, download=True, transform=transform))
+        images, _labels = zip(*data)
+        self._data = torch.stack(images)
+        self._data.share_memory_()
+        self.transform = RandomPad(4)
+
+    def __len__(self):
+        return self._data.shape[0]
+
+    def __getitem__(self, index):
+        return self.transform(self._data[index]) / 255.0
+
+
+def main(epochs: int, batch: int, log_interval: int = 16):
     # Setup tensorboard logging
     log_dir = os.path.join("runs", f"soap_{datetime.now().strftime('%Y%m%d_%H%M%S')}")
     writer = SummaryWriter(log_dir)
 
     model = torch.compile(Autoencoder().cuda(), mode="default")
-    optimizer = heavyball.SOAP(model.parameters(), lr=1e-3, precondition_frequency=1)
-    # optimizer = heavyball.PSGDKron(optimizer, lr=1e-3, mars=True)
+    optimizer = heavyball.PSGDKron(
+        model.parameters(),
+        lr=1e-4,
+        mars=True,
+        lower_bound_beta=0.999,
+        update_clipping=heavyball.utils.global_l2norm_clip,
+    )
     # optimizer = heavyball.AdamW(model.parameters(), lr=1e-3, mars=True)
 
-    transform = v2.Compose([v2.ToImage(), v2.ToDtype(torch.float32), RandomPad(4)])
-    trainset = MNIST(root="./data", train=True, download=True, transform=transform)
-    testset = MNIST(root="./data", train=False, download=True, transform=transform)
+    trainset = FastMNIST(True)
+    testset = FastMNIST(False)
+
     dataloader = DataLoader(trainset, batch_size=batch, shuffle=True, num_workers=8, drop_last=True, pin_memory=True)
-    testloader = DataLoader(testset, batch_size=batch * 8, shuffle=False, num_workers=1, pin_memory=True)
+    testloader = DataLoader(testset, batch_size=8, shuffle=False, num_workers=0, pin_memory=False)
+    eval_batch = next(iter(testloader))
+    eval_batch_cuda = eval_batch.cuda()
+    del testloader
+    step = 0
+    total_loss = 0
 
     for epoch in range(epochs):
-        total_loss = 0
-
-        for data in tqdm.tqdm(dataloader):
-            img, _ = data
+        for img in tqdm.tqdm(dataloader):
+            step += 1
             img = img.cuda()
 
             def _closure():
@@ -137,25 +142,22 @@ def main(epochs: int, batch: int):
             with torch.no_grad():
                 total_loss = total_loss + loss.detach()
 
-        avg_loss = (total_loss / len(dataloader)).item()
-        print(f"epoch [{epoch}/{epochs}], loss:{avg_loss:.4f}")
-        writer.add_scalar("Loss/train", avg_loss, epoch)
+            if step % log_interval == 0:
+                avg_loss = (total_loss / log_interval).item()
+                writer.add_scalar("Loss/train", avg_loss, step)
+                total_loss = 0
+            if step % (log_interval * 10) == 0:
+                writer.flush()
 
-        # Plot samples every 2 epochs
-        if epoch % 2 == 0:
-            eval_batch = next(iter(testloader))[0][:8]
-            plot_samples(model, eval_batch, epoch)
-
-            # Log reconstructions to tensorboard
-            with torch.no_grad():
-                model.eval()
-                samples = model(eval_batch.cuda())
-                comparison = torch.cat([eval_batch, samples.cpu()], dim=0)
-                grid = make_grid(comparison, nrow=8, normalize=True, padding=2)
-                writer.add_image("reconstructions", grid, epoch)
-                model.train()
+        with torch.no_grad():
+            model.eval()
+            samples = model(eval_batch_cuda)
+            comparison = torch.cat([eval_batch, samples.cpu()], dim=0)
+            grid = make_grid(comparison, nrow=8, normalize=True, padding=2)
+            writer.add_image("reconstructions", grid, epoch)
+            model.train()
         writer.flush()
 
 
 if __name__ == "__main__":
-    main(epochs=10, batch=1024)
+    main(epochs=10, batch=16)
