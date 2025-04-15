@@ -57,7 +57,7 @@ def test_singular_value_approx(min_val=2, max_val=512, attempts=128):
     methods = (
         ("exact", baseline_norm),
         ("cholesky", max_singular_value_cholesky),
-        ("power_iter_0", max_singular_value_power_iter),
+        ("power_iter_0", functools.partial(max_singular_value_power_iter, iterations=0)),
         ("power_iter_1", functools.partial(max_singular_value_power_iter, iterations=1)),
         ("power_iter_2", functools.partial(max_singular_value_power_iter, iterations=2)),
     )

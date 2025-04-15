@@ -1927,9 +1927,9 @@ def max_singular_value(
 ) -> Tensor:
     if min(A.shape) <= max_svd:
         return _max_singular_value_exact(A)  # SVD needs ~25% more runtime for size=32, but 0% error instead of 5%
-    if use_cholesky:
+    if use_cholesky or power_iter < 0:
         return max_singular_value_cholesky(A, max_abs)
-    return max_singular_value_power_iter(A, max_abs, iterations=power_iter)
+    return max_singular_value_power_iter(A, None, iterations=power_iter)
 
 
 @decorator_knowngood
@@ -2041,6 +2041,7 @@ def psgd_update_precond(
     V: Tensor,
     running_lower_bound: List[Tensor],
     lower_bount_beta: float,
+    power_iter: int,
 ):
     """Update Kronecker product preconditioner Q with pair (V, G)."""
     Q = _balance_to_triu(oq)
@@ -2056,7 +2057,7 @@ def psgd_update_precond(
         terms, Q, oq, precond_lr, velocity, beta2, running_lower_bound, lower_bount_beta
     )
     for grad, summed, local_norm, q, original_q, lb_state in terms:
-        lower_bound = max_singular_value(summed, local_norm)
+        lower_bound = max_singular_value(summed, local_norm, power_iter=power_iter)
         if ortho_method is not None:
             method = ortho_method.split("-")
             if len(method) == 1:
@@ -2090,20 +2091,22 @@ def _inverse_free_update_(
         Q = original_q
 
     for mm, gg, oq, q, lb, lb_state in zip(matmuled, terms, original_q, Q, lower_bound, running_lower_bound):
+        q = promote(q)
         if q.ndim < 2:
             target_scale = g_numel / q.numel()
             lb = gg.norm(float("inf"))
-            update = (gg - target_scale) * q
+            update = (promote(gg) - target_scale) * q
         else:
             target_scale = g_numel / q.shape[0]
-            update = mm - target_scale * q
-        lb = lb.maximum(lb_state + (lb - lb_state) * (1 - lower_bount_beta))
+            update = promote(mm) - target_scale * q
+        lb = promote(lb)
+        lb = lb.maximum(promote(lb_state) + (lb - promote(lb_state)) * (1 - lower_bount_beta))
         copy_stochastic_(lb_state, lb)
         if store_triu_as_line:
             if update.ndim == 2:
                 update = triu_to_line([update])[0][1]
             oq = oq[1]
-        copy_stochastic_(oq, oq - precond_lr / (lb + target_scale) * update)
+        copy_stochastic_(oq, promote(oq) - precond_lr / (lb + target_scale) * update)
 
 
 @decorator
@@ -2118,6 +2121,7 @@ def inverse_free_psgd_update_precond(
     V: None,
     running_lower_bound: List[Tensor],
     lower_bount_beta: float,
+    power_iter: int,
 ):
     """Update Kronecker product preconditioner Q with pair (V, G)."""
     assert V is None
@@ -2131,7 +2135,7 @@ def inverse_free_psgd_update_precond(
     exprGs = calcG_expr(ndim_tuple(Q), G.ndim)
     terms = [torch.einsum(exprG, G, G) for exprG in exprGs]
     matmuled = [gg @ q if gg.ndim == 2 else None for gg, q in zip(terms, Q)]
-    lb = [max_singular_value(gg, None) if gg.ndim == 2 else None for gg in terms]
+    lb = [max_singular_value(gg, None, power_iter=power_iter) if gg.ndim == 2 else None for gg in terms]
     _inverse_free_update_(
         matmuled, terms, oq, G.numel(), lb, running_lower_bound, lower_bount_beta, precond_lr, store_triu_as_line
     )

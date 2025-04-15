@@ -634,6 +634,7 @@ def _update_psgd_precond(
         vector,
         running_lower_bound,
         group["lower_bound_beta"],
+        group["precond_update_power_iterations"],
     )
     del vector, hessian_vector
 
