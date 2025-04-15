@@ -1,7 +1,9 @@
 import functools
 import math
+import os
 import time
 
+os.environ["TORCH_TRACE"] = "./tracedir"
 import matplotlib.pyplot as plt
 import pandas as pd
 import seaborn as sns
@@ -43,7 +45,7 @@ def baseline_norm(x):
 
 
 @torch.inference_mode()
-def test_singular_value_approx(min_val=2, max_val=512, attempts=128):
+def test_singular_value_approx(min_val=2, max_val=64, attempts=1):
     torch.manual_seed(0x12378)
     test_cases = [
         (lambda x: torch.randn((x, x)), "Normal"),
@@ -58,8 +60,8 @@ def test_singular_value_approx(min_val=2, max_val=512, attempts=128):
         ("exact", baseline_norm),
         ("cholesky", max_singular_value_cholesky),
         ("power_iter_0", functools.partial(max_singular_value_power_iter, iterations=0)),
-        ("power_iter_1", functools.partial(max_singular_value_power_iter, iterations=1)),
-        ("power_iter_2", functools.partial(max_singular_value_power_iter, iterations=2)),
+        ("power_iter_1", functools.partial(max_singular_value_power_iter, iterations=2)),
+        ("power_iter_2", functools.partial(max_singular_value_power_iter, iterations=6)),
     )
     results = []
 

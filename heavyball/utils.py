@@ -1893,18 +1893,18 @@ def _max_singular_value_exact(A, use_lobpcg: bool = False):
 
 
 @decorator_knowngood
-def max_singular_value_power_iter(A: Tensor, max_abs: Optional[Tensor] = None, iterations: int = 0):
+def max_singular_value_power_iter(A: Tensor, max_abs: Optional[Tensor] = None, iterations: int = 5):
     """
     Rayleigh quotient of row with the largest norm + optional power iterations
     """
-    x_norm, max_idx = A.square().sum(1).max(dim=0)
+    x_norm, max_idx = A.norm(dim=1).max(dim=0)
     x = A.index_select(0, max_idx).flatten().contiguous()
-    A = A / x_norm.sqrt()
-    x = x / x_norm.sqrt()
+    A = A / x_norm
+    x = x / x_norm
     for _ in range(iterations):
-        x = A.T @ A @ x
+        x = A.T.mv(A.mv(x))  # A @ A.T @ x, but explicitly telling torch.compile not to compute the full matrix
         x = x / x.norm()
-    return (x @ A.T @ A @ x).sqrt() * x_norm.sqrt()
+    return (x @ A.T.mv(A.mv(x))).sqrt() * x_norm
 
 
 @decorator_knowngood
