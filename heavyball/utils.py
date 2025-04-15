@@ -862,6 +862,7 @@ class StatefulOptimizer(torch.optim.Optimizer):
     def get_groups(self, group):
         return [group]
 
+    @functools.lru_cache(maxsize=None)
     def state_(self, arg: Tensor):
         state_param, index = self.mapping_inverse[arg]
         if state_param not in self.state:
@@ -1870,29 +1871,65 @@ def psgd_calc_A_and_conjB(G, Q, conjB):  # conjB ("V", "vector") == randn during
 
 
 @decorator_knowngood
-def _random_projection(x: Tensor, scale: Tensor):
+def _random_projection(x: Tensor, scale: Optional[Tensor]):
+    if scale is None:
+        scale = x.norm(float("inf")).clamp(min=1e-8)
     k = 2 ** math.ceil(math.log2(math.log2(min(x.shape))))  # next-largest-power-of-2 of log2-of-size
     norm = x.square().sum(0)
     indices = torch.topk(norm, k, largest=True).indices
-    return x.index_select(1, indices).contiguous() / scale
+    return x.index_select(1, indices).contiguous() / scale, scale
 
 
-def psgd_lb(A: torch.Tensor, max_abs: torch.Tensor, max_svd: int = 32) -> torch.Tensor:
+def _max_singular_value_exact(A, use_lobpcg: bool = False):
+    try:
+        if use_lobpcg:
+            A = torch.einsum("ij,kj->ik", A, A)
+            eigval, _ = torch.lobpcg(A, k=1, largest=True)
+            return eigval[0].sqrt()
+        else:
+            return torch.linalg.svd(A, driver="gesvdj")[1].max()  # == linalg.matrix_norm(A, ord=2)
+    except torch.linalg.LinAlgError:
+        return torch.zeros((), device=A.device, dtype=A.dtype)
+
+
+@decorator_knowngood
+def max_singular_value_power_iter(A: Tensor, max_abs: Optional[Tensor] = None, iterations: int = 0):
     """
-    Spectral norm estimate via randomized subspace iteration
-
-    Code originally from @evanatyourservice
+    Rayleigh quotient of row with the largest norm + optional power iterations
     """
-    if min(A.shape) <= max_svd:
-        return torch.linalg.norm(A, ord=2)  # SVD needs ~25% more runtime for size=32, but 0% error instead of 5%
+    x_norm, max_idx = A.square().sum(1).max(dim=0)
+    x = A.index_select(0, max_idx).flatten().contiguous()
+    A = A / x_norm.sqrt()
+    x = x / x_norm.sqrt()
+    for _ in range(iterations):
+        x = A.T @ A @ x
+        x = x / x.norm()
+    return (x @ A.T @ A @ x).sqrt() * x_norm.sqrt()
 
-    Y = _random_projection(A, max_abs)
+
+@decorator_knowngood
+def max_singular_value_cholesky(A: Tensor, max_abs: Optional[Tensor] = None):
+    """
+    Adapted from @evanatyourservice
+    """
+    Y, max_abs = _random_projection(A, max_abs)
     Q, _ = torch.linalg.qr(Y)
     Q = Q / max_abs
     Z = A.T @ Q
     W, _ = torch.linalg.qr(Z)
-    sketch_norm = torch.linalg.norm(torch.einsum("ij,ik,kn->jn", Q, A, W), ord=2)
+    sketch_norm = _max_singular_value_exact(Z.T @ W)
     return sketch_norm * max_abs
+
+
+@decorator_knowngood
+def max_singular_value(
+    A: Tensor, max_abs: Optional[Tensor], max_svd: int = 32, use_cholesky: bool = False, power_iter: int = 0
+) -> Tensor:
+    if min(A.shape) <= max_svd:
+        return _max_singular_value_exact(A)  # SVD needs ~25% more runtime for size=32, but 0% error instead of 5%
+    if use_cholesky:
+        return max_singular_value_cholesky(A, max_abs)
+    return max_singular_value_power_iter(A, max_abs, iterations=power_iter)
 
 
 @decorator_knowngood
@@ -1905,7 +1942,7 @@ def _prescale_term_(
     term1: Tensor, fac: Tensor, norm: Tensor, lower_bound: Tensor, lb_state: Tensor, success: Tensor, lb_beta: Tensor
 ):
     out = promote(term1).triu() * fac
-    lb: Tensor = promote(lower_bound.where(success, norm)).clamp(tiny_bf16)
+    lb: Tensor = promote(lower_bound.where(success, norm)).clamp(min=tiny_bf16)
     lb = lb.maximum(lb_state + (lb - lb_state) * (1 - lb_beta))
     copy_stochastic_(lb_state, lb)
     out = out / lb
@@ -1920,6 +1957,8 @@ def _compilable_term_extract_(
     precond_lr: Tensor,
     velocity: Optional[List[Tensor]],
     beta: Tensor,
+    running_lower_bound: List[Tensor],
+    lower_bount_beta: Tensor,
 ) -> List[Tuple[Tensor, Tensor, Tensor, Tensor, "TriuOrLine"]]:
     out = []
     if velocity is None:
@@ -1935,7 +1974,7 @@ def _compilable_term_extract_(
         out.append((diff, summed, local_norm))
 
     new = []
-    for (d, s, n), q, o, v in zip(out, Q, oq, velocity):
+    for (d, s, n), q, o, v, lb_state in zip(out, Q, oq, velocity, running_lower_bound):
         if d.ndim == 2:
             d = d.triu()
         if v is not None:
@@ -1948,13 +1987,18 @@ def _compilable_term_extract_(
             d = d / v_.sqrt().clamp(min=1e-8)
             copy_stochastic_(v, v_)
         if q.ndim >= 2:
-            new.append((d, s, n, q, o))
+            new.append((d, s, n, q, o, lb_state))
             continue
 
         if isinstance(o, tuple):
             o = o[1]
         po = promote(o)
-        new_po = po - d * precond_lr * po / n.clamp(min=tiny_bf16)
+
+        lb = n.clamp(min=tiny_bf16)
+        lb = lb.maximum(lb_state + (lb - lb_state) * (1 - lower_bount_beta))
+        copy_stochastic_(lb_state, lb)
+
+        new_po = po - d * precond_lr * po / lb
         new_po = stochastic_round_(o, new_po)
         o.copy_(torch.where(can_update, new_po, o))
 
@@ -2008,9 +2052,11 @@ def psgd_update_precond(
     terms = [(torch.einsum(exprG, A, A), torch.einsum(exprG, conjB, conjB)) for exprG in exprGs]
     del A, conjB, V
 
-    terms, can_update = _compilable_term_extract_(terms, Q, oq, precond_lr, velocity, beta2)
-    for (grad, summed, local_norm, q, original_q), lb_state in zip(terms, running_lower_bound):
-        lower_bound = psgd_lb(summed, local_norm)
+    terms, can_update = _compilable_term_extract_(
+        terms, Q, oq, precond_lr, velocity, beta2, running_lower_bound, lower_bount_beta
+    )
+    for grad, summed, local_norm, q, original_q, lb_state in terms:
+        lower_bound = max_singular_value(summed, local_norm)
         if ortho_method is not None:
             method = ortho_method.split("-")
             if len(method) == 1:
@@ -2024,6 +2070,71 @@ def psgd_update_precond(
             _subtract_from_line_(original_q[1], grad)
         else:
             stochastic_add_(original_q, grad, -1)
+
+
+@decorator_knowngood
+def _inverse_free_update_(
+    matmuled: List[Optional[Tensor]],
+    terms: List[Tensor],
+    original_q: "TriuOrLine",
+    g_numel: int,
+    lower_bound: List[Optional[Tensor]],
+    running_lower_bound: List[Tensor],
+    lower_bount_beta: Tensor,
+    precond_lr: Tensor,
+    store_triu_as_line: bool,
+):
+    if store_triu_as_line:
+        Q = line_to_triu(original_q)
+    else:
+        Q = original_q
+
+    for mm, gg, oq, q, lb, lb_state in zip(matmuled, terms, original_q, Q, lower_bound, running_lower_bound):
+        if q.ndim < 2:
+            target_scale = g_numel / q.numel()
+            lb = gg.norm(float("inf"))
+            update = (gg - target_scale) * q
+        else:
+            target_scale = g_numel / q.shape[0]
+            update = mm - target_scale * q
+        lb = lb.maximum(lb_state + (lb - lb_state) * (1 - lower_bount_beta))
+        copy_stochastic_(lb_state, lb)
+        if store_triu_as_line:
+            if update.ndim == 2:
+                update = triu_to_line([update])[0][1]
+            oq = oq[1]
+        copy_stochastic_(oq, oq - precond_lr / (lb + target_scale) * update)
+
+
+@decorator
+def inverse_free_psgd_update_precond(
+    G: Tensor,
+    precond_lr: float,
+    oq: "TriuOrLine",
+    store_triu_as_line: bool,
+    velocity: Optional[List[Tensor]],
+    beta2: float,
+    ortho_method: Optional[str],
+    V: None,
+    running_lower_bound: List[Tensor],
+    lower_bount_beta: float,
+):
+    """Update Kronecker product preconditioner Q with pair (V, G)."""
+    assert V is None
+    assert ortho_method is None
+    assert velocity is None
+    del V, ortho_method, velocity
+
+    precond_lr, beta2, lower_bount_beta = scalar_guard(precond_lr, beta2, lower_bount_beta, G)
+    Q = _balance_to_triu(oq)
+
+    exprGs = calcG_expr(ndim_tuple(Q), G.ndim)
+    terms = [torch.einsum(exprG, G, G) for exprG in exprGs]
+    matmuled = [gg @ q if gg.ndim == 2 else None for gg, q in zip(terms, Q)]
+    lb = [max_singular_value(gg, None) if gg.ndim == 2 else None for gg in terms]
+    _inverse_free_update_(
+        matmuled, terms, oq, G.numel(), lb, running_lower_bound, lower_bount_beta, precond_lr, store_triu_as_line
+    )
 
 
 @decorator_knowngood

@@ -35,13 +35,28 @@ def _guard_in_state(state, key, template_fn):
 
 
 class FunctionTransform:
-    def __init__(self, fn):
+    def __init__(self, fn, names: list[str] | None = None):
+        if names is None:
+            names = []
         self.fn = fn
         self.fn_name = self.get_fn().__name__
         self.transform_idx = None
+        self.is_first_step = False
+        self.names = names
+
+    def _init(self, state, group, update, grad, param, *args, **kwargs):
+        raise NotImplementedError
+
+    def _call(self, state, group, update, grad, param, vars, *args, **kwargs):
+        raise NotImplementedError
 
     def __call__(self, state, group, update, grad, param, *args, **kwargs):
-        raise NotImplementedError
+        if not self.is_first_step:
+            self._init(state, group, update, grad, param, *args, **kwargs)
+            self.is_first_step = True
+        states = [state(p) for p in param]
+        vars = [[st.get(self.val_name(name), None) for st in states] for name in self.names]
+        return self._call(state, group, update, grad, param, vars, *args, **kwargs)
 
     def _guard(self, state, name, dtype, param, template_fn):
         name = self.val_name(name)
@@ -71,19 +86,22 @@ def _storage_dtype(group):
 
 class ZeroGuard(FunctionTransform):
     def __init__(self, fn, names):
-        super().__init__(fn)
-        self.names = names
+        super().__init__(fn, names)
 
-    def __call__(self, state, group, update, grad, param, *args, **kwargs):
-        vars = [self._guard(state, name, _storage_dtype(group), param, _zero_guard) for name in self.names]
+    def _init(self, state, group, update, grad, param, *args, **kwargs):
+        for name in self.names:
+            self._guard(state, name, _storage_dtype(group), param, _zero_guard)
+
+    def _call(self, state, group, update, grad, param, vars, *args, **kwargs):
         return self.fn(state, group, update, grad, param, *args, *vars, **kwargs)
 
 
 class PrecondGradAccumGuard(FunctionTransform):
     def __init__(self, fn):
-        super().__init__(fn)
+        super().__init__(fn, ["precond_grad_accum"])
         self.latest_precond = 0
         self.has_data = False
+        self.pass_through = None
 
     def _accum(self, state, new):
         utils.stochastic_add_(state, new)
@@ -91,10 +109,17 @@ class PrecondGradAccumGuard(FunctionTransform):
     def _reset(self, state):
         utils.zero_(state)
 
-    def __call__(self, state, group, update, grad, param, *args, **kwargs):
+    def _init(self, state, group, update, grad, param, *args, **kwargs):
+        self.pass_through = not group.get("precond_grad_accum", False)
+        if not self.pass_through:
+            for name in self.names:
+                self._guard(state, name, _storage_dtype(group), param, _zero_guard)
+
+    def _call(self, state, group, update, grad, param, vars, *args, **kwargs):
         base_grad = update if group.get("momentum_into_precond_update", True) else grad
-        if not group.get("precond_grad_accum", False):
+        if self.pass_through:
             return self.fn(state, group, update, grad, param, *args, base_grad, **kwargs)
+
         flat_state = self._guard(state, "precond_grad_accum", _storage_dtype(group), param, _zero_guard)
         if group["is_preconditioning"] and group["step"] - self.latest_precond > 1:
             self.has_data = True
@@ -118,33 +143,26 @@ class PrecondGradAccumGuard(FunctionTransform):
 
 class CopyGuard(FunctionTransform):
     def __init__(self, fn, index, names):
-        super().__init__(fn)
+        super().__init__(fn, names)
         self.index = index
-        self.names = names
 
-    def __call__(self, state, group, update, grad, param, *args, **kwargs):
+    def _init(self, state, group, update, grad, param, *args, **kwargs):
         val = [update, grad, param, *args][self.index]
-        vars = [
-            [_guard_in_state(state(p), self.val_name(name), lambda: torch.clone(v)) for p, v in zip(param, val)]  #
-            for name in self.names
-        ]
+        for name in self.names:
+            for p, v in zip(param, val):
+                _guard_in_state(state(p), self.val_name(name), lambda: torch.clone(v))
+
+    def _call(self, state, group, update, grad, param, vars, *args, **kwargs):
         return self.fn(state, group, update, grad, param, *args, *vars, **kwargs)
 
 
 class GeneralGuard(FunctionTransform):
     def __init__(self, fn, names, init_fn, skip_first: bool = True):
-        super().__init__(fn)
-        self.names = names
+        super().__init__(fn, names)
         self.init_fn = init_fn
         self.skip_first = skip_first
-
-    @functools.lru_cache(maxsize=1)
-    def named_to_anonymous(self):
-        return {n: self.val_name(n) for n in self.names}
-
-    @functools.lru_cache(maxsize=1)
-    def anonymous_to_named(self):
-        return {self.val_name(n): n for n in self.names}
+        self.named_to_anonymous = None
+        self.anonymous_to_named = None
 
     def _map(self, state_fn, param, mapping):
         for p in param:
@@ -155,23 +173,17 @@ class GeneralGuard(FunctionTransform):
                 if name in state:
                     state[mapped] = state.pop(name)
 
-    def _inner(self, state, group, update, grad, param, *args, **kwargs):
-        vars = []
-        skip_update = False
-        for p, g, u in zip(param, grad, update):
+    def _init(self, state, group, update, grad, param, *args, **kwargs):
+        for u, g, p in zip(update, grad, param):
             st = state(p)
-            skip_update |= _inplace_guard_(st, self.names, lambda: self.init_fn(st, group, u, g, p, **kwargs))
-            vars.append([st[name] if isinstance(name, str) else st.get(name[0], name[1]) for name in self.names])
-        if skip_update and self.skip_first:
+            self.init_fn(st, group, u, g, p, **kwargs)
+            for name in self.names:
+                st[self.val_name(name)] = st.pop(name, None)
+        if self.skip_first:
             raise SkipUpdate from None
-        return self.fn(state, group, update, grad, param, *args, *zip(*vars), **kwargs)
 
-    def __call__(self, state, group, update, grad, param, *args, **kwargs):
-        try:
-            self._map(state, param, self.anonymous_to_named())
-            return self._inner(state, group, update, grad, param, *args, **kwargs)
-        finally:
-            self._map(state, param, self.named_to_anonymous())
+    def _call(self, state, group, update, grad, param, vars, *args, **kwargs):
+        return self.fn(state, group, update, grad, param, *args, *vars, **kwargs)
 
 
 class NoState(FunctionTransform):
@@ -442,7 +454,7 @@ def _init_psgd_kron(state, group, update, grad, param, cached: bool = False, pro
         dtype=getattr(torch, group["q_dtype"]),
     )
     state["Q"] = utils.triu_to_line(Q) if group["store_triu_as_line"] else Q
-    state["running_lower_bound"] = [torch.zeros((), device=q.device, dtype=q.dtype) for q in Q if q.ndim == 2]
+    state["running_lower_bound"] = [torch.zeros((), device=q.device, dtype=q.dtype) for q in Q]
     if group["adaptive"]:
         state["velocity"] = [torch.zeros((), device=q.device, dtype=q.dtype) for q in Q]
     if not cached:
@@ -606,10 +618,12 @@ def _update_psgd_precond(
         vector, hessian_vector = param.vector, param.hessian_vector
         del param.vector
         del param.hessian_vector
+    elif group["inverse_free"]:
+        vector, hessian_vector = None, grad
     else:
-        vector, hessian_vector = utils.dampen_grad(grad)
+        vector, hessian_vector = utils.dampen_grad(grad, group["dampening"])
 
-    utils.psgd_update_precond(
+    (utils.inverse_free_psgd_update_precond if vector is None else utils.psgd_update_precond)(
         hessian_vector,
         group["precond_lr"],
         Q,
@@ -719,9 +733,7 @@ def update_by_delayed_psgd_lra(group, update, grad, param, update_to_precond, U,
 
 
 @PrecondGradAccumGuard
-@general_guard(
-    "Q", ("Q_cache", None), ("velocity", None), "running_lower_bound", init_fn=_init_psgd_kron, skip_first=False
-)
+@general_guard("Q", "Q_cache", "velocity", "running_lower_bound", init_fn=_init_psgd_kron, skip_first=False)
 @no_state_no_foreach
 def scale_by_psgd(
     group,
@@ -741,9 +753,7 @@ def scale_by_psgd(
 
 
 @PrecondGradAccumGuard
-@general_guard(
-    "Q", ("Q_cache", None), ("velocity", None), "running_lower_bound", init_fn=_init_psgd_kron, skip_first=False
-)
+@general_guard("Q", "Q_cache", "velocity", "running_lower_bound", init_fn=_init_psgd_kron, skip_first=False)
 @no_state_no_foreach
 def scale_by_delayed_psgd(
     group,
@@ -764,9 +774,7 @@ def scale_by_delayed_psgd(
 
 
 @PrecondGradAccumGuard
-@general_guard(
-    "Q", ("Q_cache", None), ("velocity", None), "running_lower_bound", init_fn=_init_psgd_kron, skip_first=False
-)
+@general_guard("Q", "Q_cache", "velocity", "running_lower_bound", init_fn=_init_psgd_kron, skip_first=False)
 @no_state_no_foreach
 def update_by_psgd(
     group,
@@ -798,9 +806,7 @@ def global_clip(group, update, grad, param, clip_fn: Optional[callable] = None):
 
 
 @PrecondGradAccumGuard
-@general_guard(
-    "Q", ("Q_cache", None), ("velocity", None), "running_lower_bound", init_fn=_init_psgd_kron, skip_first=False
-)
+@general_guard("Q", "Q_cache", "velocity", "running_lower_bound", init_fn=_init_psgd_kron, skip_first=False)
 @no_state_no_foreach
 def update_by_delayed_psgd(
     group,
