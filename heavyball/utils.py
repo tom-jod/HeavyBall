@@ -861,7 +861,6 @@ class StatefulOptimizer(torch.optim.Optimizer):
     def get_groups(self, group):
         return [group]
 
-    @functools.lru_cache(maxsize=None)
     def state_(self, arg: Tensor):
         state_param, index = self.mapping_inverse[arg]
         if state_param not in self.state:
@@ -1106,6 +1105,8 @@ class StatefulOptimizer(torch.optim.Optimizer):
                         for key in ("grad", "vector", "hessian_vector", "orig"):
                             if hasattr(tensor, key):
                                 setattr(tensor, key, None)
+                self.mapping.clear()
+                self.mapping_inverse.clear()
         return loss
 
 
