@@ -574,11 +574,10 @@ _optim_fns = {"adam": utils.adam_, "laprop": utils.laprop_}
 
 @zero_guard("exp_avg", "exp_avg_sq")
 @general_guard("Q", "GG", init_fn=_init_soap)
+@PrecondGradAccumGuard
 @no_state
-def scale_by_soap(group, update, grad, param, exp_avg, exp_avg_sq, Q, GG, inner: str = "adam"):
-    update = utils.promote(update)  # Promote to highest precision if needed
-
-    grad_projected = [utils.project(u, q, False) for u, q in zip(update, Q)]
+def scale_by_soap(group, update, grad, param, exp_avg, exp_avg_sq, Q, GG, precond_grad, inner: str = "adam"):
+    grad_projected = [utils.project(utils.promote(u), q, False) for u, q in zip(update, Q)]
     fn = _optim_fns[inner]
     precond = fn(
         exp_avg,
@@ -591,9 +590,9 @@ def scale_by_soap(group, update, grad, param, exp_avg, exp_avg_sq, Q, GG, inner:
     )
     precond = [utils.project(p, q, True) for p, q in zip(precond, Q)]
 
-    for u, q, gg, ea in zip(update, Q, GG, exp_avg):
+    for u, q, gg, ea in zip(precond_grad, Q, GG, exp_avg):
         utils.update_preconditioner(
-            u,
+            utils.promote(u),
             q,
             gg,
             ea,
