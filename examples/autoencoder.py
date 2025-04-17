@@ -1,11 +1,11 @@
 import os
 from datetime import datetime
 
+import numpy as np
 import torch
 import torch.nn as nn
 import tqdm
 from torch.nn import functional as F
-from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
 from torchvision.datasets import MNIST
 from torchvision.transforms import v2
@@ -13,7 +13,6 @@ from torchvision.utils import make_grid
 
 import heavyball
 
-heavyball.utils.compile_mode = None
 heavyball.utils.set_torch()
 
 
@@ -54,10 +53,10 @@ class Block(nn.Sequential):
 
 
 class Autoencoder(nn.Module):
-    def __init__(self, kernel: int = 3, stride: int = 2, hidden: int = 2, intermediate: int = 128):
+    def __init__(self, kernel: int = 3, stride: int = 2, hidden: int = 1, intermediate: int = 128):
         super(Autoencoder, self).__init__()
-        self.enc = Block(1, intermediate, hidden, kernel, stride, False, 5)
-        self.dec = Block(hidden, intermediate, 1, kernel, stride, True, 5)
+        self.enc = Block(1, intermediate, hidden, kernel, stride, False, 3)
+        self.dec = Block(hidden, intermediate, 1, kernel, stride, True, 3)
 
     def forward(self, x):
         x = self.enc(x).sigmoid()
@@ -71,33 +70,15 @@ class RandomPad(nn.Module):
     def __init__(self, amount: int):
         super().__init__()
         self.amount = amount
+        self.rng = np.random.default_rng(0x12312)
 
     def forward(self, inp):
-        x = torch.randint(0, self.amount, (inp.size(0),))
-        y = torch.randint(0, self.amount, (inp.size(0),))
-        new = torch.zeros(
-            [inp.shape[0], inp.shape[1] + self.amount, inp.shape[2] + self.amount],
-            device=inp.device,
-            dtype=inp.dtype,
-        )
-        new[:, x : x + inp.size(1), y : y + inp.size(2)] = inp
-        return new
-
-
-class FastMNIST(torch.utils.data.Dataset):
-    def __init__(self, train: bool):
-        transform = v2.Compose([v2.ToImage(), v2.ToDtype(torch.float32)])
-        data = list(MNIST(root="./data", train=train, download=True, transform=transform))
-        images, _labels = zip(*data)
-        self._data = torch.stack(images)
-        self._data.share_memory_()
-        self.transform = RandomPad(4)
-
-    def __len__(self):
-        return self._data.shape[0]
-
-    def __getitem__(self, index):
-        return self.transform(self._data[index]) / 255.0
+        new = []
+        xs, ys = np.split((np.random.randint(0, self.amount, size=2 * inp.size(0)) * self.amount).round(), 2)
+        for val, x, y in zip(inp, xs, ys):
+            padded = F.pad(val, (x, self.amount - x, y, self.amount - y))
+            new.append(padded)
+        return torch.stack(new)
 
 
 def main(epochs: int, batch: int, log_interval: int = 16):
@@ -110,26 +91,34 @@ def main(epochs: int, batch: int, log_interval: int = 16):
         model.parameters(),
         lr=1e-4,
         mars=True,
-        lower_bound_beta=0.999,
-        update_clipping=heavyball.utils.global_l2norm_clip,
+        lower_bound_beta=0.9,
+        inverse_free=True,
+        precond_update_power_iterations=6,
+        store_triu_as_line=False,
     )
-    # optimizer = heavyball.AdamW(model.parameters(), lr=1e-3, mars=True)
 
-    trainset = FastMNIST(True)
-    testset = FastMNIST(False)
+    transform = v2.Compose([v2.ToImage(), v2.ToDtype(torch.float32)])
+    train = [img for img, _ in MNIST(root="./data", train=True, download=True, transform=transform)]
+    test = [img for _, (img, _) in zip(range(8), MNIST(root="./data", train=False, download=True, transform=transform))]
 
-    dataloader = DataLoader(trainset, batch_size=batch, shuffle=True, num_workers=8, drop_last=True, pin_memory=True)
-    testloader = DataLoader(testset, batch_size=8, shuffle=False, num_workers=0, pin_memory=False)
-    eval_batch = next(iter(testloader))
+    train = torch.stack(train).cuda() / 255.0
+    eval_batch = torch.stack(test) / 255.0
+
+    transform = RandomPad(4)
+    eval_batch = transform(eval_batch)
     eval_batch_cuda = eval_batch.cuda()
-    del testloader
     step = 0
     total_loss = 0
 
     for epoch in range(epochs):
-        for img in tqdm.tqdm(dataloader):
+        train = train[torch.randperm(train.size(0))].contiguous()
+        batches = transform(train)
+        batches = batches[: batches.size(0) // batch * batch]
+        batches = batches.view(-1, batch, *batches.shape[1:])
+
+        for i in tqdm.tqdm(range(batches.size(0))):
+            img = batches[i]
             step += 1
-            img = img.cuda()
 
             def _closure():
                 output = model(img)
@@ -160,4 +149,4 @@ def main(epochs: int, batch: int, log_interval: int = 16):
 
 
 if __name__ == "__main__":
-    main(epochs=10, batch=16)
+    main(epochs=100, batch=128)

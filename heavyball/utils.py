@@ -2042,7 +2042,7 @@ def psgd_update_precond(
     running_lower_bound: List[Tensor],
     lower_bount_beta: float,
     power_iter: int,
-):
+) -> None:
     """Update Kronecker product preconditioner Q with pair (V, G)."""
     Q = _balance_to_triu(oq)
 
@@ -2071,27 +2071,22 @@ def psgd_update_precond(
             _subtract_from_line_(original_q[1], grad)
         else:
             stochastic_add_(original_q, grad, -1)
+    return None
 
 
 @decorator_knowngood
 def _inverse_free_update_(
     matmuled: List[Optional[Tensor]],
     terms: List[Tensor],
-    original_q: "TriuOrLine",
+    Q: "TriuOrLine",
     g_numel: int,
     lower_bound: List[Optional[Tensor]],
     running_lower_bound: List[Tensor],
     lower_bount_beta: Tensor,
     precond_lr: Tensor,
-    store_triu_as_line: bool,
 ):
-    if store_triu_as_line:
-        Q = line_to_triu(original_q)
-    else:
-        Q = original_q
-
-    for mm, gg, oq, q, lb, lb_state in zip(matmuled, terms, original_q, Q, lower_bound, running_lower_bound):
-        q = promote(q)
+    for mm, gg, oq, lb, lb_state in zip(matmuled, terms, Q, lower_bound, running_lower_bound):
+        q = promote(oq)
         if q.ndim < 2:
             target_scale = g_numel / q.numel()
             lb = gg.norm(float("inf"))
@@ -2102,18 +2097,14 @@ def _inverse_free_update_(
         lb = promote(lb)
         lb = lb.maximum(promote(lb_state) + (lb - promote(lb_state)) * (1 - lower_bount_beta))
         copy_stochastic_(lb_state, lb)
-        if store_triu_as_line:
-            if update.ndim == 2:
-                update = triu_to_line([update])[0][1]
-            oq = oq[1]
-        copy_stochastic_(oq, promote(oq) - precond_lr / (lb + target_scale) * update)
+        copy_stochastic_(oq, q - precond_lr / (lb + target_scale) * update)
 
 
 @decorator
 def inverse_free_psgd_update_precond(
     G: Tensor,
     precond_lr: float,
-    oq: "TriuOrLine",
+    oq: List[Tensor],
     store_triu_as_line: bool,
     velocity: Optional[List[Tensor]],
     beta2: float,
@@ -2122,23 +2113,25 @@ def inverse_free_psgd_update_precond(
     running_lower_bound: List[Tensor],
     lower_bount_beta: float,
     power_iter: int,
-):
+) -> Tensor:
     """Update Kronecker product preconditioner Q with pair (V, G)."""
     assert V is None
     assert ortho_method is None
     assert velocity is None
-    del V, ortho_method, velocity
+    assert not store_triu_as_line  # precond is not triangular
+    del V, ortho_method, velocity, store_triu_as_line
 
+    psgd_balance_Q(oq)
+    Q = oq
     precond_lr, beta2, lower_bount_beta = scalar_guard(precond_lr, beta2, lower_bount_beta, G)
-    Q = _balance_to_triu(oq)
 
+    G = psgd_precond_grad(G, Q)
     exprGs = calcG_expr(ndim_tuple(Q), G.ndim)
     terms = [torch.einsum(exprG, G, G) for exprG in exprGs]
     matmuled = [gg @ q if gg.ndim == 2 else None for gg, q in zip(terms, Q)]
     lb = [max_singular_value(gg, None, power_iter=power_iter) if gg.ndim == 2 else None for gg in terms]
-    _inverse_free_update_(
-        matmuled, terms, oq, G.numel(), lb, running_lower_bound, lower_bount_beta, precond_lr, store_triu_as_line
-    )
+    _inverse_free_update_(matmuled, terms, oq, G.numel(), lb, running_lower_bound, lower_bount_beta, precond_lr)
+    return G
 
 
 @decorator_knowngood

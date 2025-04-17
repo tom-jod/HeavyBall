@@ -607,7 +607,7 @@ def scale_by_soap(group, update, grad, param, exp_avg, exp_avg_sq, Q, GG, inner:
 
 def _update_psgd_precond(
     cached, Q_cache, group, param, grad, Q, velocity, running_lower_bound, prob: Optional[callable] = None
-):
+) -> Optional[Tensor]:
     if prob is None:
         prob = utils.precond_update_prob_schedule()
 
@@ -623,7 +623,7 @@ def _update_psgd_precond(
     else:
         vector, hessian_vector = utils.dampen_grad(grad, group["dampening"])
 
-    (utils.inverse_free_psgd_update_precond if vector is None else utils.psgd_update_precond)(
+    precond = (utils.inverse_free_psgd_update_precond if vector is None else utils.psgd_update_precond)(
         hessian_vector,
         group["precond_lr"],
         Q,
@@ -644,14 +644,17 @@ def _update_psgd_precond(
         float_prob = prob(group.get(f"cumulative_prob_{id(Q)}_prob_step", 1))
     group["is_cached"] = should_use_cache = cached and float_prob < 0.5
 
+    if precond is not None:
+        return precond
     if not should_use_cache or not cached:
-        return  # caching adds extra ops and is not worth the overhead when we precondition at every step
+        return None  # caching adds extra ops and is not worth the overhead when we precondition at every step
 
     for c_, q_ in zip(Q_cache, utils.line_to_triu(Q) if group["store_triu_as_line"] else Q):
         if q_.ndim == 2:
             torch.matmul(q_.T, q_, out=c_)
         else:
             torch.mul(q_, q_, out=c_)
+    return None
 
 
 def _cached_psgd_precond_grad(group, update, Q, Q_cache, grad):
@@ -769,9 +772,12 @@ def scale_by_delayed_psgd(
     cached: bool = False,
     prob: Optional[callable] = None,
 ):
-    precond = _cached_psgd_precond_grad(group, update, Q, Q_cache, grad)
-    _update_psgd_precond(cached, Q_cache, group, param, update_to_precond, Q, velocity, running_lower_bound, prob)
-    return precond
+    if group.get("inverse_free", False):
+        precond = None
+    else:
+        precond = _cached_psgd_precond_grad(group, update, Q, Q_cache, grad)
+    new = _update_psgd_precond(cached, Q_cache, group, param, update_to_precond, Q, velocity, running_lower_bound, prob)
+    return new if precond is None else precond
 
 
 @PrecondGradAccumGuard
