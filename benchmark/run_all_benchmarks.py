@@ -178,6 +178,7 @@ def worker(task_queue, result_queue, worker_index, difficulties: list, timeout: 
     torch.set_num_threads(1)
     os.environ["OMP_NUM_THREADS"] = "1"
     os.environ["MKL_NUM_THREADS"] = "1"
+    os.environ["HEAVYBALL_BENCHMARK_TIMEOUT"] = str(round(timeout))
 
     # Initialize CUDA context
     dummy = torch.zeros(1, device="cuda")

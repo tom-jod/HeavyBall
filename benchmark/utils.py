@@ -2,6 +2,7 @@ import copy
 import functools
 import gc
 import inspect
+import os
 import random
 import sys
 import time
@@ -250,6 +251,7 @@ class Objective:
         loss_fn,
         win_condition,
         weight_decay,
+        warmup_trials,
         ema_index: int = 0,
         **kwargs,
     ):
@@ -265,6 +267,7 @@ class Objective:
         self.loss_fn = loss_fn
         self.win_condition = win_condition
         self.weight_decay = weight_decay
+        self.warmup_trials = int(warmup_trials)
         self.kwargs = kwargs
         self.ema_index = ema_index
 
@@ -291,6 +294,7 @@ class Objective:
         self.avg = None
         self.use_cudnn = True
         self.set_precond_init_scale = False
+        self.end_time = int(os.environ.get("HEAVYBALL_BENCHMARK_TIMEOUT", 3600 * 4)) + time.time()
 
     def _inner(self, params):
         input_kwargs = locals()
@@ -353,7 +357,9 @@ class Objective:
             self.best_loss = loss
             self.best_at = self.attempt
             self.avg = np.log(np.array(params))
-        if self.best_at * 8 < self.attempt and self.attempt - self.best_at > 64:  # no improvement in a while
+        if self.best_at * 8 < self.attempt and self.attempt - self.best_at > self.warmup_trials:  # no improvements
+            raise Stop
+        if time.time() > self.end_time:  # timeout
             raise Stop
         return target
 
@@ -411,6 +417,7 @@ def trial(
     group=64,
     base_lr: float = 1e-3,
     return_best: bool = False,
+    warmup_trial_pct: int = 0.2,
 ):
     group = min(group, steps)
     heavyball.utils.set_torch()
@@ -476,7 +483,7 @@ def trial(
         loss_fn,
         _win_condition,
         weight_decay,
-        **kwargs,
+        trials * warmup_trial_pct**kwargs,
     )
     start_time = time.time()
     stdout, sys.stdout = sys.stdout, sys.stderr
