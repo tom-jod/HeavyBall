@@ -21,7 +21,8 @@ from torch.utils._pytree import tree_map
 compile_mode = "max-autotune-no-cudagraphs"
 dynamic = False
 compile_mode_recommended_to_none = None
-zeroth_power_mode = "qr"  # 'qr' is baseline, 'newtonschulz' converges better and faster
+zeroth_power_mode = "newtonschulz"
+precise_zeroth_power_mode = "qr"  # or svd
 tiny_bf16 = torch.finfo(torch.bfloat16).tiny
 _cudnn_double_backward_pattern = re.compile(
     r"the derivative for .* is not implemented\. Double backwards .* To run double backwards"
@@ -356,15 +357,6 @@ def zeropower_via_newtonschulz5(G, steps=5, eps=1e-7):
     return X.to(G.dtype)
 
 
-def ortho(x):
-    if zeroth_power_mode == "qr":
-        return torch.linalg.qr(x).Q
-    if zeroth_power_mode == "svd":
-        u, _s, v = torch.linalg.svd(x)
-        return u @ v.T
-    raise NotImplementedError(f"Unknown zeroth_power_mode: {zeroth_power_mode}")
-
-
 @decorator_knowngood
 def _compilable_heavyball_momentum_(state, grad, beta):
     s32, g32 = [list(map(promote, x)) for x in (state, grad)]
@@ -417,7 +409,7 @@ def _compilable_grafting(magnitude, direction):
 
 
 @decorator_knowngood
-def inplace_orthogonal_(x: Tensor, mode: str, out: Tensor, scale_mode: str):
+def _compilable_orthogonal_(x: Tensor, mode: str, out: Tensor | None, scale_mode: str):
     if mode == "newtonschulz" or x.shape[0] != x.shape[1]:
         y = zeropower_via_newtonschulz5(x, 5)
     elif mode == "qr":
@@ -435,7 +427,14 @@ def inplace_orthogonal_(x: Tensor, mode: str, out: Tensor, scale_mode: str):
         y = _compilable_grafting(x, y)
     else:
         raise NotImplementedError(f"Unknown scale_mode: {scale_mode}")
+    if out is None:
+        return y
+
     set_(out, y)
+
+
+def inplace_orthogonal_(x: Tensor, mode: str | None = None, out: Tensor | None = None, scale_mode: str = "none"):
+    return _compilable_orthogonal_(x, mode or zeroth_power_mode, out, scale_mode)
 
 
 @decorator_knowngood
@@ -477,7 +476,7 @@ def get_orthogonal_matrix_QR(GG: List[Tensor], Q: List[Tensor], exp_avg: Optiona
         est_eig = torch.einsum("ij,ij->j", q_old, tmp)
         sort_idx = torch.argsort(est_eig, descending=True)
 
-        tmp[:, sort_idx], _ = torch.linalg.qr(tmp[:, sort_idx])
+        tmp[:, sort_idx], _ = inplace_orthogonal_(tmp[:, sort_idx], precise_zeroth_power_mode)
         new_qs.append(tmp)
 
     if exp_avg is None:
@@ -1880,11 +1879,11 @@ def _random_projection(x: Tensor, scale: Optional[Tensor]):
     return x.index_select(1, indices).contiguous() / scale, scale
 
 
-def _max_singular_value_exact(A, use_lobpcg: bool = False):
+def max_singular_value_exact(A, use_lobpcg: bool = False):
     try:
         if use_lobpcg:
-            A = torch.einsum("ij,kj->ik", A, A)
-            eigval, _ = torch.lobpcg(A, k=1, largest=True)
+            A = A @ A.T
+            eigval, _ = torch.compiler.disable(torch.lobpcg)(A, k=1, largest=True)
             return eigval[0].sqrt()
         else:
             return torch.linalg.svd(A, driver="gesvdj")[1].max()  # == linalg.matrix_norm(A, ord=2)
@@ -1913,11 +1912,11 @@ def max_singular_value_cholesky(A: Tensor, max_abs: Optional[Tensor] = None):
     Adapted from @evanatyourservice
     """
     Y, max_abs = _random_projection(A, max_abs)
-    Q, _ = torch.linalg.qr(Y)
+    Q = inplace_orthogonal_(Y, precise_zeroth_power_mode)
     Q = Q / max_abs
     Z = A.T @ Q
-    W, _ = torch.linalg.qr(Z)
-    sketch_norm = _max_singular_value_exact(Z.T @ W)
+    W = inplace_orthogonal_(Z, precise_zeroth_power_mode)
+    sketch_norm = max_singular_value_exact(Z.T @ W)
     return sketch_norm * max_abs
 
 
@@ -1926,7 +1925,7 @@ def max_singular_value(
     A: Tensor, max_abs: Optional[Tensor], max_svd: int = 32, use_cholesky: bool = False, power_iter: int = 0
 ) -> Tensor:
     if min(A.shape) <= max_svd:
-        return _max_singular_value_exact(A)  # SVD needs ~25% more runtime for size=32, but 0% error instead of 5%
+        return max_singular_value_exact(A)  # SVD needs ~25% more runtime for size=32, but 0% error instead of 5%
     if use_cholesky or power_iter < 0:
         return max_singular_value_cholesky(A, max_abs)
     return max_singular_value_power_iter(A, None, iterations=power_iter)

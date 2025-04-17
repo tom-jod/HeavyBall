@@ -500,7 +500,7 @@ def orthogonalize_update(group, update, grad, param, scale_mode: str = "scale"):
     original_shape = update.shape
     # doing it this way, as tmp and update are not guaranteed to share memory address or layout
     tmp = update.flatten(1, -1)
-    utils.inplace_orthogonal_(tmp, utils.zeroth_power_mode, tmp, scale_mode)
+    utils.inplace_orthogonal_(tmp, out=tmp, scale_mode=scale_mode)
     return tmp.reshape(original_shape)
 
 

@@ -483,7 +483,8 @@ def trial(
         loss_fn,
         _win_condition,
         weight_decay,
-        trials * warmup_trial_pct**kwargs,
+        trials * warmup_trial_pct,
+        **kwargs,
     )
     start_time = time.time()
     stdout, sys.stdout = sys.stdout, sys.stderr
