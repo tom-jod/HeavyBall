@@ -835,6 +835,7 @@ class StatefulOptimizer(torch.optim.Optimizer):
 
         self.register_state_dict_post_hook(StatefulOptimizer._store_stats)
         self.register_load_state_dict_pre_hook(StatefulOptimizer._load_stats)
+        self._init_mapping()
 
     def _store_stats(self, state_dict: dict[str, any]):
         state_dict["heavyball"] = {
@@ -861,7 +862,10 @@ class StatefulOptimizer(torch.optim.Optimizer):
     def get_groups(self, group):
         return [group]
 
-    def state_(self, arg: Tensor):
+    @functools.lru_cache(maxsize=None)
+    def state_(self, arg: Tensor, fail: bool = True):
+        if not fail and arg not in self.mapping:
+            return {}
         state_param, index = self.mapping_inverse[arg]
         if state_param not in self.state:
             self.state[state_param] = collections.defaultdict(dict)
@@ -874,6 +878,18 @@ class StatefulOptimizer(torch.optim.Optimizer):
                 state["mars_old_grad"] = torch.zeros_like(g)
         old_gs = [self.state_(p)["mars_old_grad"] for p in p_list]
         mars_correction(g_list, old_gs, mars_gamma, beta)
+
+    def _init_mapping(self, group: dict | None = None):
+        if group is None:
+            for group in self.param_groups:
+                self._init_mapping(group)
+            return
+
+        for p in group["params"]:
+            if p not in self.mapping:
+                self.mapping[p] = p_views = merge_group(group, p)
+                for i, pv in enumerate(p_views):
+                    self.mapping_inverse[pv] = (p, i)
 
     def split_p_and_g_in_group(
         self,
@@ -1105,8 +1121,6 @@ class StatefulOptimizer(torch.optim.Optimizer):
                         for key in ("grad", "vector", "hessian_vector", "orig"):
                             if hasattr(tensor, key):
                                 setattr(tensor, key, None)
-                self.mapping.clear()
-                self.mapping_inverse.clear()
         return loss
 
 
