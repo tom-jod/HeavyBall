@@ -320,7 +320,7 @@ def clean():
 
 
 def _ignore_warning(msg):
-    warnings.filterwarnings("ignore", f".*{msg}.*")
+    warnings.filterwarnings("ignore", f".*{re.escape(msg)}.*")
 
 
 def set_torch(benchmark_limit: int = 32, einsum_strategy: str = "auto"):
@@ -337,6 +337,9 @@ def set_torch(benchmark_limit: int = 32, einsum_strategy: str = "auto"):
     )
     _ignore_warning(
         "We recommend using autograd.grad when creating the graph to avoid this. If you have to use this function, make sure to reset the .grad fields of your parameters to None after use to break the cycle and avoid the leak"
+    )
+    _ignore_warning(
+        "The .grad attribute of a Tensor that is not a leaf Tensor is being accessed. Its .grad attribute won't be populated during autograd.backward(). If you indeed want the .grad field to be populated for a non-leaf Tensor, use .retain_grad() on the non-leaf Tensor. If you access the non-leaf Tensor by mistake, make sure you access the leaf Tensor instead."
     )
 
 

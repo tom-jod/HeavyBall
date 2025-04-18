@@ -356,6 +356,7 @@ class ForeachSOAP(C.BaseOpt):
         update_clipping: C.str_or_fn = C.use_default,
         storage_dtype: str = "float32",
         stochastic_schedule: bool = False,
+        precond_grad_accum: bool = False,
         **kwargs,
     ):
         use_precond_schedule = C.default(use_precond_schedule, self.use_precond_schedule)

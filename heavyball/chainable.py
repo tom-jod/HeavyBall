@@ -41,7 +41,7 @@ class FunctionTransform:
         self.fn = fn
         self.fn_name = self.get_fn().__name__
         self.transform_idx = None
-        self.is_first_step = False
+        self.is_initialized = False
         self.names = names
 
     def _init(self, state, group, update, grad, param, *args, **kwargs):
@@ -51,9 +51,13 @@ class FunctionTransform:
         raise NotImplementedError
 
     def __call__(self, state, group, update, grad, param, *args, **kwargs):
-        if not self.is_first_step:
-            self._init(state, group, update, grad, param, *args, **kwargs)
-            self.is_first_step = True
+        if not self.is_initialized:
+            try:
+                self._init(state, group, update, grad, param, *args, **kwargs)
+            except:
+                raise
+            finally:
+                self.is_initialized = True
         states = [state(p) for p in param]
         vars = [[st.get(self.val_name(name), None) for st in states] for name in self.names]
         return self._call(state, group, update, grad, param, vars, *args, **kwargs)
@@ -99,15 +103,17 @@ class ZeroGuard(FunctionTransform):
 class PrecondGradAccumGuard(FunctionTransform):
     def __init__(self, fn):
         super().__init__(fn, ["precond_grad_accum"])
-        self.latest_precond = 0
-        self.has_data = False
+        self.steps_taken = 0
         self.pass_through = None
 
     def _accum(self, state, new):
+        self.steps_taken += 1
         utils.stochastic_add_(state, new)
 
     def _reset(self, state):
-        utils.zero_(state)
+        if self.steps_taken == 0:
+            self.steps_taken = 0
+            utils.zero_(state)
 
     def _init(self, state, group, update, grad, param, *args, **kwargs):
         self.pass_through = not group.get("precond_grad_accum", False)
@@ -120,23 +126,20 @@ class PrecondGradAccumGuard(FunctionTransform):
         if self.pass_through:
             return self.fn(state, group, update, grad, param, *args, base_grad, **kwargs)
 
-        flat_state = self._guard(state, "precond_grad_accum", _storage_dtype(group), param, _zero_guard)
-        if group["is_preconditioning"] and group["step"] - self.latest_precond > 1:
-            self.has_data = True
-            self._accum(flat_state, base_grad)
-            utils.stochastic_multiply_(flat_state, 1 / (group["step"] - self.latest_precond))
+        if group["is_preconditioning"]:
+            if self.steps_taken:
+                self._accum(vars, base_grad)
+                utils.stochastic_multiply_(vars, 1 / self.steps_taken)
+            else:
+                vars = base_grad
         else:
-            if not group["is_preconditioning"]:
-                self.has_data = True
-                self._accum(flat_state, base_grad)
-            flat_state = base_grad
+            self._accum(vars, base_grad)
+            vars = base_grad
         try:
-            out = self.fn(state, group, update, grad, param, *args, flat_state, **kwargs)
+            out = self.fn(state, group, update, grad, param, *args, vars, **kwargs)
         finally:
             if group["is_preconditioning"]:
-                self.latest_precond = group["step"]
-                if self.has_data:
-                    self._reset(flat_state)
+                self._reset(vars)
 
         return out
 
@@ -574,9 +577,8 @@ _optim_fns = {"adam": utils.adam_, "laprop": utils.laprop_}
 
 @zero_guard("exp_avg", "exp_avg_sq")
 @general_guard("Q", "GG", init_fn=_init_soap)
-@PrecondGradAccumGuard
 @no_state
-def scale_by_soap(group, update, grad, param, exp_avg, exp_avg_sq, Q, GG, precond_grad, inner: str = "adam"):
+def scale_by_soap(group, update, grad, param, exp_avg, exp_avg_sq, Q, GG, inner: str = "adam"):
     grad_projected = [utils.project(utils.promote(u), q, False) for u, q in zip(update, Q)]
     fn = _optim_fns[inner]
     precond = fn(
@@ -590,7 +592,7 @@ def scale_by_soap(group, update, grad, param, exp_avg, exp_avg_sq, Q, GG, precon
     )
     precond = [utils.project(p, q, True) for p, q in zip(precond, Q)]
 
-    for u, q, gg, ea in zip(precond_grad, Q, GG, exp_avg):
+    for u, q, gg, ea in zip(update, Q, GG, exp_avg):
         utils.update_preconditioner(
             utils.promote(u),
             q,
