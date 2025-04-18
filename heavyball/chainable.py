@@ -44,27 +44,31 @@ class FunctionTransform:
         self.is_initialized = False
         self.names = names
 
-    def _init(self, state, group, update, grad, param, *args, **kwargs):
+    def _init(self, state: dict, group: dict, update: Tensor, grad: Tensor, param: Tensor, *args, **kwargs):
         raise NotImplementedError
 
     def _call(self, state, group, update, grad, param, vars, *args, **kwargs):
         raise NotImplementedError
 
     def __call__(self, state, group, update, grad, param, *args, **kwargs):
-        if not self.is_initialized:
-            try:
-                self._init(state, group, update, grad, param, *args, **kwargs)
-            except:
-                raise
-            finally:
-                self.is_initialized = True
         states = [state(p) for p in param]
+        skip_update = False
+        for st, a in zip(states, zip(update, grad, param, *args)):
+            if self.transform_idx not in st.get("is_initialized", set()):
+                try:
+                    self._init(st, group, *a, **kwargs)
+                except SkipUpdate:
+                    skip_update = True
+                except:
+                    raise
+                finally:
+                    if "is_initialized" not in st:
+                        st["is_initialized"] = set()
+                    st["is_initialized"].add(self.transform_idx)
+        if skip_update:
+            raise SkipUpdate from None
         vars = [[st.get(self.val_name(name), None) for st in states] for name in self.names]
         return self._call(state, group, update, grad, param, vars, *args, **kwargs)
-
-    def _guard(self, state, name, dtype, param, template_fn):
-        name = self.val_name(name)
-        return [template_fn(state(p), name, p, dtype) for p in param]
 
     def get_fn(self):
         if utils.hasattr_none(self.fn, "get_fn"):
@@ -92,9 +96,9 @@ class ZeroGuard(FunctionTransform):
     def __init__(self, fn, names):
         super().__init__(fn, names)
 
-    def _init(self, state, group, update, grad, param, *args, **kwargs):
+    def _init(self, state: dict, group: dict, update: Tensor, grad: Tensor, param: Tensor, *args, **kwargs):
         for name in self.names:
-            self._guard(state, name, _storage_dtype(group), param, _zero_guard)
+            _zero_guard(state, self.val_name(name), param, _storage_dtype(group))
 
     def _call(self, state, group, update, grad, param, vars, *args, **kwargs):
         return self.fn(state, group, update, grad, param, *args, *vars, **kwargs)
@@ -115,11 +119,12 @@ class PrecondGradAccumGuard(FunctionTransform):
             self.steps_taken = 0
             utils.zero_(state)
 
-    def _init(self, state, group, update, grad, param, *args, **kwargs):
-        self.pass_through = not group.get("precond_grad_accum", False)
-        if not self.pass_through:
+    def _init(self, state: dict, group: dict, update: Tensor, grad: Tensor, param: Tensor, *args, **kwargs):
+        if self.pass_through is None:
+            self.pass_through = not group.get("precond_grad_accum", False)
+        if self.pass_through is False:
             for name in self.names:
-                self._guard(state, name, _storage_dtype(group), param, _zero_guard)
+                _zero_guard(state, self.val_name(name), param, _storage_dtype(group))
 
     def _call(self, state, group, update, grad, param, vars, *args, **kwargs):
         base_grad = update if group.get("momentum_into_precond_update", True) else grad
@@ -149,11 +154,10 @@ class CopyGuard(FunctionTransform):
         super().__init__(fn, names)
         self.index = index
 
-    def _init(self, state, group, update, grad, param, *args, **kwargs):
+    def _init(self, state: dict, group: dict, update: Tensor, grad: Tensor, param: Tensor, *args, **kwargs):
         val = [update, grad, param, *args][self.index]
         for name in self.names:
-            for p, v in zip(param, val):
-                _guard_in_state(state(p), self.val_name(name), lambda: torch.clone(v))
+            state[self.val_name(name)] = torch.clone(val)
 
     def _call(self, state, group, update, grad, param, vars, *args, **kwargs):
         return self.fn(state, group, update, grad, param, *args, *vars, **kwargs)
@@ -176,12 +180,10 @@ class GeneralGuard(FunctionTransform):
                 if name in state:
                     state[mapped] = state.pop(name)
 
-    def _init(self, state, group, update, grad, param, *args, **kwargs):
-        for u, g, p in zip(update, grad, param):
-            st = state(p)
-            self.init_fn(st, group, u, g, p, **kwargs)
-            for name in self.names:
-                st[self.val_name(name)] = st.pop(name, None)
+    def _init(self, state: dict, group: dict, update: Tensor, grad: Tensor, param: Tensor, *args, **kwargs):
+        self.init_fn(state, group, update, grad, param, **kwargs)
+        for name in self.names:
+            state[self.val_name(name)] = state.pop(name, None)
         if self.skip_first:
             raise SkipUpdate from None
 

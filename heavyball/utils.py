@@ -479,7 +479,7 @@ def get_orthogonal_matrix_QR(GG: List[Tensor], Q: List[Tensor], exp_avg: Optiona
         est_eig = torch.einsum("ij,ij->j", q_old, tmp)
         sort_idx = torch.argsort(est_eig, descending=True)
 
-        tmp[:, sort_idx], _ = inplace_orthogonal_(tmp[:, sort_idx], precise_zeroth_power_mode)
+        tmp[:, sort_idx] = inplace_orthogonal_(tmp[:, sort_idx], precise_zeroth_power_mode)
         new_qs.append(tmp)
 
     if exp_avg is None:
