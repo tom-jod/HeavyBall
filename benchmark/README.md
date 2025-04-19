@@ -1,30 +1,16 @@
 # HeavyBall - Benchmark
 
-This test suite is meant to have fast execution, with each test case covering different optimization properties.
+### Getting Started
+```BASH
+# Install dependencies (`--use-deprecated=legacy-resolver` is required to install the latest BoTorch)
+python3 -m pip install -r benchmark/requirements.txt --use-deprecated=legacy-resolver
 
-## Categories
+# Small test run
+python3 -m benchmark.beale --opt AdamW --steps 1000
 
-Each test is tagged with categories describing specific optimization challenges:
-
-- **Gradient Properties**
-  - Magnitude: Exploding/vanishing gradients
-  - Quality: Weak/noisy/sparse/delayed signals
-  - Direction: Adversarial/misleading patterns
-
-- **Landscape Navigation**
-  - Topology: Valleys, plateaus, saddle points
-  - Complexity: Multimodality, nonconvexity
-  - Dynamics: Moving targets, shifting optima
-
-- **Numerical Challenges**
-  - Conditioning: Ill-conditioned problems
-  - Scaling: Parameter scale variations
-  - Stability: Numerical overflow/underflow
-
-- **Learning Dynamics**
-  - Memory: Long-term dependencies
-  - Interaction: Multiplicative effects
-  - Compression: Information bottlenecks
+# Reproduce the full benchmark
+python3 -m benchmark.run_all_benchmarks --opt ForeachSOAP --opt LaProp --opt AdamW --opt Muon --opt ForeachCachedNewtonPSGD  --opt RMSprop --opt OrthoLaProp --opt ForeachSFAdamW --opt ForeachADOPT --opt LaPropOrtho --opt CachedPSGDKron --opt SignLaProp --opt ForeachSOLP --opt PSGDLRA --opt NewtonPSGDLRA --opt NewtonHybrid2PSGDKron --opt NewtonHybrid2PSGDLRA --opt mars-NewtonHybrid2PSGDLRA --opt MSAMLaProp --opt mars-adaptive-NewtonHybrid2PSGDKron  --opt mars-ortho-NewtonHybrid2PSGDKron --opt MuonLaProp --opt mars-unscaled-NewtonHybrid2PSGDKron --opt mars-NewtonHybrid2PSGDKron --opt cautious-AdamW --opt unscaled_cautious-AdamW --opt mars-AdamW  --dtype float32 --steps 1000000 --trials 1000 --parallelism 256 --seeds 1 --difficulties trivial --difficulties easy --difficulties medium --difficulties hard --difficulties extreme --difficulties nightmare --timeout 2880
+```
 
 ### Benchmark Tests
 
