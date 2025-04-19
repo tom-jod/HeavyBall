@@ -179,7 +179,7 @@ def worker(task_queue, result_queue, worker_index, difficulties: list, timeout: 
 
     from benchmark.utils import SkipConfig
 
-    os.environ["CUDA_VISIBLE_DEVICES"] = str(worker_index % torch.cuda.device_count())
+    torch.cuda.set_device(worker_index % torch.cuda.device_count())
     torch.set_num_threads(1)
     os.environ["OMP_NUM_THREADS"] = "1"
     os.environ["MKL_NUM_THREADS"] = "1"
