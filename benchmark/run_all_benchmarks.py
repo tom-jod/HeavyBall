@@ -9,10 +9,7 @@ from datetime import datetime
 from queue import Empty
 
 import numpy as np
-import torch
 import typer
-
-from benchmark.utils import SkipConfig
 
 app = typer.Typer()
 
@@ -40,6 +37,10 @@ def run_benchmark(script, opt, steps, dtype, trials, seed, difficulty):
     import pathlib
     import sys
     import time
+
+    import torch
+
+    from benchmark.utils import SkipConfig
 
     sys.path.append(str(pathlib.Path(__file__).parent.resolve()))
     stdout = sys.stdout
@@ -75,7 +76,7 @@ def run_benchmark(script, opt, steps, dtype, trials, seed, difficulty):
         # Run the main function
         module.main(**arguments)
     except SkipConfig:
-        raise SkipConfig
+        raise
     except Exception:
         output = sys.stdout.getvalue()
         error = traceback.format_exc()
@@ -174,6 +175,10 @@ _difficulty_order = ["trivial", "easy", "medium", "hard", "extreme", "nightmare"
 
 
 def worker(task_queue, result_queue, worker_index, difficulties: list, timeout: int):
+    import torch
+
+    from benchmark.utils import SkipConfig
+
     os.environ["CUDA_VISIBLE_DEVICES"] = str(worker_index % torch.cuda.device_count())
     torch.set_num_threads(1)
     os.environ["OMP_NUM_THREADS"] = "1"
