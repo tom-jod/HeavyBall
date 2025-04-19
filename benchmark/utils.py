@@ -7,9 +7,7 @@ import random
 import sys
 import time
 import warnings
-from typing import Union
 
-import hyperopt
 import numpy as np
 import optuna
 import torch
@@ -382,9 +380,7 @@ class Objective:
 
 
 def loss_win_condition(target):
-    def win(_model, loss: Union[float, hyperopt.Trials]):
-        if not isinstance(loss, (float, torch.Tensor)):
-            loss = loss.results[-1]["loss"]
+    def win(_model, loss: float):
         return loss <= target, {}
 
     return win
