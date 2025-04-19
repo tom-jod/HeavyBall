@@ -2531,7 +2531,7 @@ def caution(g, update):
 
 
 def _inner_precond_update_prob_schedule(
-    n: int, max_prob: float = 1.0, min_prob: float = 0.03, decay: float = 0.999, flat_start: float = 1000
+    n: int, max_prob: float = 1.0, min_prob: float = 0.03, decay: float = 0.999, flat_start: float = 0
 ):
     return max(min_prob, max_prob * decay ** max(n - flat_start, 0))
 

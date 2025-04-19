@@ -478,6 +478,8 @@ def trial(
 
     heavyball.utils._ignore_warning("logei_candidates_func is experimental")
     heavyball.utils._ignore_warning("BoTorchSampler is experimental")
+    heavyball.utils._ignore_warning("It will be set to log2(param_count). This requires `params` to be of type list.")
+    heavyball.utils._ignore_warning("rank was set to")
     heavyball.utils.zeroth_power_mode = method
 
     cleanup()

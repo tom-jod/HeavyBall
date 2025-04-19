@@ -131,6 +131,7 @@ class PrecondGradAccumGuard(FunctionTransform):
         if self.pass_through:
             return self.fn(state, group, update, grad, param, *args, base_grad, **kwargs)
 
+        (vars,) = vars
         if group["is_preconditioning"]:
             if self.steps_taken:
                 self._accum(vars, base_grad)
