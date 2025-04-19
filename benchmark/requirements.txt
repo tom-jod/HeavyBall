@@ -8,3 +8,4 @@ threadpoolctl>=3.6.0
 scipy>=1.15.2
 scikit-learn>=1.6.1
 numexpr>=2.10.2
+linear-operator>=0.6
