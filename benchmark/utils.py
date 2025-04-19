@@ -477,6 +477,7 @@ def trial(
         return
 
     heavyball.utils._ignore_warning("logei_candidates_func is experimental")
+    heavyball.utils._ignore_warning("BoTorchSampler is experimental")
     heavyball.utils.zeroth_power_mode = method
 
     cleanup()
