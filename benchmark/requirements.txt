@@ -1,4 +1,10 @@
-git+https://github.com/qq-me/image-descent@09f19fc7c40778b21e973653acbbdcd2147ce8cf
-hyperopt
 lightgbm
-scikit-learn
+optuna>=4.3.0
+gpytorch>=1.14
+botorch>=0.13.0
+optuna-integration[botorch]
+optuna-integration>=4.3.0
+threadpoolctl>=3.6.0
+scipy>=1.15.2
+scikit-learn>=1.6.1
+numexpr>=2.10.2

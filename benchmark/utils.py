@@ -11,7 +11,9 @@ from typing import Union
 
 import hyperopt
 import numpy as np
+import optuna
 import torch
+from optuna_integration import BoTorchSampler
 from torch import nn
 from torch._dynamo import config
 
@@ -32,7 +34,7 @@ base_args = {
     "beta": 0.9,
     "max_size_triangular": 2**16,
     "split": False,
-    "precond_grad_accum": False,
+    "precond_grad_accum": True,
     "momentum_into_precond_update": True,
     "eps": 1e-8,
     "weight_decay": 0,
@@ -160,6 +162,10 @@ class SkipConfig(ValueError):
     pass
 
 
+class WinConditionMet(ValueError):
+    pass
+
+
 class Plotter(nn.Module):
     def __init__(
         self,
@@ -265,7 +271,7 @@ class Objective:
         self.group = group
         self.data = data
         self.loss_fn = loss_fn
-        self.win_condition = win_condition
+        self._win_condition = win_condition
         self.weight_decay = weight_decay
         self.warmup_trials = int(warmup_trials)
         self.kwargs = kwargs
@@ -295,6 +301,12 @@ class Objective:
         self.use_cudnn = True
         self.set_precond_init_scale = False
         self.end_time = int(os.environ.get("HEAVYBALL_BENCHMARK_TIMEOUT", 3600 * 4)) + time.time()
+        self._last_loss = None
+
+    def win_condition(self, loss=None):
+        if loss is not None:
+            self._last_loss = loss
+        return self._win_condition(self.m, self._last_loss)[0]
 
     def _inner(self, params):
         input_kwargs = locals()
@@ -345,7 +357,7 @@ class Objective:
             with torch.no_grad():
                 for loss in torch_hist:
                     loss_cpu = loss.item()
-                    if not np.isfinite(loss_cpu) or self.win_condition(self.m, loss_cpu)[0]:
+                    if not np.isfinite(loss_cpu) or self.win_condition(loss_cpu):
                         return validator.ema_states.min().item(), self.m, loss_cpu
                     if validator(loss).item():
                         return validator.ema_states.min().item(), self.m, loss_cpu
@@ -399,6 +411,23 @@ def param0_win_condition(target):
     return win
 
 
+def set_seed(seed: int = 0x1239121):
+    torch.manual_seed(seed)
+    np.random.seed(seed)
+    random.seed(seed)
+
+
+def cleanup():
+    gc.enable()
+    gc.collect()
+    gc.disable()
+    with torch.cuda.device("cuda"):
+        torch.cuda.empty_cache()
+        torch.cuda.synchronize()
+        torch.cuda.empty_cache()
+        torch.cuda.synchronize()
+
+
 def trial(
     model,
     data,
@@ -419,6 +448,7 @@ def trial(
     base_lr: float = 1e-3,
     return_best: bool = False,
     warmup_trial_pct: int = 0.2,
+    random_trials: int = 10,
 ):
     group = min(group, steps)
     heavyball.utils.set_torch()
@@ -450,21 +480,11 @@ def trial(
     if "soap" not in opt.__name__.lower() and method != "qr":
         return
 
+    heavyball.utils._ignore_warning("logei_candidates_func is experimental")
     heavyball.utils.zeroth_power_mode = method
 
-    torch.cuda.empty_cache()
-    gc.enable()
-    gc.collect()
-    gc.disable()
-    with torch.cuda.device("cuda"):
-        torch.cuda.empty_cache()
-        torch.cuda.synchronize()
-        torch.cuda.empty_cache()
-        torch.cuda.synchronize()
-
-    torch.manual_seed(0x1239121)
-    np.random.seed(0x1239122)
-    random.seed(0x1239123)
+    cleanup()
+    set_seed()
 
     did_win = False
 
@@ -484,40 +504,54 @@ def trial(
         loss_fn,
         _win_condition,
         weight_decay,
-        trials * warmup_trial_pct,
+        max(trials * warmup_trial_pct, 1 + random_trials),
         **kwargs,
     )
+
+    torch.cuda.synchronize()
     start_time = time.time()
     stdout, sys.stdout = sys.stdout, sys.stderr
+
+    set_seed()
     try:
-        # LR=1000 seems way too high, but some problems get solved in one step with it, so it'd be unfair to exclude it
-        out = hyperopt.fmin(
-            obj.objective,
-            (
-                hyperopt.hp.loguniform("lr", np.log(1e-7), np.log(10)),  #
-                hyperopt.hp.loguniform("1mbeta1", np.log(1e-3), np.log(1)),  #
-                hyperopt.hp.loguniform("1mbeta2", np.log(1e-5), np.log(1)),  #
-                hyperopt.hp.loguniform("1mshampoo_beta", np.log(1e-4), np.log(1)),
-            ),  #
-            max_evals=trials,
-            algo=hyperopt.atpe.suggest,
-            early_stop_fn=lambda x, *a, **k: _win_condition(obj.m, x),
-            return_argmin=True,
-            show_progressbar=True,
-        )
-    except Stop:
-        out = {"lr": 0, "1mbeta1": 0, "1mbeta2": 0, "1mshampoo_beta": 0}
+        sampler = BoTorchSampler(seed=0x123125, n_startup_trials=random_trials)
+        study = optuna.create_study(direction="minimize", sampler=sampler)
+        winning_params = {}
+
+        def _optuna_objective(trial):
+            lr = trial.suggest_float("lr", 1e-7, 10, log=True)
+            one_minus_beta1 = trial.suggest_float("1mbeta1", 1e-3, 1, log=True)
+            one_minus_beta2 = trial.suggest_float("1mbeta2", 1e-5, 1, log=True)
+            one_minus_shampoo_beta = trial.suggest_float("1mshampoo_beta", 1e-4, 1, log=True)
+            out = obj.objective((lr, one_minus_beta1, one_minus_beta2, one_minus_shampoo_beta))
+            if obj.win_condition():
+                winning_params.update({
+                    "lr": lr,
+                    "1mbeta1": one_minus_beta1,
+                    "1mbeta2": one_minus_beta2,
+                    "1mshampoo_beta": one_minus_shampoo_beta,
+                })
+                raise WinConditionMet
+            return out
+
+        set_seed()
+        try:
+            study.optimize(_optuna_objective, n_trials=trials)
+        except WinConditionMet:
+            pass
     finally:
         sys.stdout = stdout
     torch.cuda.synchronize()
 
     end_time = time.time()
-    if did_win:
+    if winning_params:
         print("Successfully found the minimum.")
+    else:
+        winning_params = {"lr": base_lr, "1mbeta1": 0.9, "1mbeta2": 0.999, "1mshampoo_beta": 0.999}
     print(
         f"Took: {end_time - start_time} | Attempt: {obj.attempt} | "  #
-        f"{opt.__name__}(lr={out['lr']:.5f}, betas=({1 - out['1mbeta1']:.3f}, {1 - out['1mbeta2']:.4f}), "  #
-        f"shampoo_beta={1 - out['1mshampoo_beta']:.3f}) | Best Loss: {obj.best_loss}"
+        f"{opt.__name__}(lr={winning_params['lr']:.5f}, betas=({1 - winning_params['1mbeta1']:.3f}, {1 - winning_params['1mbeta2']:.4f}), "  #
+        f"shampoo_beta={1 - winning_params['1mshampoo_beta']:.3f}) | Best Loss: {obj.best_loss}"
     )
     if return_best:
         return obj.get_best()
