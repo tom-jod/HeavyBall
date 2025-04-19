@@ -238,7 +238,7 @@ class ForeachMuon(C.BaseOpt):
             gradient_clipping,
             update_clipping,
             palm,
-            C.nesterov_momentum if nesterov else C.heavyball_momentum,
+            C.nesterov_ema if nesterov else C.exp_avg,
             C.orthogonalize_update,
         )
 
