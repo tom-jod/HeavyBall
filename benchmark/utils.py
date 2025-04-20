@@ -11,12 +11,12 @@ import warnings
 import numpy as np
 import optuna
 import torch
-from optuna_integration import BoTorchSampler
 from torch import nn
 from torch._dynamo import config
 
 import heavyball.utils
 from heavyball import chainable as C
+from heavyball.helpers import BoTorchSampler
 from heavyball.utils import PrecondInitError
 
 config.cache_size_limit = 2**16
@@ -440,7 +440,7 @@ def trial(
     depth,
     trials=10,
     failure_threshold=3,
-    group=64,
+    group=256,
     base_lr: float = 1e-3,
     return_best: bool = False,
     warmup_trial_pct: int = 0.2,
@@ -480,6 +480,9 @@ def trial(
     heavyball.utils._ignore_warning("BoTorchSampler is experimental")
     heavyball.utils._ignore_warning("It will be set to log2(param_count). This requires `params` to be of type list.")
     heavyball.utils._ignore_warning("rank was set to")
+    heavyball.utils._ignore_warning(
+        "The given NumPy array is not writable, and PyTorch does not support non-writable tensors. This means writing to this tensor will result in undefined behavior."
+    )
     heavyball.utils.zeroth_power_mode = method
 
     cleanup()
@@ -513,7 +516,7 @@ def trial(
 
     set_seed()
     try:
-        sampler = BoTorchSampler(seed=0x123125, n_startup_trials=random_trials, device="cuda")
+        sampler = BoTorchSampler(seed=0x123125, n_startup_trials=random_trials, device=torch.device("cuda"))
         study = optuna.create_study(direction="minimize", sampler=sampler)
         winning_params = {}
 
