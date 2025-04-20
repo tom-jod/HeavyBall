@@ -513,7 +513,7 @@ def trial(
 
     set_seed()
     try:
-        sampler = BoTorchSampler(seed=0x123125, n_startup_trials=random_trials)
+        sampler = BoTorchSampler(seed=0x123125, n_startup_trials=random_trials, device="cuda")
         study = optuna.create_study(direction="minimize", sampler=sampler)
         winning_params = {}
 
