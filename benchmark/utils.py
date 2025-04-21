@@ -16,7 +16,7 @@ from torch._dynamo import config
 
 import heavyball.utils
 from heavyball import chainable as C
-from heavyball.helpers import BoTorchSampler
+from heavyball.helpers import AutoSampler
 from heavyball.utils import PrecondInitError
 
 config.cache_size_limit = 2**16
@@ -516,15 +516,24 @@ def trial(
 
     set_seed()
     try:
-        sampler = BoTorchSampler(seed=0x123125, n_startup_trials=random_trials, device=torch.device("cuda"))
+        sampler = AutoSampler(
+            seed=0x123125,
+            search_space={
+                "lr": optuna.distributions.FloatDistribution(1e-7, 100, log=True),
+                "1mbeta1": optuna.distributions.FloatDistribution(1e-5, 1, log=True),
+                "1mbeta2": optuna.distributions.FloatDistribution(1e-7, 1, log=True),
+                "1mshampoo_beta": optuna.distributions.FloatDistribution(1e-5, 1, log=True),
+            },
+        )
         study = optuna.create_study(direction="minimize", sampler=sampler)
         winning_params = {}
 
         def _optuna_objective(trial):
-            lr = trial.suggest_float("lr", 1e-7, 10, log=True)
-            one_minus_beta1 = trial.suggest_float("1mbeta1", 1e-3, 1, log=True)
-            one_minus_beta2 = trial.suggest_float("1mbeta2", 1e-5, 1, log=True)
-            one_minus_shampoo_beta = trial.suggest_float("1mshampoo_beta", 1e-4, 1, log=True)
+            set_seed(0x12312)
+            lr = trial.suggest_float("lr", 1e-7, 100, log=True)
+            one_minus_beta1 = trial.suggest_float("1mbeta1", 1e-5, 1, log=True)
+            one_minus_beta2 = trial.suggest_float("1mbeta2", 1e-7, 1, log=True)
+            one_minus_shampoo_beta = trial.suggest_float("1mshampoo_beta", 1e-5, 1, log=True)
             out = obj.objective((lr, one_minus_beta1, one_minus_beta2, one_minus_shampoo_beta))
             if obj.win_condition():
                 winning_params.update({

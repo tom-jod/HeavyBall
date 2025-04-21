@@ -1,16 +1,25 @@
+from __future__ import annotations
+
 import functools
 import math
-from typing import Any, Callable, Sequence, Tuple, Union
+import threading
+from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple, Union
 
 import numpy
 import numpy as np
+import optuna
+import optunahub
+import pandas as pd
 import torch
 from botorch.utils.sampling import manual_seed
+from hebo.design_space.design_space import DesignSpace
+from hebo.optimizers.hebo import HEBO
 from optuna._transform import _SearchSpaceTransform
 from optuna.distributions import BaseDistribution, CategoricalDistribution, FloatDistribution, IntDistribution
-from optuna.samplers import BaseSampler, RandomSampler
-from optuna.search_space import IntersectionSearchSpace
-from optuna.study import Study, StudyDirection
+from optuna.samplers import BaseSampler, CmaEsSampler, RandomSampler
+from optuna.samplers._lazy_random_state import LazyRandomState
+from optuna.study import Study
+from optuna.study._study_direction import StudyDirection
 from optuna.trial import FrozenTrial, TrialState
 from optuna_integration.botorch import (
     ehvi_candidates_func,
@@ -21,6 +30,23 @@ from optuna_integration.botorch import (
 )
 from torch import Tensor
 from torch.nn import functional as F
+
+import heavyball
+from heavyball.utils import scalar_guard
+
+_MAXINT32 = (1 << 31) - 1
+_SAMPLER_KEY = "auto:sampler"
+
+
+class SimpleAPIBaseSampler(BaseSampler):
+    def __init__(
+        self,
+        search_space: dict[str, BaseDistribution] = None,
+    ):
+        self.search_space = search_space
+
+    def suggest_all(self, trial: FrozenTrial):
+        return {k: trial._suggest(k, dist) for k, dist in self.search_space.items()}
 
 
 def _get_default_candidates_func(
@@ -118,7 +144,7 @@ def untransform(self: _SearchSpaceTransform, trans_params: Tensor) -> dict[str, 
     return {n: v.item() for n, v in params.items()}
 
 
-class BoTorchSampler(BaseSampler):
+class BoTorchSampler(SimpleAPIBaseSampler):
     """
     A significantly more efficient implementation of `BoTorchSampler` from Optuna - keeps more on the GPU / in torch
     The original is available at https://github.com/optuna/optuna-integration/blob/156a8bc081322791015d2beefff9373ed7b24047/optuna_integration/botorch/botorch.py under the MIT License
@@ -127,6 +153,7 @@ class BoTorchSampler(BaseSampler):
 
     def __init__(
         self,
+        search_space: dict[str, BaseDistribution] = None,
         *,
         candidates_func: None = None,
         constraints_func: None = None,
@@ -134,7 +161,7 @@ class BoTorchSampler(BaseSampler):
         consider_running_trials: bool = False,
         independent_sampler: None = None,
         seed: int | None = None,
-        device: torch.device | None = None,
+        device: torch.device | str | None = None,
         trial_chunks: int = 128,
     ):
         assert constraints_func is None
@@ -148,7 +175,9 @@ class BoTorchSampler(BaseSampler):
         self.trial_chunks = trial_chunks
 
         self._study_id: int | None = None
-        self._search_space = IntersectionSearchSpace()
+        self.search_space = search_space
+        if isinstance(device, str):
+            device = torch.device(device)
         self._device = device or torch.device("cpu")
         self.seen_trials = set()
         self._values = None
@@ -162,7 +191,7 @@ class BoTorchSampler(BaseSampler):
             raise RuntimeError("BoTorchSampler cannot handle multiple studies.")
 
         search_space: dict[str, BaseDistribution] = {}
-        for name, distribution in self._search_space.calculate(study).items():
+        for name, distribution in self.search_space:
             if distribution.single():
                 continue
             search_space[name] = distribution
@@ -288,3 +317,492 @@ class BoTorchSampler(BaseSampler):
         values: Sequence[float] | None,
     ) -> None:
         self._independent_sampler.after_trial(study, trial, state, values)
+
+
+def _convert_to_hebo_design_space(search_space: dict[str, BaseDistribution]) -> DesignSpace:
+    if not search_space:
+        raise ValueError("Empty search space.")
+    design_space = []
+    for name, distribution in search_space.items():
+        config: dict[str, Any] = {"name": name}
+        if isinstance(distribution, (FloatDistribution, IntDistribution)):
+            if not distribution.log and distribution.step is not None:
+                config["type"] = "int"
+                n_steps = int(np.round((distribution.high - distribution.low) / distribution.step + 1))
+                config["lb"] = 0
+                config["ub"] = n_steps - 1
+            else:
+                config["lb"] = distribution.low
+                config["ub"] = distribution.high
+                if distribution.log:
+                    config["type"] = "pow_int" if isinstance(distribution, IntDistribution) else "pow"
+                else:
+                    assert not isinstance(distribution, IntDistribution)
+                    config["type"] = "num"
+        else:
+            raise NotImplementedError(f"Unsupported distribution: {distribution}")
+
+        design_space.append(config)
+    return DesignSpace().parse(design_space)
+
+
+class HEBOSampler(optunahub.samplers.SimpleBaseSampler, SimpleAPIBaseSampler):
+    """
+    Simplified version of https://github.com/optuna/optunahub-registry/blob/89da32cfc845c4275549000369282631c70bdaff/package/samplers/hebo/sampler.py
+    modified under the MIT License
+    """
+
+    def __init__(
+        self,
+        search_space: dict[str, BaseDistribution],
+        *,
+        seed: int | None = None,
+        constant_liar: bool = False,
+        independent_sampler: BaseSampler | None = None,
+    ) -> None:
+        super().__init__(search_space, seed)
+        assert constant_liar is False
+        assert independent_sampler is None
+        self._hebo = HEBO(_convert_to_hebo_design_space(search_space), scramble_seed=self._seed)
+        self._independent_sampler = optuna.samplers.RandomSampler(seed=seed)
+        self._rng = np.random.default_rng(seed)
+
+    def sample_relative(
+        self, study: Study, trial: FrozenTrial, search_space: dict[str, BaseDistribution]
+    ) -> dict[str, Any]:
+        params = {}
+        for name, row in self._hebo.suggest().items():
+            if name not in search_space:
+                continue
+
+            dist = search_space[name]
+            if isinstance(dist, (IntDistribution, FloatDistribution)) and not dist.log and dist.step is not None:
+                step_index = row.iloc[0]
+                params[name] = dist.low + step_index * dist.step
+            else:
+                params[name] = row.iloc[0]
+        return params
+
+    def after_trial(
+        self,
+        study: Study,
+        trial: FrozenTrial,
+        state: TrialState,
+        values: Sequence[float] | None,
+    ) -> None:
+        if self._hebo is None or values is None:
+            return
+        sign = 1 if study.direction == StudyDirection.MINIMIZE else -1
+        values = np.array([values[0]])
+        worst_value = np.nanmax(values) if study.direction == StudyDirection.MINIMIZE else np.nanmin(values)
+        nan_padded_values = sign * np.where(np.isnan(values), worst_value, values)[:, np.newaxis]
+        params = pd.DataFrame([trial.params])
+        for name, dist in trial.distributions.items():
+            if isinstance(dist, (IntDistribution, FloatDistribution)) and not dist.log and dist.step is not None:
+                params[name] = (params[name] - dist.low) / dist.step
+
+        self._hebo.observe(params, nan_padded_values)
+
+    def infer_relative_search_space(self, study: Study, trial: FrozenTrial) -> dict[str, BaseDistribution]:
+        return self.search_space
+
+    def sample_independent(
+        self,
+        study: Study,
+        trial: FrozenTrial,
+        param_name: str,
+        param_distribution: BaseDistribution,
+    ) -> Any:
+        return self._independent_sampler.sample_independent(study, trial, param_name, param_distribution)
+
+
+class FastINGO:
+    """
+    Taken from https://github.com/optuna/optunahub-registry/blob/89da32cfc845c4275549000369282631c70bdaff/package/samplers/implicit_natural_gradient/sampler.py
+    under the MIT License
+    """
+
+    def __init__(
+        self,
+        mean: np.ndarray,
+        inv_sigma: np.ndarray,
+        lower: np.ndarray,
+        upper: np.ndarray,
+        seed: Optional[int] = None,
+        population_size: Optional[int] = None,
+        learning_rate: Optional[float] = None,
+        last_n: int = 1,
+        loco_step_size: float = 1,
+        device="cuda",
+    ) -> None:
+        n_dimension = len(mean)
+        if population_size is None:
+            population_size = 4 + int(np.floor(3 * np.log(n_dimension)))
+            population_size = 2 * (population_size // 2)
+
+        self.last_n = last_n
+        self._learning_rate = learning_rate or 1.0 / np.sqrt(n_dimension)
+        self._mean = torch.from_numpy(mean).to(device)
+        self._sigma = torch.from_numpy(inv_sigma).to(device)
+        self._lower = torch.from_numpy(lower).to(device)
+        self._upper = torch.from_numpy(upper).to(device)
+        self.generator = torch.Generator(device=device)
+        self.generator.manual_seed(0x123123 if seed is None else seed)
+        self.loco_step_size = loco_step_size
+        self._population_size = population_size
+        self.device = device
+
+        self._ys = None
+        self._means = None
+        self._z = None
+        self._stds = None
+        self._g = 0
+
+        self.torch_stats = torch.nn.Parameter(torch.stack([self._mean, self._sigma]))
+        self.optim = heavyball.PSGDLRA(
+            [self.torch_stats],
+            precond_init_scale=1,
+            lr=0.01,
+            update_clipping=None,
+            beta=0,
+            precond_grad_accum=True,
+            exp_avg_input=False,
+        )
+
+    @torch.no_grad()
+    def _concat(self, name, x):
+        item = getattr(self, name, None)
+        if isinstance(x, np.ndarray):
+            x = torch.from_numpy(x).to(self.device)
+        elif not isinstance(x, torch.Tensor):
+            x = scalar_guard(x, self.torch_stats).view(1)
+        if item is not None:
+            x = torch.cat((item, x), dim=0)[-self.last_n :]
+        setattr(self, name, x)
+
+    @property
+    def dim(self) -> int:
+        return self._mean.shape[0]
+
+    @property
+    def generation(self) -> int:
+        return self._g
+
+    @property
+    def population_size(self) -> int:
+        return self._population_size
+
+    @torch.no_grad()
+    def ask(self) -> np.ndarray:
+        dimension = self._mean.shape[0]
+        z = torch.randn(dimension, generator=self.generator, device=self.device, dtype=torch.float64)
+        self._concat("_z", z[None])
+        self._concat("_means", self._mean[None])
+        self._concat("_stds", self._sigma[None])
+        x = self._mean + z * (1 / self._sigma.clamp(min=1e-8)) ** 0.5
+        return x.clamp(min=self._lower, max=self._upper).cpu().numpy()
+
+    @torch.no_grad()
+    def tell(self, y: float) -> None:
+        self._g += 1
+        self._concat("_ys", y)
+        y = self._ys
+        score = torch.nn.functional.layer_norm(y, y.shape).view(-1, 1)
+        z = self._z
+        mean_orig = self._means
+        sigma_orig = self._stds
+        mean, sigma = self.torch_stats.unbind(0)
+        mean_grad = score * (z * (1 / sigma_orig.clamp(min=1e-8)).sqrt())
+        mean_grad = mean - (mean_orig - mean_grad * self.loco_step_size)  # MSE(current, target)
+        sigma_grad = sigma - (sigma_orig - score * z.square() * sigma_orig * self.loco_step_size)
+        self.torch_stats.grad = torch.stack([mean_grad, -sigma_grad]).mean(1)
+        self.optim.step()
+        self._mean, self._sigma = self.torch_stats.detach().unbind(0)
+
+
+class ImplicitNaturalGradientSampler(BaseSampler):
+    """
+    Taken from https://github.com/optuna/optunahub-registry/blob/89da32cfc845c4275549000369282631c70bdaff/package/samplers/implicit_natural_gradient/sampler.py
+    under the MIT License
+    """
+
+    def __init__(
+        self,
+        x0: Optional[Dict[str, Any]] = None,
+        sigma0: Optional[float] = None,
+        lr: Optional[float] = None,
+        n_startup_trials: int = 1,
+        independent_sampler: Optional[BaseSampler] = None,
+        warn_independent_sampling: bool = True,
+        seed: Optional[int] = None,
+        population_size: Optional[int] = None,
+    ) -> None:
+        self._x0 = x0
+        self._sigma0 = sigma0
+        self._lr = lr
+        self._independent_sampler = independent_sampler or optuna.samplers.RandomSampler(seed=seed)
+        self._n_startup_trials = n_startup_trials
+        self._warn_independent_sampling = warn_independent_sampling
+        self._search_space = optuna.search_space.IntersectionSearchSpace()
+        self._optimizer: Optional[FastINGO] = None
+        self._seed = seed
+        self._population_size = population_size
+
+        self._param_queue: List[Dict[str, Any]] = []
+
+    def _get_optimizer(self) -> FastINGO:
+        assert self._optimizer is not None
+        return self._optimizer
+
+    def reseed_rng(self) -> None:
+        self._independent_sampler.reseed_rng()
+        if self._optimizer:
+            self._optimizer._rng.seed()
+
+    def infer_relative_search_space(
+        self, study: "optuna.Study", trial: "optuna.trial.FrozenTrial"
+    ) -> Dict[str, BaseDistribution]:
+        search_space: Dict[str, BaseDistribution] = {}
+        for name, distribution in self._search_space.calculate(study).items():
+            if distribution.single():
+                # `cma` cannot handle distributions that contain just a single value, so we skip
+                # them. Note that the parameter values for such distributions are sampled in
+                # `Trial`.
+                continue
+
+            if not isinstance(
+                distribution,
+                (
+                    optuna.distributions.FloatDistribution,
+                    optuna.distributions.IntDistribution,
+                ),
+            ):
+                # Categorical distribution is unsupported.
+                continue
+            search_space[name] = distribution
+
+        return search_space
+
+    def _check_trial_is_generation(self, trial: FrozenTrial) -> bool:
+        current_gen = self._get_optimizer().generation
+        trial_gen = trial.system_attrs.get("ingo", -1)
+        return current_gen == trial_gen
+
+    def sample_relative(
+        self,
+        study: "optuna.Study",
+        trial: "optuna.trial.FrozenTrial",
+        search_space: Dict[str, BaseDistribution],
+    ) -> Dict[str, Any]:
+        self._raise_error_if_multi_objective(study)
+
+        if len(search_space) == 0:
+            return {}
+
+        completed_trials = study.get_trials(deepcopy=False, states=[TrialState.COMPLETE])
+        if len(completed_trials) < self._n_startup_trials:
+            return {}
+
+        if len(search_space) == 1:
+            self._warn_independent_sampling = False
+            return {}
+
+        trans = _SearchSpaceTransform(search_space)
+
+        if self._optimizer is None:
+            self._optimizer = self._init_optimizer(trans, population_size=self._population_size)
+
+        if self._optimizer.dim != len(trans.bounds):
+            self._warn_independent_sampling = False
+            return {}
+
+        solution_trials = [t for t in completed_trials if self._check_trial_is_generation(t)]
+        for t in solution_trials:
+            self._optimizer.tell(-t.value if study.direction == StudyDirection.MAXIMIZE else t.value)
+
+        study._storage.set_trial_system_attr(trial._trial_id, "ingo", self._get_optimizer().generation)
+        return self._optimizer.ask()
+
+    def _init_optimizer(
+        self,
+        trans: _SearchSpaceTransform,
+        population_size: Optional[int] = None,
+    ) -> FastINGO:
+        lower_bounds = trans.bounds[:, 0]
+        upper_bounds = trans.bounds[:, 1]
+        n_dimension = len(trans.bounds)
+
+        if self._x0 is None:
+            mean = lower_bounds + (upper_bounds - lower_bounds) / 2
+        else:
+            mean = trans.transform(self._x0)
+
+        if self._sigma0 is None:
+            sigma0 = np.min((upper_bounds - lower_bounds) / 6)
+        else:
+            sigma0 = self._sigma0
+        inv_sigma = 1 / sigma0 * np.ones(n_dimension)
+
+        return FastINGO(
+            mean=mean,
+            inv_sigma=inv_sigma,
+            lower=lower_bounds,
+            upper=upper_bounds,
+            seed=self._seed,
+            population_size=population_size,
+            learning_rate=self._lr,
+        )
+
+    def sample_independent(
+        self,
+        study: "optuna.Study",
+        trial: "optuna.trial.FrozenTrial",
+        param_name: str,
+        param_distribution: BaseDistribution,
+    ) -> Any:
+        self._raise_error_if_multi_objective(study)
+
+        return self._independent_sampler.sample_independent(study, trial, param_name, param_distribution)
+
+    def after_trial(
+        self,
+        study: "optuna.Study",
+        trial: "optuna.trial.FrozenTrial",
+        state: TrialState,
+        values: Optional[Sequence[float]],
+    ) -> None:
+        self._independent_sampler.after_trial(study, trial, state, values)
+
+
+class ThreadLocalSampler(threading.local):
+    sampler: BaseSampler | None = None
+
+
+def init_cmaes(study, seed, trials, search_space):
+    trials.sort(key=lambda trial: trial.datetime_complete)
+    return CmaEsSampler(seed=seed, source_trials=trials, lr_adapt=True)
+
+
+def init_hebo(study, seed, trials, search_space):
+    sampler = HEBOSampler(search_space=search_space, seed=seed)
+    for trial in trials:
+        sampler.after_trial(study, trial, TrialState.COMPLETE, trial.values)
+    return sampler
+
+
+def init_botorch(study, seed, trials, search_space):
+    return BoTorchSampler(search_space=search_space, seed=seed, device="cuda")  # will automatically pull in latest data
+
+
+def init_nsgaii(study, seed, trials, search_space):
+    module = optunahub.load_module(
+        "samplers/nsgaii_with_initial_trials",
+    )
+    return module.NSGAIIwITSampler(seed=seed)
+
+
+def init_ingo(study, seed, trials, search_space):
+    return ImplicitNaturalGradientSampler(seed=seed)
+
+
+class AutoSampler(BaseSampler):
+    def __init__(
+        self,
+        samplers: Iterable[Tuple[int, Callable]] | None = None,
+        search_space: dict[str, BaseDistribution] = None,
+        *,
+        seed: int | None = None,
+        constraints_func: None = None,
+    ) -> None:
+        assert constraints_func is None
+        if samplers is None:
+            samplers = ((0, init_botorch), (100, init_nsgaii))
+        self.sampler_indices = np.sort(np.array([x[0] for x in samplers], dtype=np.int32))
+        self.samplers = [x[1] for x in sorted(samplers, key=lambda x: x[0])]
+        self.search_space = search_space
+        self._rng = LazyRandomState(seed)
+        self._random_sampler = RandomSampler(seed=seed)
+        self._thread_local_sampler = ThreadLocalSampler()
+        self._constraints_func = constraints_func
+        self._completed_trials = 0
+        self._current_index = -1
+
+    def __getstate__(self) -> dict[Any, Any]:
+        state = self.__dict__.copy()
+        del state["_thread_local_sampler"]
+        return state
+
+    def __setstate__(self, state: dict[Any, Any]) -> None:
+        self.__dict__.update(state)
+        self._thread_local_sampler = ThreadLocalSampler()
+
+    @property
+    def _sampler(self) -> BaseSampler:
+        if self._thread_local_sampler.sampler is None:
+            seed_for_random_sampler = self._rng.rng.randint(_MAXINT32)
+            self._sampler = RandomSampler(seed=seed_for_random_sampler)
+
+        return self._thread_local_sampler.sampler
+
+    @_sampler.setter
+    def _sampler(self, sampler: BaseSampler) -> None:
+        self._thread_local_sampler.sampler = sampler
+
+    def reseed_rng(self) -> None:
+        self._rng.rng.seed()
+        self._sampler.reseed_rng()
+
+    def _update_sampler(self, study: Study):
+        if len(study.directions) > 1:
+            raise ValueError("Multi-objective optimization is not supported.")
+
+        if isinstance(self._sampler, CmaEsSampler):
+            return
+
+        complete_trials = study._get_trials(deepcopy=False, states=(TrialState.COMPLETE,), use_cache=True)
+        self._completed_trials = max(self._completed_trials, len(complete_trials))
+        new_index = (self._completed_trials >= self.sampler_indices).sum() - 1
+        if new_index == self._current_index:
+            return
+        self._current_index = new_index
+        self._sampler = self.samplers[new_index](
+            study, self._rng.rng.randint(_MAXINT32), complete_trials, self.search_space
+        )
+
+    def infer_relative_search_space(self, study: Study, trial: FrozenTrial) -> dict[str, BaseDistribution]:
+        return self._sampler.infer_relative_search_space(study, trial)
+
+    def sample_relative(
+        self, study: Study, trial: FrozenTrial, search_space: dict[str, BaseDistribution]
+    ) -> dict[str, Any]:
+        return self._sampler.sample_relative(study, trial, self.search_space)
+
+    def sample_independent(
+        self,
+        study: Study,
+        trial: FrozenTrial,
+        param_name: str,
+        param_distribution: BaseDistribution,
+    ) -> Any:
+        return self._random_sampler.sample_independent(study, trial, param_name, param_distribution)
+
+    def before_trial(self, study: Study, trial: FrozenTrial) -> None:
+        # NOTE(nabenabe): Sampler must be updated in this method. If, for example, it is updated in
+        # infer_relative_search_space, the sampler for before_trial and that for sample_relative,
+        # after_trial might be different, meaning that the sampling routine could be incompatible.
+        if len(study._get_trials(deepcopy=False, states=(TrialState.COMPLETE,), use_cache=True)) != 0:
+            self._update_sampler(study)
+
+        sampler_name = self._sampler.__class__.__name__
+        study._storage.set_trial_system_attr(trial._trial_id, _SAMPLER_KEY, sampler_name)
+        self._sampler.before_trial(study, trial)
+
+    def after_trial(
+        self,
+        study: Study,
+        trial: FrozenTrial,
+        state: TrialState,
+        values: Sequence[float] | None,
+    ) -> None:
+        assert state in [TrialState.COMPLETE, TrialState.FAIL, TrialState.PRUNED]
+        self._sampler.after_trial(study, trial, state, values)
