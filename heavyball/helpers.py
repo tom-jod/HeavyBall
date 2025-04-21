@@ -420,7 +420,7 @@ class FastINGO:
         seed: Optional[int] = None,
         population_size: Optional[int] = None,
         learning_rate: Optional[float] = None,
-        last_n: int = 1,
+        last_n: int = 16,
         loco_step_size: float = 1,
         device="cuda",
     ) -> None:
@@ -450,11 +450,12 @@ class FastINGO:
         self.torch_stats = torch.nn.Parameter(torch.stack([self._mean, self._sigma]))
         self.optim = heavyball.PSGDLRA(
             [self.torch_stats],
+            rank=self.torch_stats.numel(),
             precond_init_scale=1,
-            lr=0.01,
+            weight_decay=0.01,
+            lr=0.1,
             update_clipping=None,
             beta=0,
-            precond_grad_accum=True,
             exp_avg_input=False,
         )
 
@@ -488,7 +489,7 @@ class FastINGO:
         self._concat("_z", z[None])
         self._concat("_means", self._mean[None])
         self._concat("_stds", self._sigma[None])
-        x = self._mean + z * (1 / self._sigma.clamp(min=1e-8)) ** 0.5
+        x = z / self._sigma.clamp(min=1e-8).sqrt() + self._mean
         return x.clamp(min=self._lower, max=self._upper).cpu().numpy()
 
     @torch.no_grad()
@@ -501,11 +502,13 @@ class FastINGO:
         mean_orig = self._means
         sigma_orig = self._stds
         mean, sigma = self.torch_stats.unbind(0)
-        mean_grad = score * (z * (1 / sigma_orig.clamp(min=1e-8)).sqrt())
+        mean_grad = score * (z / sigma_orig.clamp(min=1e-8).sqrt())
+        sigma_grad = -score * z.square() * sigma_orig
         mean_grad = mean - (mean_orig - mean_grad * self.loco_step_size)  # MSE(current, target)
-        sigma_grad = sigma - (sigma_orig - score * z.square() * sigma_orig * self.loco_step_size)
-        self.torch_stats.grad = torch.stack([mean_grad, -sigma_grad]).mean(1)
+        sigma_grad = sigma - (sigma_orig - sigma_grad * self.loco_step_size)
+        self.torch_stats.grad = torch.stack([mean_grad, sigma_grad]).mean(1)
         self.optim.step()
+        self.optim.zero_grad()
         self._mean, self._sigma = self.torch_stats.detach().unbind(0)
 
 
@@ -611,7 +614,7 @@ class ImplicitNaturalGradientSampler(BaseSampler):
             self._optimizer.tell(-t.value if study.direction == StudyDirection.MAXIMIZE else t.value)
 
         study._storage.set_trial_system_attr(trial._trial_id, "ingo", self._get_optimizer().generation)
-        return self._optimizer.ask()
+        return trans.untransform(self._optimizer.ask())
 
     def _init_optimizer(
         self,
@@ -692,7 +695,7 @@ def init_nsgaii(study, seed, trials, search_space):
 
 
 def init_ingo(study, seed, trials, search_space):
-    return ImplicitNaturalGradientSampler(seed=seed)
+    return ImplicitNaturalGradientSampler(search_space=search_space, seed=seed)
 
 
 class AutoSampler(BaseSampler):
@@ -706,7 +709,7 @@ class AutoSampler(BaseSampler):
     ) -> None:
         assert constraints_func is None
         if samplers is None:
-            samplers = ((0, init_botorch), (100, init_nsgaii))
+            samplers = ((0, init_ingo), (10000, init_nsgaii))
         self.sampler_indices = np.sort(np.array([x[0] for x in samplers], dtype=np.int32))
         self.samplers = [x[1] for x in sorted(samplers, key=lambda x: x[0])]
         self.search_space = search_space
