@@ -185,18 +185,7 @@ class BoTorchSampler(SimpleAPIBaseSampler):
         self._index = 0
 
     def infer_relative_search_space(self, study: Study, trial: FrozenTrial) -> dict[str, BaseDistribution]:
-        if self._study_id is None:
-            self._study_id = study._study_id
-        if self._study_id != study._study_id:
-            raise RuntimeError("BoTorchSampler cannot handle multiple studies.")
-
-        search_space: dict[str, BaseDistribution] = {}
-        for name, distribution in self.search_space:
-            if distribution.single():
-                continue
-            search_space[name] = distribution
-
-        return search_space
+        return self.search_space
 
     @torch.no_grad()
     def _preprocess_trials(
@@ -528,6 +517,7 @@ class ImplicitNaturalGradientSampler(BaseSampler):
 
     def __init__(
         self,
+        search_space: Dict[str, BaseDistribution],
         x0: Optional[Dict[str, Any]] = None,
         sigma0: Optional[float] = None,
         lr: Optional[float] = None,
@@ -537,13 +527,13 @@ class ImplicitNaturalGradientSampler(BaseSampler):
         seed: Optional[int] = None,
         population_size: Optional[int] = None,
     ) -> None:
+        self.search_space = search_space
         self._x0 = x0
         self._sigma0 = sigma0
         self._lr = lr
         self._independent_sampler = independent_sampler or optuna.samplers.RandomSampler(seed=seed)
         self._n_startup_trials = n_startup_trials
         self._warn_independent_sampling = warn_independent_sampling
-        self._search_space = optuna.search_space.IntersectionSearchSpace()
         self._optimizer: Optional[FastINGO] = None
         self._seed = seed
         self._population_size = population_size
@@ -563,7 +553,7 @@ class ImplicitNaturalGradientSampler(BaseSampler):
         self, study: "optuna.Study", trial: "optuna.trial.FrozenTrial"
     ) -> Dict[str, BaseDistribution]:
         search_space: Dict[str, BaseDistribution] = {}
-        for name, distribution in self._search_space.calculate(study).items():
+        for name, distribution in self.search_space.items():
             if distribution.single():
                 # `cma` cannot handle distributions that contain just a single value, so we skip
                 # them. Note that the parameter values for such distributions are sampled in
