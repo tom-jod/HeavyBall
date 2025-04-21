@@ -1724,12 +1724,12 @@ def update_lra_precond_(
     return U.to(U_orig[0].dtype), V.to(V_orig[0].dtype), d.to(d_orig[0].dtype)
 
 
-def lra_precond(U, V, d, g):
+def lra_precond(U: Tensor, V: Tensor, d: Tensor, g: Tensor):
     """
     As-is from https://github.com/lixilinx/psgd_torch/blob/6dbea94915679d08a289928e6431b6ce07931aaf/preconditioned_stochastic_gradient_descent.py#L744
     """
-    g = low_rank_mm(U, V, d * g)
-    return d * low_rank_mm(V, U, g)
+    new_g = low_rank_mm(U, V, d * g)
+    return d * low_rank_mm(V, U, new_g)
 
 
 @decorator_knowngood
@@ -1742,7 +1742,7 @@ def dampen_grad(g: Tensor, damp: float = 2**-13):
 @decorator_knowngood
 def _compilable_lra_update_(
     params: List[Tensor],
-    update: Tensor,
+    update: List[Tensor],
     U: Tensor,
     V: Tensor,
     d: Tensor,
@@ -1751,7 +1751,7 @@ def _compilable_lra_update_(
     caution: bool,
     grads: List[Tensor],
 ):
-    update = lra_precond(U, V, d, update)
+    update = lra_precond(U, V, d, flatten(update))
     start = 0
     update = update.flatten()
     for p, g in zip(params, grads):
