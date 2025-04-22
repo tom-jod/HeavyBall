@@ -420,9 +420,11 @@ class FastINGO:
         seed: Optional[int] = None,
         population_size: Optional[int] = None,
         learning_rate: Optional[float] = None,
-        last_n: int = 16,
+        last_n: int = 4096,
         loco_step_size: float = 1,
         device="cuda",
+        batchnorm_decay: float = 0.99,
+        score_decay: float = 0.99,
     ) -> None:
         n_dimension = len(mean)
         if population_size is None:
@@ -430,6 +432,8 @@ class FastINGO:
             population_size = 2 * (population_size // 2)
 
         self.last_n = last_n
+        self.batchnorm_decay = batchnorm_decay
+        self.score_decay = score_decay
         self._learning_rate = learning_rate or 1.0 / np.sqrt(n_dimension)
         self._mean = torch.from_numpy(mean).to(device)
         self._sigma = torch.from_numpy(inv_sigma).to(device)
@@ -452,8 +456,7 @@ class FastINGO:
             [self.torch_stats],
             rank=self.torch_stats.numel(),
             precond_init_scale=1,
-            weight_decay=0.01,
-            lr=0.1,
+            lr=0.01,
             update_clipping=None,
             beta=0,
             exp_avg_input=False,
@@ -497,18 +500,34 @@ class FastINGO:
         self._g += 1
         self._concat("_ys", y)
         y = self._ys
-        score = torch.nn.functional.layer_norm(y, y.shape).view(-1, 1)
+        if y.numel() <= 2:
+            return
+
+        y = (y - y.min()) / (y.max() - y.min())
+        second_smallest = y.kthvalue(2).values
+        y = y.add(second_smallest).log()
+        ema = -torch.arange(y.size(0), device=y.device, dtype=y.dtype)
+        weight = self.batchnorm_decay**ema
+        weight = weight / weight.sum().clamp(min=1e-8)
+        y_mean = weight @ y
+        y_mean_sq = weight @ y.square()
+        y_std = (y_mean_sq - y_mean.square()).clamp(min=1e-8).sqrt()
+        score = (y.view(-1, 1) - y_mean) / y_std
+
         z = self._z
         mean_orig = self._means
         sigma_orig = self._stds
-        mean, sigma = self.torch_stats.unbind(0)
         mean_grad = score * (z / sigma_orig.clamp(min=1e-8).sqrt())
         sigma_grad = -score * z.square() * sigma_orig
-        mean_grad = mean - (mean_orig - mean_grad * self.loco_step_size)  # MSE(current, target)
-        sigma_grad = sigma - (sigma_orig - sigma_grad * self.loco_step_size)
-        self.torch_stats.grad = torch.stack([mean_grad, sigma_grad]).mean(1)
-        self.optim.step()
-        self.optim.zero_grad()
+        target_mean = mean_orig - mean_grad * self.loco_step_size  # MSE(current, target)
+        target_sigma = sigma_orig - sigma_grad * self.loco_step_size
+
+        weight = self.score_decay**ema
+        weight = weight / weight.sum().clamp(min=1e-8)
+        self.torch_stats.data.copy_(torch.stack([weight @ target_mean, weight @ target_sigma]))
+        # self.torch_stats.grad = torch.stack([mean_grad, sigma_grad]).mean(1)
+        # self.optim.step()
+        # self.optim.zero_grad()
         self._mean, self._sigma = self.torch_stats.detach().unbind(0)
 
 
