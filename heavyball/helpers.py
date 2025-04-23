@@ -31,7 +31,6 @@ from optuna_integration.botorch import (
 from torch import Tensor
 from torch.nn import functional as F
 
-import heavyball
 from heavyball.utils import scalar_guard
 
 _MAXINT32 = (1 << 31) - 1
@@ -451,24 +450,13 @@ class FastINGO:
         self._stds = None
         self._g = 0
 
-        self.torch_stats = torch.nn.Parameter(torch.stack([self._mean, self._sigma]))
-        self.optim = heavyball.PSGDLRA(
-            [self.torch_stats],
-            rank=self.torch_stats.numel(),
-            precond_init_scale=1,
-            lr=0.01,
-            update_clipping=None,
-            beta=0,
-            exp_avg_input=False,
-        )
-
     @torch.no_grad()
     def _concat(self, name, x):
         item = getattr(self, name, None)
         if isinstance(x, np.ndarray):
             x = torch.from_numpy(x).to(self.device)
         elif not isinstance(x, torch.Tensor):
-            x = scalar_guard(x, self.torch_stats).view(1)
+            x = scalar_guard(x, self._mean).view(1)
         if item is not None:
             x = torch.cat((item, x), dim=0)[-self.last_n :]
         setattr(self, name, x)
@@ -503,9 +491,9 @@ class FastINGO:
         if y.numel() <= 2:
             return
 
-        y = (y - y.min()) / (y.max() - y.min())
-        second_smallest = y.kthvalue(2).values
-        y = y.add(second_smallest).log()
+        y = y + torch.where(y.min() <= 0, 1e-8 - y.min(), 0)
+        y = y.log()
+
         ema = -torch.arange(y.size(0), device=y.device, dtype=y.dtype)
         weight = self.batchnorm_decay**ema
         weight = weight / weight.sum().clamp(min=1e-8)
@@ -524,11 +512,7 @@ class FastINGO:
 
         weight = self.score_decay**ema
         weight = weight / weight.sum().clamp(min=1e-8)
-        self.torch_stats.data.copy_(torch.stack([weight @ target_mean, weight @ target_sigma]))
-        # self.torch_stats.grad = torch.stack([mean_grad, sigma_grad]).mean(1)
-        # self.optim.step()
-        # self.optim.zero_grad()
-        self._mean, self._sigma = self.torch_stats.detach().unbind(0)
+        self._mean, self._sigma = weight @ target_mean, weight @ target_sigma
 
 
 class ImplicitNaturalGradientSampler(BaseSampler):
