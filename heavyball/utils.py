@@ -2687,22 +2687,18 @@ def disable_caution_scaling():
     _compilable_cautioning = _compilable_caution_no_scale
 
 
-@torch.no_grad()
-@torch.compile()
-@torch.no_grad()
-def sam_step(model, ball_size):
+@decorator_knowngood
+def sam_step(parameters, ball_size):
     old_grads = []
-    for p in model.parameters():
+    for p in parameters:
         old_grads.append(p.square() * p.grad)
         p.data.add_(old_grads[-1], alpha=ball_size)
         p.grad.zero_()
     return old_grads
 
 
-@torch.no_grad()
-@torch.compile()
-@torch.no_grad()
-def sam_undo(model, old_grads, ball_size):
-    for p in model.parameters():
+@decorator_knowngood
+def sam_undo(parameters, old_grads, ball_size):
+    for p in parameters:
         og = old_grads.pop(0)
         p.data.sub_(og, alpha=ball_size)

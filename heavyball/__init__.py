@@ -2,8 +2,31 @@ import functools
 import math
 from typing import Optional
 
+import torch.optim
+
 from . import chainable as C
 from . import utils
+
+
+class SAMWrapper(torch.optim.Optimizer):
+    def __init__(self, params, wrapped_optimizer, ball: float = 0.1):
+        super().__init__(params, {"ball": ball})
+        self.wrapped_optimizer = wrapped_optimizer
+
+    @torch.no_grad()
+    def step(self, closure=None):
+        if closure is None:
+            raise ValueError("SAM requires closure")
+        with torch.enable_grad():
+            closure()
+        old_grads = [utils.sam_step(group["params"], group["ball"]) for group in self.param_groups]
+        loss = self.wrapped_optimizer.step(closure)
+        for group, grads in zip(self.param_groups, old_grads):
+            utils.sam_undo(group["params"], grads, group["ball"])
+        return loss
+
+    def zero_grad(self, set_to_none: bool = True):
+        self.wrapped_optimizer.zero_grad()
 
 
 class ForeachAdamW(C.BaseOpt):
