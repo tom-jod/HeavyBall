@@ -2688,17 +2688,13 @@ def disable_caution_scaling():
 
 
 @decorator_knowngood
-def sam_step(parameters, ball_size):
-    old_grads = []
+def sam_step(parameters, ball_size, adaptive: bool = True):
+    old_params = []
     for p in parameters:
-        old_grads.append(p.square() * p.grad)
-        p.data.add_(old_grads[-1], alpha=ball_size)
+        old_params.append(p.detach().clone())
+        grad = promote(p.grad)
+        if adaptive:
+            grad = grad * promote(p).square()
+        stochastic_add_(p.data, grad, ball_size)
         p.grad.zero_()
-    return old_grads
-
-
-@decorator_knowngood
-def sam_undo(parameters, old_grads, ball_size):
-    for p in parameters:
-        og = old_grads.pop(0)
-        p.data.sub_(og, alpha=ball_size)
+    return old_params

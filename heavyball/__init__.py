@@ -19,10 +19,10 @@ class SAMWrapper(torch.optim.Optimizer):
             raise ValueError("SAM requires closure")
         with torch.enable_grad():
             closure()
-        old_grads = [utils.sam_step(group["params"], group["ball"]) for group in self.param_groups]
+        old_params = [utils.sam_step(group["params"], group["ball"]) for group in self.param_groups]
         loss = self.wrapped_optimizer.step(closure)
-        for group, grads in zip(self.param_groups, old_grads):
-            utils.sam_undo(group["params"], grads, group["ball"])
+        for group, old in zip(self.param_groups, old_params):
+            utils.copy_stochastic_list_(group["params"], old)
         return loss
 
     def zero_grad(self, set_to_none: bool = True):
