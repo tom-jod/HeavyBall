@@ -523,7 +523,7 @@ def nesterov_ema(group, updates, grads, params, momentum):  # equivalent to Grok
 
 
 def _store_std(state, group, update, grad, param):
-    state["init_std"] = torch.std(grad, dim=0)
+    state["init_std"] = torch.std(param)
 
 
 @general_guard("init_std", init_fn=_store_std, skip_first=False)
