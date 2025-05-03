@@ -9,7 +9,7 @@ import random
 import re
 import string
 import warnings
-from typing import Callable, List, Optional, Tuple, Union
+from typing import Callable, List, Literal, Optional, Tuple, Union
 
 import numpy as np
 import torch
@@ -806,6 +806,9 @@ class ExactHVPFailed(ValueError):
     pass
 
 
+use_default = object()
+
+
 class StatefulOptimizer(torch.optim.Optimizer):
     """
     finite_differences saves memory, but needs more compute. (Alternative is true HVP)
@@ -818,7 +821,7 @@ class StatefulOptimizer(torch.optim.Optimizer):
     compile_step: bool = False
     hessian_approx: bool = False
     precond_schedule: Union[Callable, float, None] = None
-    stochastic_schedule: bool = False
+    stochastic_schedule: bool | Literal[use_default] = use_default
     finite_differences: bool = False
     fallback_to_finite_differences: bool = True
     _fallback_enabled: bool = False
@@ -829,6 +832,16 @@ class StatefulOptimizer(torch.optim.Optimizer):
         self.use_ema = use_ema
         self.mapping = {}
         self.mapping_inverse = {}
+
+        if self.stochastic_schedule is use_default:
+            stochastic_schedule = None
+            for group in self.param_groups:
+                new = group.get("stochastic_schedule", stochastic_schedule)
+                if stochastic_schedule is not None and new != stochastic_schedule:
+                    raise ValueError("All parameter groups must have the same stochastic_schedule.")
+                stochastic_schedule = new
+            self.stochastic_schedule = stochastic_schedule
+
         self.inner_group = {"stochastic_schedule": self.stochastic_schedule}
         self.precond_rng = random.Random(0x12312)
         self._is_preconditioning = None

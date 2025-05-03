@@ -9,6 +9,8 @@ from torch import Tensor
 
 from . import utils
 
+use_default = utils.use_default
+
 
 def _key_in_state(state, key):
     if isinstance(key, str):
@@ -976,7 +978,6 @@ class ChainOpt(utils.StatefulOptimizer):
         group["step"] = None
 
 
-use_default = object()
 str_or_fn = Union[str, callable, None, Literal[use_default]]
 
 

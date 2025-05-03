@@ -1,4 +1,5 @@
 import os
+import random
 from datetime import datetime
 
 import numpy as np
@@ -83,6 +84,9 @@ class RandomPad(nn.Module):
 
 def main(epochs: int, batch: int, log_interval: int = 16):
     # Setup tensorboard logging
+    torch.manual_seed(0x12783)
+    np.random.seed(0x12783)
+    random.seed(0x12783)
     log_dir = os.path.join("runs", f"soap_{datetime.now().strftime('%Y%m%d_%H%M%S')}")
     writer = SummaryWriter(log_dir)
 
