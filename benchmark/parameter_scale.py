@@ -16,7 +16,6 @@ configs = {"easy": {"scale": 1e1}, "medium": {"scale": 1e3}, "hard": {"scale": 1
 class Model(nn.Module):
     def __init__(self, size, scale: float):
         super().__init__()
-        print(size)
         # Simulate different layer scales in deep networks
         self.layer1 = nn.Parameter(torch.randn(size) * scale)  # Small gradients
         self.layer2 = nn.Parameter(torch.randn(size))  # Medium gradients
