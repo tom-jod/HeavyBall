@@ -10,7 +10,7 @@ from heavyball.utils import set_torch
 
 app = typer.Typer(pretty_exceptions_enable=False)
 set_torch()
-configs = {"easy": {"scale": 1e1}, "medium": {"scale": 1e3}, "hard": {"size": 1e5}}
+configs = {"easy": {"scale": 1e1}, "medium": {"scale": 1e3}, "hard": {"scale": 1e5}}
 
 
 class Model(nn.Module):
@@ -41,6 +41,7 @@ def main(
     scale = configs.get(config, {}).get("scale", 1e3)
 
     dtype = [getattr(torch, d) for d in dtype]
+ 
     model = Model(size=1024, scale=scale).cuda().double()
 
     def data():
