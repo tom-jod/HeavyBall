@@ -1997,14 +1997,13 @@ def _compilable_term_extract_(
     for x, y in terms:
         x = promote(x)
         y = promote(y)
-        summed = x + y
         diff = x - y
-        local_norm = summed.norm(float("inf"))
+        local_norm = diff.norm(float("inf"))
         can_update = torch.logical_and(local_norm > 0, can_update)
-        out.append((diff, summed, local_norm))
+        out.append((diff, local_norm))
 
     new = []
-    for (d, s, n), q, o, v, lb_state in zip(out, Q, oq, velocity, running_lower_bound):
+    for (d, n), q, o, v, lb_state in zip(out, Q, oq, velocity, running_lower_bound):
         if d.ndim == 2:
             d = d.triu()
         if v is not None:
@@ -2017,18 +2016,20 @@ def _compilable_term_extract_(
             d = d / v_.sqrt().clamp(min=1e-8)
             copy_stochastic_(v, v_)
         if q.ndim >= 2:
-            new.append((d, s, n, q, o, lb_state))
+            new.append((d, n, q, o, lb_state))
             continue
 
         if isinstance(o, tuple):
             o = o[1]
         po = promote(o)
 
-        lb = n.clamp(min=tiny_bf16)
+        dpo = d * po
+
+        lb = dpo.norm(float("inf"))
         lb = lb.maximum(lb_state + (lb - lb_state) * (1 - lower_bount_beta))
         copy_stochastic_(lb_state, lb)
 
-        new_po = po - d * precond_lr * po / lb
+        new_po = po - precond_lr * dpo / lb
         new_po = stochastic_round_(o, new_po)
         o.copy_(torch.where(can_update, new_po, o))
 
@@ -2086,8 +2087,7 @@ def psgd_update_precond(
     terms, can_update = _compilable_term_extract_(
         terms, Q, oq, precond_lr, velocity, beta2, running_lower_bound, lower_bount_beta
     )
-    for grad, summed, local_norm, q, original_q, lb_state in terms:
-        lower_bound = max_singular_value(summed, local_norm, power_iter=power_iter)
+    for grad, local_norm, q, original_q, lb_state in terms:
         if ortho_method is not None:
             method = ortho_method.split("-")
             if len(method) == 1:
@@ -2095,8 +2095,9 @@ def psgd_update_precond(
             else:
                 method, scale = method
             inplace_orthogonal_(grad, method, grad, scale)
-        _prescale_term_(grad, precond_lr, local_norm, lower_bound, lb_state, can_update, lower_bount_beta)
         grad = grad @ q.to(grad.dtype)
+        lower_bound = max_singular_value(grad, local_norm, power_iter=power_iter)
+        _prescale_term_(grad, precond_lr, local_norm, lower_bound, lb_state, can_update, lower_bount_beta)
         if store_triu_as_line:
             _subtract_from_line_(original_q[1], grad)
         else:
@@ -2118,16 +2119,16 @@ def _inverse_free_update_(
     for mm, gg, oq, lb, lb_state in zip(matmuled, terms, Q, lower_bound, running_lower_bound):
         q = promote(oq)
         if q.ndim < 2:
-            target_scale = g_numel / q.numel()
+            scale = g_numel / q.numel()
+            target = promote(gg)
+            update = target / scale - q
             lb = gg.norm(float("inf"))
-            update = (promote(gg) - target_scale) * q
         else:
-            target_scale = g_numel / q.shape[0]
-            update = promote(mm) - target_scale * q
+            update = promote(mm)
         lb = promote(lb)
         lb = lb.maximum(promote(lb_state) + (lb - promote(lb_state)) * (1 - lower_bount_beta))
         copy_stochastic_(lb_state, lb)
-        copy_stochastic_(oq, q - precond_lr / (lb + target_scale) * update)
+        copy_stochastic_(oq, q - precond_lr / lb * update)
 
 
 @decorator
@@ -2158,8 +2159,8 @@ def inverse_free_psgd_update_precond(
     G = psgd_precond_grad(G, Q)
     exprGs = calcG_expr(ndim_tuple(Q), G.ndim)
     terms = [torch.einsum(exprG, G, G) for exprG in exprGs]
-    matmuled = [gg @ q if gg.ndim == 2 else None for gg, q in zip(terms, Q)]
-    lb = [max_singular_value(gg, None, power_iter=power_iter) if gg.ndim == 2 else None for gg in terms]
+    matmuled = [((gg * (gg.shape[0] / G.numel())) @ q - q) if gg.ndim == 2 else None for gg, q in zip(terms, Q)]
+    lb = [None if mm is None else max_singular_value(mm, None, power_iter=power_iter) for mm in matmuled]
     _inverse_free_update_(matmuled, terms, oq, G.numel(), lb, running_lower_bound, lower_bount_beta, precond_lr)
     return G
 
