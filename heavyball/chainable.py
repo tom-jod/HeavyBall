@@ -655,7 +655,7 @@ def _update_psgd_precond(
     if not should_use_cache or not cached:
         return None  # caching adds extra ops and is not worth the overhead when we precondition at every step
 
-    for c_, q_ in zip(Q_cache, utils.line_to_triu(Q) if group["store_triu_as_line"] else Q):
+    for c_, q_ in zip(Q_cache, utils.line_to_triu(Q, group["inverse_free"]) if group["store_triu_as_line"] else Q):
         if q_.ndim == 2:
             torch.matmul(q_.T, q_, out=c_)
         else:
@@ -668,7 +668,9 @@ def _cached_psgd_precond_grad(group, update, Q, Q_cache, grad):
     if group.get("is_cached", False):
         out = utils.precond_grad_cached_(cached_q=Q_cache, **kwargs)
     else:
-        out = utils.psgd_precond_grad(preconds=Q, store_triu_as_line=group["store_triu_as_line"], **kwargs)
+        out = utils.psgd_precond_grad(
+            preconds=Q, store_triu_as_line=group["store_triu_as_line"], symmetric_output=group["inverse_free"], **kwargs
+        )
     group["caution"] = False  # we already cautioned here - shouldn't do it again
     return out
 
@@ -685,7 +687,9 @@ def _fused_cached_psgd_precond_grad(group, grad, param, update, Q, Q_cache):
     if group.get("is_cached", False):
         utils.fused_precond_grad_cached_(cached_q=Q_cache, **kwargs)
     else:
-        utils.fused_psgd_precond_grad(preconds=Q, store_triu_as_line=group["store_triu_as_line"], **kwargs)
+        utils.fused_psgd_precond_grad(
+            preconds=Q, store_triu_as_line=group["store_triu_as_line"], symmetric_output=group["inverse_free"], **kwargs
+        )
 
 
 def _update_lra(

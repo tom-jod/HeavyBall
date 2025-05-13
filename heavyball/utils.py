@@ -2037,10 +2037,10 @@ def _compilable_term_extract_(
 
 
 @decorator_knowngood
-def _balance_to_triu(Q: "TriuOrLine"):
+def _balance_to_triu(Q: "TriuOrLine", symmetric_output: bool = False):
     if isinstance(Q[0], tuple):
         psgd_balance_Q([o[1] for o in Q])
-        return line_to_triu(Q)
+        return line_to_triu(Q, symmetric_output)
     psgd_balance_Q(Q)
     return Q
 
@@ -2105,6 +2105,13 @@ def psgd_update_precond(
     return None
 
 
+def _update_lb(lb_state, lb, lower_bount_beta):
+    lb = promote(lb)
+    lb = lb.maximum(promote(lb_state) + (lb - promote(lb_state)) * (1 - lower_bount_beta))
+    copy_stochastic_(lb_state, lb)
+    return lb
+
+
 @decorator_knowngood
 def _inverse_free_update_(
     matmuled: List[Optional[Tensor]],
@@ -2115,20 +2122,38 @@ def _inverse_free_update_(
     running_lower_bound: List[Tensor],
     lower_bount_beta: Tensor,
     precond_lr: Tensor,
+    store_triu_as_line: bool,
 ):
-    for mm, gg, oq, lb, lb_state in zip(matmuled, terms, Q, lower_bound, running_lower_bound):
+    for new_q, gg, oq, lb, lb_state in zip(matmuled, terms, Q, lower_bound, running_lower_bound):
+        if isinstance(oq, tuple):
+            oq = oq[1]
+
         q = promote(oq)
-        if q.ndim < 2:
+        if gg.ndim < 2:
             scale = g_numel / q.numel()
             target = promote(gg)
-            update = target / scale - q
-            lb = gg.norm(float("inf"))
-        else:
-            update = promote(mm)
-        lb = promote(lb)
-        lb = lb.maximum(promote(lb_state) + (lb - promote(lb_state)) * (1 - lower_bount_beta))
-        copy_stochastic_(lb_state, lb)
-        copy_stochastic_(oq, q - precond_lr / lb * update)
+            update = target / scale - 1
+            lb = _update_lb(lb_state, gg.norm(float("inf")), lower_bount_beta)
+            update = 1 - update / lb / 2 * precond_lr
+            copy_stochastic_(oq, q * update**2)
+            continue
+
+        new_q = promote(new_q)
+        symmetric_new_q = (new_q + new_q.T) / 2
+        lb = _update_lb(lb_state, lb, lower_bount_beta)
+        new_q = symmetric_new_q / lb * precond_lr
+
+        if store_triu_as_line:
+            new_q = triu_to_line([new_q])[0][1]
+        copy_stochastic_(oq, new_q)
+
+
+@decorator_knowngood
+def _update_from_grad(gg: Tensor, q: Tensor, scale: float):
+    """
+    scale can be a float, as it's shape dependent and therefore requires recompilation anyway
+    """
+    return gg @ q + q @ gg - q * scale * 2
 
 
 @decorator
@@ -2149,19 +2174,19 @@ def inverse_free_psgd_update_precond(
     assert V is None
     assert ortho_method is None
     assert velocity is None
-    assert not store_triu_as_line  # precond is not triangular
-    del V, ortho_method, velocity, store_triu_as_line
+    del V, ortho_method, velocity
 
-    psgd_balance_Q(oq)
-    Q = oq
+    Q = _balance_to_triu(oq, True)
     precond_lr, beta2, lower_bount_beta = scalar_guard(precond_lr, beta2, lower_bount_beta, G)
 
     G = psgd_precond_grad(G, Q)
     exprGs = calcG_expr(ndim_tuple(Q), G.ndim)
     terms = [torch.einsum(exprG, G, G) for exprG in exprGs]
-    matmuled = [((gg * (gg.shape[0] / G.numel())) @ q - q) if gg.ndim == 2 else None for gg, q in zip(terms, Q)]
+    matmuled = [_update_from_grad(gg, q, G.numel() / gg.shape[0]) if gg.ndim == 2 else None for gg, q in zip(terms, Q)]
     lb = [None if mm is None else max_singular_value(mm, None, power_iter=power_iter) for mm in matmuled]
-    _inverse_free_update_(matmuled, terms, oq, G.numel(), lb, running_lower_bound, lower_bount_beta, precond_lr)
+    _inverse_free_update_(
+        matmuled, terms, oq, G.numel(), lb, running_lower_bound, lower_bount_beta, precond_lr, store_triu_as_line
+    )
     return G
 
 
@@ -2373,13 +2398,15 @@ def _triu_shape(numel):
 
 
 @decorator_knowngood
-def line_to_triu(Q_list: List[Tuple[Optional[List[int]], Tensor]]):
+def line_to_triu(Q_list: List[Tuple[Optional[List[int]], Tensor]], symmetric_output: bool = False):
     new = []
     for shape, q in Q_list:
         if shape is not None:
             shape = _triu_shape(q.numel())
             x = torch.zeros(shape, device=q.device, dtype=q.dtype)
             x[tuple(torch.triu_indices(*shape, device=q.device))] = q
+            if symmetric_output:
+                x.T[tuple(torch.triu_indices(*shape, device=q.device))] = q
             q = x
         new.append(q)
     return new
@@ -2468,11 +2495,12 @@ def psgd_precond_grad(
     caution: bool = False,
     grad: Optional[Tensor] = None,
     store_triu_as_line: bool = False,
+    symmetric_output: bool = False,
 ):
     if caution:
         ea = _compilable_cautioning(grad, ea)
     if store_triu_as_line:
-        preconds = line_to_triu(preconds)
+        preconds = line_to_triu(preconds, symmetric_output)
     md = min_dtype(list(preconds) + [ea])
     args = [q.to(md) for q in preconds]
     expr = precond_grad_expr(ndim_tuple(args), ea.ndim)
@@ -2482,17 +2510,42 @@ def psgd_precond_grad(
 
 @decorator_knowngood
 def _compilable_fused_psgd_precond_grad(
-    ea: Tensor, param, lr, grad, decay, caution, preconds: TriuOrLine, store_triu_as_line: bool = False
+    ea: Tensor,
+    param,
+    lr,
+    grad,
+    decay,
+    caution,
+    preconds: TriuOrLine,
+    store_triu_as_line: bool = False,
+    symmetric_output: bool = False,
 ):
-    precond = psgd_precond_grad(ea, preconds, caution=caution, grad=grad, store_triu_as_line=store_triu_as_line)
+    precond = psgd_precond_grad(
+        ea,
+        preconds,
+        caution=caution,
+        grad=grad,
+        store_triu_as_line=store_triu_as_line,
+        symmetric_output=symmetric_output,
+    )
     update_param_(param, precond, lr, decay, caution=False, grad=grad)
 
 
 def fused_psgd_precond_grad(
-    ea: Tensor, param, lr, grad, decay, caution, preconds: TriuOrLine, store_triu_as_line: bool = False
+    ea: Tensor,
+    param,
+    lr,
+    grad,
+    decay,
+    caution,
+    preconds: TriuOrLine,
+    store_triu_as_line: bool = False,
+    symmetric_output: bool = False,
 ):
     lr = scalar_guard(lr, param[0])
-    _compilable_fused_psgd_precond_grad(ea, param, lr, grad, decay, caution, preconds, store_triu_as_line)
+    _compilable_fused_psgd_precond_grad(
+        ea, param, lr, grad, decay, caution, preconds, store_triu_as_line, symmetric_output
+    )
 
 
 @decorator_knowngood
