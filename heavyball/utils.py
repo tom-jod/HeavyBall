@@ -2124,36 +2124,31 @@ def _inverse_free_update_(
     precond_lr: Tensor,
     store_triu_as_line: bool,
 ):
-    for new_q, gg, oq, lb, lb_state in zip(matmuled, terms, Q, lower_bound, running_lower_bound):
+    for update, gg, oq, lb, lb_state in zip(matmuled, terms, Q, lower_bound, running_lower_bound):
         if isinstance(oq, tuple):
             oq = oq[1]
 
         q = promote(oq)
         if gg.ndim < 2:
-            scale = g_numel / q.numel()
+            scale = q.numel() / g_numel
             target = promote(gg)
-            update = target / scale - 1
-            lb = _update_lb(lb_state, gg.norm(float("inf")), lower_bount_beta)
-            update = 1 - update / lb / 2 * precond_lr
-            copy_stochastic_(oq, q * update**2)
-            continue
+            update = target * scale - 1
+            update = update * q * update
+            lb = update.norm(float("inf"))
+        else:
+            update = promote(update)
+            if store_triu_as_line:
+                update = triu_to_line([update])[0][1]
 
-        new_q = promote(new_q)
-        symmetric_new_q = (new_q + new_q.T) / 2
         lb = _update_lb(lb_state, lb, lower_bount_beta)
-        new_q = symmetric_new_q / lb * precond_lr
-
-        if store_triu_as_line:
-            new_q = triu_to_line([new_q])[0][1]
-        copy_stochastic_(oq, new_q)
+        copy_stochastic_(oq, q - update / lb * precond_lr)
 
 
 @decorator_knowngood
-def _update_from_grad(gg: Tensor, q: Tensor, scale: float):
-    """
-    scale can be a float, as it's shape dependent and therefore requires recompilation anyway
-    """
-    return gg @ q + q @ gg - q * scale * 2
+def _update_from_grad(gg: Tensor, q: Tensor, scale):
+    gg = gg * scale - torch.eye(gg.size(0), device=gg.device, dtype=gg.dtype)
+    out = gg @ q @ gg
+    return out + out.T
 
 
 @decorator
@@ -2182,7 +2177,7 @@ def inverse_free_psgd_update_precond(
     G = psgd_precond_grad(G, Q)
     exprGs = calcG_expr(ndim_tuple(Q), G.ndim)
     terms = [torch.einsum(exprG, G, G) for exprG in exprGs]
-    matmuled = [_update_from_grad(gg, q, G.numel() / gg.shape[0]) if gg.ndim == 2 else None for gg, q in zip(terms, Q)]
+    matmuled = [_update_from_grad(gg, q, q.size(0) / G.numel()) if gg.ndim == 2 else None for gg, q in zip(terms, Q)]
     lb = [None if mm is None else max_singular_value(mm, None, power_iter=power_iter) for mm in matmuled]
     _inverse_free_update_(
         matmuled, terms, oq, G.numel(), lb, running_lower_bound, lower_bount_beta, precond_lr, store_triu_as_line
