@@ -2333,23 +2333,17 @@ def triu_to_line(Q_list: List[Tensor]):
     return out
 
 
-def _triu_shape(numel):
-    n = int((2 * numel) ** 0.5)
-    assert n * (n + 1) == 2 * numel
-    return n, n
-
-
 @decorator_knowngood
 def line_to_triu(Q_list: List[Tuple[Optional[List[int]], Tensor]], symmetric_output: bool = False):
     new = []
     for shape, q in Q_list:
         if shape is not None:
-            shape = _triu_shape(q.numel())
-            x = torch.zeros(shape, device=q.device, dtype=q.dtype)
-            x[tuple(torch.triu_indices(*shape, device=q.device))] = q
+            x, y = torch.triu_indices(*shape, device=q.device)
+            q_mat = torch.zeros(x.numel(), device=q.device, dtype=q.dtype)
+            q_mat[x, y] = q
             if symmetric_output:
-                x.T[tuple(torch.triu_indices(*shape, device=q.device))] = q
-            q = x
+                q_mat[y, x] = q
+            q = q_mat
         new.append(q)
     return new
 
