@@ -2339,7 +2339,7 @@ def line_to_triu(Q_list: List[Tuple[Optional[List[int]], Tensor]], symmetric_out
     for shape, q in Q_list:
         if shape is not None:
             x, y = torch.triu_indices(*shape, device=q.device)
-            q_mat = torch.zeros(x.numel(), device=q.device, dtype=q.dtype)
+            q_mat = torch.zeros(shape, device=q.device, dtype=q.dtype)
             q_mat[x, y] = q
             if symmetric_output:
                 q_mat[y, x] = q
