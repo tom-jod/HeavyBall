@@ -2133,7 +2133,7 @@ def _inverse_free_update_(
             scale = q.numel() / g_numel
             target = promote(gg)
             update = target * scale - 1
-            update = update * q * update
+            update = q - (1 - update) * q * (1 - update)
             lb = update.norm(float("inf"))
         else:
             update = promote(update)
@@ -2146,9 +2146,19 @@ def _inverse_free_update_(
 
 @decorator_knowngood
 def _update_from_grad(gg: Tensor, q: Tensor, scale):
-    gg = gg * scale - torch.eye(gg.size(0), device=gg.device, dtype=gg.dtype)
-    out = gg @ q @ gg
-    return out + out.T
+    """
+    I: Identity
+    U: Update / gg / target
+    Q: q, preconditioner
+    scale: scalar scale
+    ---
+    U = T * scale - I
+    F = I - U  # = 2I - U * scale
+    O = F @ Q @ F - Q
+    """
+    gg = 2 * torch.eye(gg.size(0), device=gg.device, dtype=gg.dtype) - gg * scale
+    out = q - gg @ q @ gg
+    return out + out.T  # make matrix symmetric - division by 2 not necesssary as we divide by norm immediately after
 
 
 @decorator
@@ -2179,6 +2189,7 @@ def inverse_free_psgd_update_precond(
     terms = [torch.einsum(exprG, G, G) for exprG in exprGs]
     matmuled = [_update_from_grad(gg, q, q.size(0) / G.numel()) if gg.ndim == 2 else None for gg, q in zip(terms, Q)]
     lb = [None if mm is None else max_singular_value(mm, None, power_iter=power_iter) for mm in matmuled]
+    # todo: find a way of simply using a different update_from_grad fn for psgd original vs quad
     _inverse_free_update_(
         matmuled, terms, oq, G.numel(), lb, running_lower_bound, lower_bount_beta, precond_lr, store_triu_as_line
     )
