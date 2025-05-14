@@ -333,13 +333,26 @@ def _ignore_warning(msg):
     warnings.filterwarnings("ignore", f".*{re.escape(msg)}.*")
 
 
-def set_torch(benchmark_limit: int = 32, einsum_strategy: str = "auto"):
+def set_torch(benchmark_limit: int = 32, einsum_strategy: str = "auto-hq"):
+    import opt_einsum as _opt_einsum
+
     cudnn.benchmark = True
     cudnn.deterministic = False
     cudnn.benchmark_limit = benchmark_limit
     torch.use_deterministic_algorithms(False)
     torch.set_float32_matmul_precision("high")  # highest: FP32, high: TF32, medium: bf16
-    opt_einsum.set_flags(True, einsum_strategy)
+    opt_einsum.set_flags(True)
+    if einsum_strategy == "heavyball":
+        opt_einsum.strategy = "auto-hq"
+        choices = _opt_einsum.paths._AUTO_HQ_CHOICES
+        for max_val, fn in ((20, _opt_einsum.paths.dynamic_programming), (64, 512), (128, 256)):
+            if isinstance(fn, int):
+                fn = functools.partial(_opt_einsum.path_random.random_greedy, max_repeats=fn)
+            for i in range(max(choices.keys()), max_val):
+                if i not in choices:
+                    choices[i] = fn
+    else:
+        opt_einsum.strategy = einsum_strategy
 
     # Torch calls these for 2nd-order optimization in HeavyBall, but they are explicitly handled.
     _ignore_warning(
