@@ -2285,6 +2285,17 @@ def weight_decay_to_ema_(p, ema, ema_decay, weight_decay):
 
 
 @decorator_knowngood
+def _compilable_weight_decay_to_init_(p, init, weight_decay):
+    _lerp(p, promote(init), 1 - weight_decay)
+
+
+def weight_decay_to_init_(p, init, weight_decay):
+    p, init = list_guard(p, init)
+    weight_decay = scalar_guard(weight_decay, p[0])
+    _compilable_weight_decay_to_ema_(p, init, weight_decay)
+
+
+@decorator_knowngood
 def _compilable_l1_weight_decay_to_ema_(p, ema, ema_decay, weight_decay):
     ema32 = _lerp(ema, p, ema_decay)
     for p_, e_ in zip(p, ema32):
