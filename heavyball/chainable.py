@@ -247,11 +247,7 @@ def exp_avg(group, update, grad, param, exp_avg):
 @copy_guard(2, "init")
 @no_state
 def weight_decay_to_init(group, update, grad, param, init):
-    utils.weight_decay_to_init_(
-        param,
-        init,
-        group["weight_decay_to_ema"] * group["lr"],
-    )
+    utils.stochastic_lerp_(param, init, group["weight_decay_to_ema"] * group["lr"])
     return update
 
 
