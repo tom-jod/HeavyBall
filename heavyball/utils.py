@@ -2181,29 +2181,37 @@ def rmsnorm_clip_(x, clip_at: float = 1.0):
 
 @decorator_knowngood
 def _compilable_global_rmsnorm_clip_(x, clip_at):
-    x = list(map(promote, x))
-    norm = sum([x.square().sum() for x in x]) / sum([x.numel() for x in x])
-    norm = norm**0.5
+    norm = 0
+    items = 0
+    for i in x:
+        norm += promote(i.square().sum())
+        items += i.numel()
+    norm = (norm / items) ** 0.5
     norm = norm.clamp(min=clip_at)
-    return torch._foreach_div(x, norm)
-
-
-@decorator_knowngood
-def _compilable_global_l2norm_clip_(x, clip_at):
-    x = list(map(promote, x))
-    norm = sum([x.square().sum() for x in x])
-    norm = norm**0.5
-    norm = norm.clamp(min=clip_at)
-    return torch._foreach_div(x, norm)
+    stochastic_multiply_(x, 1 / norm)
+    return x
 
 
 def global_rmsnorm_clip(x, clip_at: float = 1.0):
     x = list_guard(x)
+    clip_at = scalar_guard(clip_at, x[0])
     return _compilable_global_rmsnorm_clip_(x, clip_at)
+
+
+@decorator_knowngood
+def _compilable_global_l2norm_clip_(x, clip_at):
+    norm = 0
+    for i in x:
+        norm += promote(i.square().sum())
+    norm = norm**0.5
+    norm = norm.clamp(min=clip_at)
+    stochastic_multiply_(x, 1 / norm)
+    return x
 
 
 def global_l2norm_clip(x, clip_at: float = 1.0):
     x = list_guard(x)
+    clip_at = scalar_guard(clip_at, x[0])
     return _compilable_global_rmsnorm_clip_(x, clip_at)
 
 
