@@ -184,9 +184,9 @@ class Plotter(nn.Module):
         self.resolution = resolution
         self.transform = transform if transform else lambda x: x
         self.inverse_transform = inverse_transform if inverse_transform else lambda x: x
-
+        
         self.param = objective_fn.param
-
+        
         with torch.no_grad():
             x = torch.linspace(x_limits[0], x_limits[1], resolution)
             y = torch.linspace(y_limits[0], y_limits[1], resolution)
@@ -197,25 +197,50 @@ class Plotter(nn.Module):
                     objective_fn.param.data[:] = torch.tensor([self.X[i, j].item(), self.Y[i, j].item()], device="cuda")
                     Z[i, j] = self.transform(objective_fn())
             objective_fn.param.data[:] = self.initial
-        self.Z = Z
-
+            self.Z = Z
+        
         self.trajectory = [self.initial.detach().cpu().numpy()]
-
+        # Track function values along trajectory
+        self.loss_trajectory = [self.transform(objective_fn()).item()]
+    
     def forward(self, *args):
         value = self.objective(*args)
         with torch.no_grad():
             self.trajectory.append(self.param.cpu().detach().numpy())
+            self.loss_trajectory.append(self.transform(value).item())
         return self.transform(value)
-
+    
+    def plot_loss_curve(self, title="Loss During Optimization", save_path=None):
+        """Create a line graph of the objective function values along the trajectory.
+        
+        Args:
+            title: Title for the plot
+            save_path: Optional path to save the plot
+        """
+        import matplotlib.pyplot as plt
+        
+        plt.figure(figsize=(10, 6))
+        iterations = range(len(self.loss_trajectory))
+        
+        plt.plot(iterations, self.loss_trajectory, 'b-', linewidth=2)
+        
+        plt.xlabel('Iteration')
+        plt.ylabel('Objective Value')
+        plt.title(title)
+        
+        if save_path:
+            plt.savefig(save_path)
+        plt.show()
+    
     def plot(self, title=None, save_path=None):
         """Create contour plot with optimization trajectory.
-
+        
         Args:
             title: Optional title for the plot
             save_path: Optional path to save the plot
         """
         import matplotlib.pyplot as plt
-
+        
         plt.figure(figsize=(10, 8))
         z = self.Z
         if self.should_normalize:
@@ -223,13 +248,13 @@ class Plotter(nn.Module):
             z = z / z.max()
             z = z + 1e-8
         plt.contourf(self.X.numpy(), self.Y.numpy(), z.log().numpy(), levels=1000)
-
+        
         # Plot trajectory
         trajectory = np.array(self.trajectory)
         plt.plot(trajectory[:, 0], trajectory[:, 1], "r.-", label="Optimization path")
         plt.plot(trajectory[0, 0], trajectory[0, 1], "go", label="Start")
         plt.plot(trajectory[-1, 0], trajectory[-1, 1], "ro", label="End")
-
+        
         plt.colorbar(label=f"Log({'Normalized' * self.should_normalize}ObjectiveValue)")
         plt.xlabel("x")
         plt.ylabel("y")
@@ -237,11 +262,10 @@ class Plotter(nn.Module):
             plt.title(title)
         plt.legend()
         plt.grid(True)
-
+        
         if save_path:
             plt.savefig(save_path)
         plt.close()
-
 
 class Objective:
     def __init__(
@@ -300,6 +324,8 @@ class Objective:
         self.set_precond_init_scale = False
         self.end_time = int(os.environ.get("HEAVYBALL_BENCHMARK_TIMEOUT", 3600 * 4)) + time.time()
         self._last_loss = None
+        self.best_losses = []
+        self.current_losses = []
 
     def win_condition(self, loss=None):
         if loss is not None:
@@ -307,6 +333,7 @@ class Objective:
         return self._win_condition(self.m, self._last_loss)[0]
 
     def _inner(self, params):
+        self.current_losses = []
         input_kwargs = locals()
         input_kwargs.pop("self")
         params = {
@@ -325,58 +352,77 @@ class Objective:
         o = get_optim(self.opt, self.m.parameters(), **params, weight_decay=self.weight_decay, **self.kwargs)
         torch_hist = torch.empty(self.group, dtype=torch.float64, device="cuda")
         validator = self.validator.new()
-
+        
+        # Create a list to track losses for this run
+        step_losses = []
+        
         for i in range(self.steps // self.group):
             if hasattr(o, "train"):
                 o.train()
-
+            
             for j in range(self.group):
                 inp, tgt = self.data()
-
+                
                 def _closure():
                     loss = self.m() if inp is None else self.m(inp)
                     if self.loss_fn is not None:
                         loss = self.loss_fn(loss, tgt)
                     loss.backward()
                     return loss
-
+                
                 try:
                     loss = o.step(_closure)
                 except PrecondInitError:
                     self.set_precond_init_scale = True
                     return self._inner(**input_kwargs)
-
                 o.zero_grad()
-
                 with torch.no_grad():
                     torch_hist[j] = loss.detach()
-            if hasattr(o, "eval"):
-                o.eval()
+                
+                # Add loss to step_losses and current_losses
+                loss_value = loss.item()
+                step_losses.append(loss_value)
+                self.current_losses.append(loss_value)
+                
+                # Check early stopping conditions immediately after adding to loss trajectories
+                if not np.isfinite(loss_value) or self.win_condition(loss_value):
+                    return validator.ema_states.min().item(), self.m, loss_value, step_losses
+                
             with torch.no_grad():
                 for loss in torch_hist:
                     loss_cpu = loss.item()
+                    # Check early stopping conditions
                     if not np.isfinite(loss_cpu) or self.win_condition(loss_cpu):
-                        return validator.ema_states.min().item(), self.m, loss_cpu
-                    if validator(loss).item():
-                        return validator.ema_states.min().item(), self.m, loss_cpu
-        return validator.ema_states.min().item(), self.m, loss.item()
+                        return validator.ema_states.min().item(), self.m, loss_cpu, step_losses
 
+                    if validator(loss).item():
+                        return validator.ema_states.min().item(), self.m, loss_cpu, step_losses
+        
+        return validator.ema_states.min().item(), self.m, torch_hist[-1].item(), step_losses
+    
     def objective(self, params):
         self.attempt += 1
-        target, _, loss = self._inner(params)
+        target, model, loss, step_losses = self._inner(params)
+
         if self.best_loss is None or loss < self.best_loss or not np.isfinite(self.best_loss):
             self.best_loss = loss
             self.best_at = self.attempt
             self.avg = np.log(np.array(params))
-        if self.best_at * 8 < self.attempt and self.attempt - self.best_at > self.warmup_trials:  # no improvements
+            # Store the best losses
+            self.best_losses = self.current_losses.copy() 
+            
+        if self.best_at * 100 < self.attempt and self.attempt - self.best_at > self.warmup_trials:  # no improvements
             raise Stop
         if time.time() > self.end_time:  # timeout
             raise Stop
         return target
-
+    
     def get_best(self):
         self.group = 1
-        return self._inner(np.exp(self.avg))[1]
+        # Modified to return losses with the model
+        result = self._inner(np.exp(self.avg))
+        # Return the model and its loss trajectory
+        return result[1], result[3]
 
 
 def loss_win_condition(target):
@@ -448,10 +494,10 @@ def trial(
 ):
     group = min(group, steps)
     heavyball.utils.set_torch()
-
+    
     if isinstance(opt, list):
         opt = opt[0]
-
+    
     kwargs = {"caution": False, "mars": False}
     if opt.startswith("cautious-"):
         opt = opt[len("cautious-") :]
@@ -475,7 +521,7 @@ def trial(
     opt = getattr(heavyball, opt)
     if "soap" not in opt.__name__.lower() and method != "qr":
         return
-
+    
     heavyball.utils._ignore_warning("logei_candidates_func is experimental")
     heavyball.utils._ignore_warning("BoTorchSampler is experimental")
     heavyball.utils._ignore_warning("It will be set to log2(param_count). This requires `params` to be of type list.")
@@ -484,18 +530,18 @@ def trial(
         "The given NumPy array is not writable, and PyTorch does not support non-writable tensors. This means writing to this tensor will result in undefined behavior."
     )
     heavyball.utils.zeroth_power_mode = method
-
+    
     cleanup()
     set_seed()
-
+    
     did_win = False
-
+    
     def _win_condition(*args):
         nonlocal did_win
         win_state, out = win_condition(*args)
         did_win |= win_state
         return did_win, out
-
+    
     obj = Objective(
         failure_threshold,
         model,
@@ -509,12 +555,17 @@ def trial(
         max(trials * warmup_trial_pct, 1 + random_trials),
         **kwargs,
     )
-
+    
     torch.cuda.synchronize()
     start_time = time.time()
-    stdout, sys.stdout = sys.stdout, sys.stderr
-
+    #stdout, sys.stdout = sys.stdout, sys.stderr
+   
     set_seed()
+    
+    # Use a list to store win condition status (mutable object that can be modified from inner function)
+    win_status = [False]
+    global current_loss_trajectory
+    current_loss_trajectory = []
     try:
         sampler = AutoSampler(
             seed=0x123125,
@@ -527,7 +578,7 @@ def trial(
         )
         study = optuna.create_study(direction="minimize", sampler=sampler)
         winning_params = {}
-
+        
         def _optuna_objective(trial):
             set_seed(0x12312)
             lr = trial.suggest_float("lr", 1e-7, 100, log=True)
@@ -535,6 +586,7 @@ def trial(
             one_minus_beta2 = trial.suggest_float("1mbeta2", 1e-7, 1, log=True)
             one_minus_shampoo_beta = trial.suggest_float("1mshampoo_beta", 1e-5, 1, log=True)
             out = obj.objective((lr, one_minus_beta1, one_minus_beta2, one_minus_shampoo_beta))
+            
             if obj.win_condition():
                 winning_params.update({
                     "lr": lr,
@@ -542,27 +594,47 @@ def trial(
                     "1mbeta2": one_minus_beta2,
                     "1mshampoo_beta": one_minus_shampoo_beta,
                 })
+                
+                # Save the loss trajectory to the global variable before raising the exception
+                global current_loss_trajectory
+                current_loss_trajectory = obj.best_losses.copy() if hasattr(obj, 'best_losses') else []
+                
+                # Print the loss trajectory for debugging
+                print(f"Win condition met! Loss trajectory length: {len(current_loss_trajectory)}")
+                print(f"First few losses: {current_loss_trajectory[:5]}")
+                print(f"Last few losses: {current_loss_trajectory[-5:] if len(current_loss_trajectory) >= 5 else current_loss_trajectory}")
+                
                 raise WinConditionMet
             return out
-
+        
         set_seed()
         try:
             study.optimize(_optuna_objective, n_trials=trials)
         except WinConditionMet:
             pass
+           
     finally:
-        sys.stdout = stdout
-    torch.cuda.synchronize()
-
+        torch.cuda.synchronize()
+    
     end_time = time.time()
+    
+    # Whether win condition was met or we just used the best parameters found
     if winning_params:
         print("Successfully found the minimum.")
     else:
         winning_params = {"lr": base_lr, "1mbeta1": 0.9, "1mbeta2": 0.999, "1mshampoo_beta": 0.999}
+    
     print(
-        f"Took: {end_time - start_time} | Attempt: {obj.attempt} | "  #
-        f"{opt.__name__}(lr={winning_params['lr']:.5f}, betas=({1 - winning_params['1mbeta1']:.3f}, {1 - winning_params['1mbeta2']:.4f}), "  #
-        f"shampoo_beta={1 - winning_params['1mshampoo_beta']:.3f}) | Best Loss: {obj.best_loss}"
+        f"Took: {end_time - start_time} | Attempt: {obj.attempt} | "
+        f"{opt.__name__}(lr={winning_params['lr']:.5f}, betas=({1 - winning_params['1mbeta1']:.3f}, {1 - winning_params['1mbeta2']:.4f}), "
+        f"shampoo_beta={1 - winning_params['1mshampoo_beta']:.3f}) | Best Loss: {obj.best_loss} | loss_trajectory: {obj.best_losses}"
     )
+    loss_trajectory = obj.best_losses
+    
     if return_best:
-        return obj.get_best()
+        # Get the best model
+        best_model, _ = obj.get_best()
+        # Add the loss trajectory to the model as an attribute
+        best_model.loss_trajectory = loss_trajectory
+        return best_model
+    

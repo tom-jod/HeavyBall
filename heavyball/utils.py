@@ -914,6 +914,7 @@ class StatefulOptimizer(torch.optim.Optimizer):
         should_promote: bool = True,
         beta1: float = -1.0,
         raw: bool = False,
+        use_ema: bool = False,
     ):
         for p in group["params"]:
             grad = getattr(p, "grad", None)
@@ -946,7 +947,10 @@ class StatefulOptimizer(torch.optim.Optimizer):
             for pv, g, v, hv in zip(p_views, grad, vs, hvs):
                 g = promote_detach(g, should_promote)
                 if beta1 >= 0 and group.get("mars", False):
-                    self.mars_correct_list(group, [pv], [g], group["mars_gamma"], beta1)
+                    if use_ema:
+                        self.mars_correct_list(group, [pv], [g], group["mars_gamma"], beta1)
+                    else:
+                        self.mars_correct_list(group, [pv], [g], group["mars_gamma"], beta1)
                 pv.vector = promote_detach(v, should_promote)
                 pv.hessian_vector = promote_detach(hv, should_promote)
                 yield pv, g

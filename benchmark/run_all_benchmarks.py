@@ -7,11 +7,47 @@ import time
 import traceback
 from datetime import datetime
 from queue import Empty
-
+import matplotlib.pyplot as plt
 import numpy as np
 import typer
-
+import logging
+import contextlib
+import ast
+import torch._dynamo
+torch._dynamo.config.suppress_errors = True
 app = typer.Typer()
+torch._dynamo.config.disable = True
+
+benchmarks = [
+    "beale.py",
+    "rosenbrock.py",
+    "rastrigin.py",
+    "quadratic_varying_scale.py",
+    "quadratic_varying_target.py",
+    "noisy_matmul.py",
+    "xor_sequence.py",
+    "xor_digit.py",
+    "xor_spot.py",
+    "xor_sequence_rnn.py",
+    "xor_digit_rnn.py",
+    "xor_spot_rnn.py",
+    "saddle_point.py",
+    "discontinuous_gradient.py",
+    "wide_linear.py",
+    "minimax.py",
+    "plateau_navigation.py",
+    "scale_invariant.py",
+    "momentum_utilization.py",
+    "batch_size_scaling.py",
+    "sparse_gradient.py",
+    "layer_wise_scale.py",
+    "parameter_scale.py",
+    "gradient_delay.py",
+    "gradient_noise_scale.py",
+    "adversarial_gradient.py",
+    "dynamic_landscape.py",
+    "constrained_optimization.py",
+]
 
 
 def last_match(pattern, text):
@@ -45,7 +81,10 @@ def run_benchmark(script, opt, steps, dtype, trials, seed, difficulty):
     sys.path.append(str(pathlib.Path(__file__).parent.resolve()))
     stdout = sys.stdout
     sys.stdout = io.StringIO()
+    
     start_time = time.time()
+    loss_trajectory = []
+
     try:
         torch.cuda.empty_cache()
         torch.cuda.synchronize()
@@ -73,8 +112,10 @@ def run_benchmark(script, opt, steps, dtype, trials, seed, difficulty):
             "win_condition_multiplier": 1.0,
             "config": difficulty,
         }
-        # Run the main function
+        # Run the main function and capture its return value
+         # Run the main function
         module.main(**arguments)
+
     except SkipConfig:
         raise
     except Exception:
@@ -85,19 +126,44 @@ def run_benchmark(script, opt, steps, dtype, trials, seed, difficulty):
         error = ""
     finally:
         sys.stdout = stdout
-
     # Parse output
+    
     success = "Successfully found the minimum." in output
-
     runtime = last_match(r"Took: ([0-9.]+)", output)
     loss = last_match(r"Best Loss: ([0-9.e\-+]+)", output)
     attempts = int(last_match(r"Attempt: ([0-9]+)", output) or trials)
-
+    # Try to find a list called loss_trajectory in the output
+    if not loss_trajectory:  # Only search if we haven't found it yet
+        # Look for patterns like "[1.2, 3.4, 5.6, ...]" in the output
+        # This regex looks for a list pattern that might be printed as part of "loss_trajectory"
+        list_pattern = r'\[([\d\s,.e\-+]+)\]'
+        list_matches = re.findall(list_pattern, output)
+        
+        if list_matches:
+            for list_str in list_matches:
+                try:
+                    # Try to parse the list string
+                    # First, make it a proper list by adding brackets
+                    list_str = "[" + list_str + "]"
+                    # Use ast.literal_eval to safely evaluate the string representation of the list
+                    parsed_list = ast.literal_eval(list_str)
+                    
+                    # If it's a list of numbers and reasonably long, it might be our loss trajectory
+                    if (isinstance(parsed_list, list) and 
+                        all(isinstance(x, (int, float)) for x in parsed_list) and 
+                        len(parsed_list) > 5):  # Assuming loss trajectory has more than 5 points
+                        
+                        loss_trajectory = parsed_list
+                        print(f"Extracted loss_trajectory from output with length {len(loss_trajectory)}")
+                        break
+                except (SyntaxError, ValueError):
+                    # If parsing fails, try the next match
+                    continue
     total_runtime = time.time() - start_time
 
     # Parse winning config string
     config_str = parse_config(output)
-
+    
     return {
         "name": f"{script.replace('.py', '')}-{difficulty}",
         "opt": opt,
@@ -108,6 +174,7 @@ def run_benchmark(script, opt, steps, dtype, trials, seed, difficulty):
         "error": error if error else "",
         "seed": seed,
         "config_str": config_str,
+        "loss_trajectory": loss_trajectory,
     }
 
 
@@ -174,6 +241,44 @@ def write_progress(results, opt, output):
 _difficulty_order = ["trivial", "easy", "medium", "hard", "extreme", "nightmare"]
 
 
+def plot_loss_curves(results, opt, output):
+
+    time_string = time.strftime("%H:%M:%S", time.localtime())
+    benchmarks = set()
+    for r in results:
+        benchmarks.add(r["name"])
+
+    for benchmark in list(benchmarks):
+        benchmark_results = [r for r in results if r["name"] == benchmark]
+        if not benchmark_results:
+            continue
+        plt.rcParams.update({'font.size': 16})
+        # create figure 
+        plt.figure(figsize=(12, 8))
+
+        for o in opt:
+            opt_results = [r for r in benchmark_results if r["opt"] == o]
+            if not opt_results:
+                continue
+            
+            # add line to graph
+            if opt_results[0]['loss_trajectory'] != []:
+                #target = opt_results[0]['target']
+                loss_trajectory = opt_results[0]['loss_trajectory']
+                iterations = range(len(loss_trajectory))
+                plt.plot(iterations, loss_trajectory, linewidth=1, label=o)
+                #plt.axhline(y=target, color='r', linestyle='--', label='Target')
+        # save plot to a common folder
+        plt.xlabel('Iteration')
+        plt.ylabel('Objective Value')
+        plt.legend()
+        folder_path = "loss_curves"
+        os.makedirs(folder_path, exist_ok=True)
+        file_path = os.path.join(folder_path, f"{benchmark}_optimiser_loss_comparison.png")
+        plt.savefig(file_path)
+        plt.close()
+
+            
 def worker(task_queue, result_queue, worker_index, difficulties: list, timeout: int):
     import torch
 
@@ -185,6 +290,15 @@ def worker(task_queue, result_queue, worker_index, difficulties: list, timeout: 
     os.environ["MKL_NUM_THREADS"] = "1"
     os.environ["HEAVYBALL_BENCHMARK_TIMEOUT"] = str(round(timeout))
 
+    # Create the worker_logs directory if it doesn't exist
+    os.makedirs("worker_logs", exist_ok=True)
+
+    logging.basicConfig(
+        filename=f"worker_logs/worker_{worker_index}.log",
+        level=logging.INFO,
+        format='%(asctime)s - %(levelname)s - %(message)s'
+    )
+    logging.info(f"Worker {worker_index} starting")
     # Initialize CUDA context
     dummy = torch.zeros(1, device="cuda")
     del dummy
@@ -204,12 +318,15 @@ def worker(task_queue, result_queue, worker_index, difficulties: list, timeout: 
             for _ in range(len(difficulties)):
                 d = inner_difficulties.pop(0)
                 try:
+                    logging.info(f"running benchmark")
                     result = run_benchmark(script, o, steps, dtype, trials, seed, d)
                     exc = ""
+                    logging.info(f"result:{result}")
                 except Exception as e:
+                    
                     result = isinstance(e, SkipConfig)
                     exc = str(e)
-
+                    logging.info(exc)
                 if result is True:  # SkipConfig
                     break
                 if result is not False and result is not None:
@@ -251,42 +368,35 @@ def main(
     parallelism: int = typer.Option(8, help="Number of parallel worker processes"),
     caution: bool = False,
     mars: bool = False,
-    unscaled_caution: bool = False,
+    unscaled_caution: bool = typer.Option(False, "--unscaled-caution", help="Use unscaled caution"),
     seeds: int = 4,
-    difficulties: list[str] = typer.Option([], help=f"{_difficulty_order} or any combination of these"),
-):
+    difficulties: str = typer.Option([], help=f"{_difficulty_order} or any combination of these"),
+    plot_loss_trajectories: bool = True,
+    exclude: str = typer.Option([], help="List of benchmarks to exclude"),
+):  
+    # Parse list based argments, to allow the user to pass in --flag "option1,option2..." instead of typing --flag each time
+    #opt = [item.strip() for item in opt.split(',')] if opt else []
+    exclude = [item.strip() for item in exclude.split(',')] if exclude else []
+    difficulties = [item.strip() for item in difficulties.split(',')] if difficulties else []
+    if plot_loss_trajectories and len(difficulties) > 1:
+        raise AssertionError("Please choose only one difficulty if plotting loss trajectories")
+
     multiprocessing.set_start_method("spawn", force=True)  # spawn appears to be safer with CUDA MPS
 
-    benchmarks = [
-        "beale.py",
-        "rosenbrock.py",
-        "rastrigin.py",
-        "quadratic_varying_scale.py",
-        "quadratic_varying_target.py",
-        "noisy_matmul.py",
-        "xor_sequence.py",
-        "xor_digit.py",
-        "xor_spot.py",
-        "xor_sequence_rnn.py",
-        "xor_digit_rnn.py",
-        "xor_spot_rnn.py",
-        "saddle_point.py",
-        "discontinuous_gradient.py",
-        "wide_linear.py",
-        "minimax.py",
-        "plateau_navigation.py",
-        "scale_invariant.py",
-        "momentum_utilization.py",
-        "batch_size_scaling.py",
-        "sparse_gradient.py",
-        "layer_wise_scale.py",
-        "parameter_scale.py",
-        "gradient_delay.py",
-        "gradient_noise_scale.py",
-        "adversarial_gradient.py",
-        "dynamic_landscape.py",
-        "constrained_optimization.py",
-    ]
+    # Filter out benchmarks that should be removed
+    filtered_benchmarks = []
+    if exclude != []:
+        for benchmark in benchmarks:
+            # Remove .py extension for comparison if it exists
+            benchmark_name = benchmark.replace(".py", "")
+            if not any(benchmark_name == remove.replace(".py", "") for remove in exclude):
+                filtered_benchmarks.append(benchmark)
+    else:
+        filtered_benchmarks = benchmarks
+    if not filtered_benchmarks:
+        raise ValueError("No benchmarks left after filtering")
+    
+    print(f"Running {len(filtered_benchmarks)} benchmarks: {', '.join(filtered_benchmarks)}")
 
     if mars:
         opt = ["mars-" + o for o in opt]
@@ -299,7 +409,7 @@ def main(
     result_queue = multiprocessing.Queue()
 
     total_tasks = 0
-    for script, o, i in itertools.product(benchmarks, opt, range(seeds)):
+    for script, o, i in itertools.product(filtered_benchmarks, opt, range(seeds)):
         task_queue.put((script, o, steps, dtype, trials, i))
         total_tasks += len(difficulties)
 
@@ -350,6 +460,8 @@ def main(
         # Save final results
         if results:
             write_progress(results, opt, output)
+            if plot_loss_trajectories:
+                plot_loss_curves(results, opt, output)
 
 
 if __name__ == "__main__":

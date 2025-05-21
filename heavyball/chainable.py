@@ -3,7 +3,9 @@ import functools
 import math
 import random
 from typing import Iterable, List, Literal, Optional, Union
-
+from torch.optim import SGD
+from torch.optim.lr_scheduler import OneCycleLR
+import matplotlib.pyplot as plt
 import torch
 from torch import Tensor
 
@@ -923,6 +925,22 @@ class ChainOpt(utils.StatefulOptimizer):
         defaults = {k: v for k, v in defaults.items() if v is not use_default}
         super().__init__(params, defaults, foreach)
         self.fns = fns
+        self.gamma_schedule = CosineSandwichSchedule(1000, 0.025)
+
+        # We use a dummy optimizer because OneCycleLR operates on an optimizer
+        # This parameter won't be trained — we're only using the scheduler output
+        param = torch.nn.Parameter(torch.zeros(1))
+        optimizer = SGD([param], lr=1e-3)
+        total_steps = 100000
+        self.list_of_gammas = []
+        self.scheduler = OneCycleLR(
+            optimizer,
+            max_lr=0.025,        # Actually max_gamma here 
+            total_steps=total_steps,
+            anneal_strategy='cos',  
+            div_factor=25,     
+            final_div_factor=1e9  # minimum lr = initial_lr / final_div_factor → set very small = 0
+        )
 
     @property
     def fns(self):
@@ -947,8 +965,11 @@ class ChainOpt(utils.StatefulOptimizer):
             group["base_lr"] = group["lr"]
 
         caution = group["caution"]
-
-        vals = list(self.split_p_and_g_in_group(group, should_promote=self.promote, beta1=utils.get_beta1(group)))
+        if group.get("use_ema", False):
+            use_ema = group["use_ema"]
+        else:
+            use_ema = False
+        vals = list(self.split_p_and_g_in_group(group, should_promote=self.promote, beta1=utils.get_beta1(group),use_ema=use_ema))
 
         if not vals:
             return
@@ -972,11 +993,40 @@ class ChainOpt(utils.StatefulOptimizer):
                 chain(self.state_, group, [grad], [param], *self.fns)
         else:
             chain(self.state_, group, g, p, *self.fns)
-
+    
+        if group.get("mars_schedule", False):
+            #gamma = self.gamma_schedule.get_gamma(group["step"])
+            self.scheduler.step()  # Move to next step in the cycle
+            gamma = self.scheduler.get_last_lr()[0]  # Extract scheduled LR
+            group["mars_gamma"] = gamma
+            
         group["caution"] = caution
         group["lr"] = group["prev_lr"]
         group["step"] = None
 
+class CosineSandwichSchedule:
+    def __init__(self, total_steps, gamma, warmup_ratio=0.125, hold_ratio=0.5):
+        self.total_steps = total_steps
+        self.gamma = gamma
+
+        self.T1 = int(total_steps * warmup_ratio)
+        self.T2 = int(total_steps * hold_ratio)
+        self.T3 = total_steps - self.T1 - self.T2
+
+    def get_gamma(self, step):
+        if step < self.T1:
+            # Linear ramp-up: 0 → gamma
+            return (step / self.T1) * self.gamma
+        elif step < self.T1 + self.T2:
+            # Hold at gamma
+            return self.gamma
+        elif step < self.total_steps:
+            # Linear decay: gamma → 0
+            t = step - (self.T1 + self.T2)
+            return self.gamma * (1 - t / self.T3)
+        else:
+            # After schedule ends, stay at 0
+            return 0.0
 
 str_or_fn = Union[str, callable, None, Literal[use_default]]
 
