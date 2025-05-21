@@ -667,6 +667,7 @@ class ForeachPSGDKron(C.BaseOpt):
     delayed: bool = False
     cached: bool = False
     exp_avg_input: bool = True
+    quad: bool = False
 
     def __init__(
         self,
@@ -700,7 +701,7 @@ class ForeachPSGDKron(C.BaseOpt):
         ortho_method: Optional[str] = None,  # If None, no orthogonalization
         precond_grad_accum: bool = False,
         lower_bound_beta: float = 0.9,  # 0.0 recovers pre-2.0.0 PSGD
-        inverse_free: bool = False,
+        inverse_free: bool = C.use_default,
         dampening: float = 2**-13,
         precond_update_power_iterations: int = 2,
         # expert parameters
@@ -710,6 +711,12 @@ class ForeachPSGDKron(C.BaseOpt):
         precond_lr: float = 0.1,
         **kwargs,
     ):
+        delayed = C.default(delayed, self.delayed)
+        cached = C.default(cached, self.cached)
+        exp_avg_input = C.default(exp_avg_input, self.exp_avg_input)
+        update_clipping = C.default(update_clipping, utils.trust_region_clip_)
+        inverse_free = C.default(inverse_free, self.quad)
+
         defaults = locals()
         defaults.pop("self")
         defaults.update(defaults.pop("kwargs"))
@@ -721,11 +728,6 @@ class ForeachPSGDKron(C.BaseOpt):
             defaults.pop("preconditioner_update_probability") or utils.precond_update_prob_schedule()
         )
         params = defaults.pop("params")
-
-        delayed = C.default(delayed, self.delayed)
-        cached = C.default(cached, self.cached)
-        exp_avg_input = C.default(exp_avg_input, self.exp_avg_input)
-        update_clipping = C.default(update_clipping, utils.trust_region_clip_)
 
         super().__init__(
             params,
@@ -762,6 +764,11 @@ class ForeachCachedNewtonPSGD(ForeachCachedPSGDKron):
 
 class NewtonHybrid2PSGDKron(ForeachCachedNewtonPSGD):
     hvp_interval = 2
+
+
+class QUAD(ForeachPSGDKron):
+    quad = True
+    cached = True
 
 
 class ForeachPSGDLRA(C.BaseOpt):
@@ -803,6 +810,10 @@ class ForeachPSGDLRA(C.BaseOpt):
         precond_lr: float = 0.1,
         **kwargs,
     ):
+        delayed = C.default(delayed, self.delayed)
+        exp_avg_input = C.default(exp_avg_input, self.exp_avg_input)
+        update_clipping = C.default(update_clipping, utils.trust_region_clip_)
+
         defaults = locals()
         defaults.pop("self")
         defaults.update(defaults.pop("kwargs"))
@@ -822,10 +833,6 @@ class ForeachPSGDLRA(C.BaseOpt):
             params = list(params)
             defaults["rank"] = round(math.log2(sum(p.numel() for p in params)))
             utils.warn_once(f"rank was set to {defaults['rank']}")
-
-        delayed = C.default(delayed, self.delayed)
-        exp_avg_input = C.default(exp_avg_input, self.exp_avg_input)
-        update_clipping = C.default(update_clipping, utils.trust_region_clip_)
 
         super().__init__(
             params,

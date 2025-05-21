@@ -69,6 +69,16 @@ einsum_base = string.ascii_lowercase
 
 
 @decorator_knowngood
+def compiled_einsum(expr, *args):
+    """
+    this is necessary to avoid the slowdown introduced by uncompiled einsum
+    uncompiled einsum is twice as slow if we add three 1-sized dimensions
+    for more, see https://gist.github.com/ClashLuke/a9530f1b9ba4e525369e2dba48528957
+    """
+    return torch.einsum(expr, *args)
+
+
+@decorator_knowngood
 def _compilable_schedule_free_(
     p: List[Tensor],
     z: List[Tensor],
@@ -323,13 +333,26 @@ def _ignore_warning(msg):
     warnings.filterwarnings("ignore", f".*{re.escape(msg)}.*")
 
 
-def set_torch(benchmark_limit: int = 32, einsum_strategy: str = "auto"):
+def set_torch(benchmark_limit: int = 32, einsum_strategy: str = "auto-hq"):
+    import opt_einsum as _opt_einsum
+
     cudnn.benchmark = True
     cudnn.deterministic = False
     cudnn.benchmark_limit = benchmark_limit
     torch.use_deterministic_algorithms(False)
     torch.set_float32_matmul_precision("high")  # highest: FP32, high: TF32, medium: bf16
-    opt_einsum.set_flags(True, einsum_strategy)
+    opt_einsum.set_flags(True)
+    if einsum_strategy == "heavyball":
+        opt_einsum.strategy = "auto-hq"
+        choices = _opt_einsum.paths._AUTO_HQ_CHOICES
+        for max_val, fn in ((20, _opt_einsum.paths.dynamic_programming), (64, 512), (128, 256)):
+            if isinstance(fn, int):
+                fn = functools.partial(_opt_einsum.path_random.random_greedy, max_repeats=fn)
+            for i in range(max(choices.keys()), max_val):
+                if i not in choices:
+                    choices[i] = fn
+    else:
+        opt_einsum.strategy = einsum_strategy
 
     # Torch calls these for 2nd-order optimization in HeavyBall, but they are explicitly handled.
     _ignore_warning(
@@ -476,7 +499,7 @@ def get_orthogonal_matrix_QR(GG: List[Tensor], Q: List[Tensor], exp_avg: Optiona
         q_old = promote(q.data)
 
         tmp = m @ q_old
-        est_eig = torch.einsum("ij,ij->j", q_old, tmp)
+        est_eig = compiled_einsum("ij,ij->j", q_old, tmp)
         sort_idx = torch.argsort(est_eig, descending=True)
 
         tmp[:, sort_idx] = inplace_orthogonal_(tmp[:, sort_idx], precise_zeroth_power_mode)
@@ -499,7 +522,7 @@ def get_orthogonal_matrix_QR(GG: List[Tensor], Q: List[Tensor], exp_avg: Optiona
     out_str = "".join([o if o in to_shampoo else i for i, o in zip(in_str, out_str)])
 
     subscripts = f"{in_str},{from_shampoo},{to_shampoo}->{out_str}"
-    exp_avg_new = torch.einsum(
+    exp_avg_new = compiled_einsum(
         subscripts, exp_avg, *[q for q in Q if q is not None], *[q for q in new_qs if q is not None]
     )
     copy_stochastic_(exp_avg, exp_avg_new)
@@ -683,7 +706,7 @@ def update_ggt(grad, GG, max_precond_dim, precondition_1d, beta):
         b = einsum_base[idx]
         g0 = einsum_base[: grad.dim()]
         g1 = g0.replace(b, b.upper())
-        outer_product = torch.einsum(f"{g0},{g1}->{b + b.upper()}", grad, grad)
+        outer_product = compiled_einsum(f"{g0},{g1}->{b + b.upper()}", grad, grad)
         stochastic_lerp_(m, outer_product, 1 - beta)
 
 
@@ -765,7 +788,7 @@ def project(grad, Q, back: bool):
     preconditioners = ",".join([(g + g.upper())[:: -1 if back else 1] for m, g in zip(Q, param) if m is not None])
     if preconditioners:
         out = "".join([c.upper() if c.upper() in preconditioners else c for c in param])
-        out = torch.einsum(f"{param},{preconditioners}->{out}", promote(grad), *[q for q in Q if q is not None])
+        out = compiled_einsum(f"{param},{preconditioners}->{out}", promote(grad), *[q for q in Q if q is not None])
         grad = out.to(grad.dtype)
     return grad
 
@@ -1615,7 +1638,7 @@ def _lra_flatten_and_balance(U: List[Tensor], V: List[Tensor], d: List[Tensor]):
 @decorator
 def low_rank_mm(U: Tensor, V: Tensor, x: Tensor) -> Tensor:
     dtype = min_dtype([U, V, x])
-    return x + torch.einsum("br,gr,g->b", U.to(dtype), V.to(dtype), x.to(dtype)).to(x.dtype)
+    return x + compiled_einsum("br,gr,g->b", U.to(dtype), V.to(dtype), x.to(dtype)).to(x.dtype)
 
 
 @decorator_knowngood
@@ -1696,7 +1719,7 @@ def update_lra_precond_(
     Ph = low_rank_mm(V, U, Qh)
     rank = U.size(1)
 
-    VtU = torch.einsum("br,bn->rn", V, U)  # (rank, rank)
+    VtU = compiled_einsum("br,bn->rn", V, U)  # (rank, rank)
     I = torch.eye(rank, dtype=VtU.dtype, device=VtU.device)
     IpVtU = I + VtU
     invQtv = vector / d
@@ -1722,19 +1745,19 @@ def update_lra_precond_(
     a, b = Qh, invQtv
 
     precond = V if precond_u else U
-    atV = torch.einsum("b,br->r", a, precond)  # o == one
-    btV = torch.einsum("b,br->r", b, precond)
-    atVVt = torch.einsum("r,br->b", atV, precond)
-    btVVt = torch.einsum("r,br->b", btV, precond)
+    atV = compiled_einsum("b,br->r", a, precond)  # o == one
+    btV = compiled_einsum("b,br->r", b, precond)
+    atVVt = compiled_einsum("r,br->b", atV, precond)
+    btVVt = compiled_einsum("r,br->b", btV, precond)
     precond_step = step / (a.norm() * atVVt.norm() + b.norm() * btVVt.norm()).clamp(min=eps)
     if precond_u:
-        a = torch.einsum("b,r,rg->bg", a, atV, IpVtU)
-        b = torch.einsum("b,r,rg->bg", b, btV, IpVtU)
+        a = compiled_einsum("b,r,rg->bg", a, atV, IpVtU)
+        b = compiled_einsum("b,r,rg->bg", b, btV, IpVtU)
     else:
-        a = a + torch.einsum("br,r->b", V, atV)
-        b = b + torch.einsum("br,r->b", V, btV)
-        a = torch.einsum("b,r->br", a, atV)
-        b = torch.einsum("b,r->br", b, btV)
+        a = a + compiled_einsum("br,r->b", V, atV)
+        b = b + compiled_einsum("br,r->b", V, btV)
+        a = compiled_einsum("b,r->br", a, atV)
+        b = compiled_einsum("b,r->br", b, btV)
     apply_flat_add(U_orig if precond_u else V_orig, b - a, precond_step)
     if not delayed:
         stochastic_add_([U if precond_u else V], [b - a], precond_step)
@@ -1855,7 +1878,7 @@ def dampen_multiple(g: List[Tensor], damp: float = 2**-13):
 
 def casted_einsum(expr: str, *args: Tensor) -> Tensor:
     md = min_dtype(args)
-    return torch.einsum(expr, *[a.to(md) for a in args]).to(args[-1].dtype)
+    return compiled_einsum(expr, *[a.to(md) for a in args]).to(args[-1].dtype)
 
 
 @decorator_knowngood
@@ -1967,83 +1990,28 @@ def max_singular_value(
 
 
 @decorator_knowngood
-def _subtract_from_line_(state: Tensor, term: Tensor):
-    stochastic_add_([state], [triu_to_line([term])[0][1]], -1)
-
-
-@decorator_knowngood
-def _prescale_term_(
-    term1: Tensor, fac: Tensor, norm: Tensor, lower_bound: Tensor, lb_state: Tensor, success: Tensor, lb_beta: Tensor
-):
-    out = promote(term1).triu() * fac
-    lb: Tensor = promote(lower_bound.where(success, norm)).clamp(min=tiny_bf16)
-    lb = lb.maximum(lb_state + (lb - lb_state) * (1 - lb_beta))
-    copy_stochastic_(lb_state, lb)
-    out = out / lb
-    copy_stochastic_(term1, out.where(success, 0))  # fill matrix with 0s if step would cause NaN
-
-
-@decorator_knowngood
-def _compilable_term_extract_(
+def _psgd_default_preconditioner_grad(
     terms: List[Tuple[Tensor, Tensor]],
     Q: List[Tensor],
-    oq: "TriuOrLine",
-    precond_lr: Tensor,
-    velocity: Optional[List[Tensor]],
-    beta: Tensor,
-    running_lower_bound: List[Tensor],
-    lower_bount_beta: Tensor,
-) -> List[Tuple[Tensor, Tensor, Tensor, Tensor, "TriuOrLine"]]:
+) -> List[Tensor]:
     out = []
-    if velocity is None:
-        velocity = [None] * len(Q)
-    can_update = torch.ones((), dtype=torch.bool, device=Q[0].device)
-    for x, y in terms:
+    for q, (x, y) in zip(Q, terms):
         x = promote(x)
         y = promote(y)
-        summed = x + y
-        diff = x - y
-        local_norm = summed.norm(float("inf"))
-        can_update = torch.logical_and(local_norm > 0, can_update)
-        out.append((diff, summed, local_norm))
-
-    new = []
-    for (d, s, n), q, o, v, lb_state in zip(out, Q, oq, velocity, running_lower_bound):
-        if d.ndim == 2:
-            d = d.triu()
-        if v is not None:
-            if d.ndim < 2:
-                numel = max(1, d.numel())  # handle scalar case
-            else:
-                numel = d.size(0) * (d.size(0) + 1) / 2  # ones_like(d).triu().sum()
-            norm = d.square()
-            v_ = promote(v) * beta + (1 - beta) * (norm / numel).sum()  # AdamMini
-            d = d / v_.sqrt().clamp(min=1e-8)
-            copy_stochastic_(v, v_)
-        if q.ndim >= 2:
-            new.append((d, s, n, q, o, lb_state))
-            continue
-
-        if isinstance(o, tuple):
-            o = o[1]
-        po = promote(o)
-
-        lb = n.clamp(min=tiny_bf16)
-        lb = lb.maximum(lb_state + (lb - lb_state) * (1 - lower_bount_beta))
-        copy_stochastic_(lb_state, lb)
-
-        new_po = po - d * precond_lr * po / lb
-        new_po = stochastic_round_(o, new_po)
-        o.copy_(torch.where(can_update, new_po, o))
-
-    return new, can_update
+        update = x - y
+        if q.ndim < 2:
+            update = q * update
+        else:
+            update = (q @ update).triu()
+        out.append(update)
+    return out
 
 
 @decorator_knowngood
-def _balance_to_triu(Q: "TriuOrLine"):
+def _balance_to_triu(Q: "TriuOrLine", symmetric_output: bool = False):
     if isinstance(Q[0], tuple):
         psgd_balance_Q([o[1] for o in Q])
-        return line_to_triu(Q)
+        return line_to_triu(Q, symmetric_output)
     psgd_balance_Q(Q)
     return Q
 
@@ -2079,59 +2047,73 @@ def psgd_update_precond(
 ) -> None:
     """Update Kronecker product preconditioner Q with pair (V, G)."""
     Q = _balance_to_triu(oq)
-
-    A, conjB = psgd_calc_A_and_conjB(G, Q, V)
+    exprGs = calcG_expr(ndim_tuple(Q), G.ndim)
     precond_lr, beta2, lower_bount_beta = scalar_guard(precond_lr, beta2, lower_bount_beta, G)
 
-    exprGs = calcG_expr(ndim_tuple(Q), G.ndim)
-    terms = [(torch.einsum(exprG, A, A), torch.einsum(exprG, conjB, conjB)) for exprG in exprGs]
+    A, conjB = psgd_calc_A_and_conjB(G, Q, V)
+    terms = [(compiled_einsum(exprG, A, A), compiled_einsum(exprG, conjB, conjB)) for exprG in exprGs]
     del A, conjB, V
-
-    terms, can_update = _compilable_term_extract_(
-        terms, Q, oq, precond_lr, velocity, beta2, running_lower_bound, lower_bount_beta
+    updates = _psgd_default_preconditioner_grad(terms, Q)
+    _psgd_precond_update_(
+        updates, oq, running_lower_bound, lower_bount_beta, precond_lr, store_triu_as_line, power_iter
     )
-    for grad, summed, local_norm, q, original_q, lb_state in terms:
-        lower_bound = max_singular_value(summed, local_norm, power_iter=power_iter)
-        if ortho_method is not None:
-            method = ortho_method.split("-")
-            if len(method) == 1:
-                method, scale = method[0], "scale"
-            else:
-                method, scale = method
-            inplace_orthogonal_(grad, method, grad, scale)
-        _prescale_term_(grad, precond_lr, local_norm, lower_bound, lb_state, can_update, lower_bount_beta)
-        grad = grad @ q.to(grad.dtype)
-        if store_triu_as_line:
-            _subtract_from_line_(original_q[1], grad)
-        else:
-            stochastic_add_(original_q, grad, -1)
     return None
 
 
 @decorator_knowngood
-def _inverse_free_update_(
+def _psgd_precond_update_(
     matmuled: List[Optional[Tensor]],
-    terms: List[Tensor],
     Q: "TriuOrLine",
-    g_numel: int,
-    lower_bound: List[Optional[Tensor]],
     running_lower_bound: List[Tensor],
     lower_bount_beta: Tensor,
     precond_lr: Tensor,
+    store_triu_as_line: bool,
+    power_iter: int,
 ):
-    for mm, gg, oq, lb, lb_state in zip(matmuled, terms, Q, lower_bound, running_lower_bound):
+    for update, oq, lb_state in zip(matmuled, Q, running_lower_bound):
+        if isinstance(oq, tuple):
+            oq = oq[1]
+
         q = promote(oq)
-        if q.ndim < 2:
-            target_scale = g_numel / q.numel()
-            lb = gg.norm(float("inf"))
-            update = (promote(gg) - target_scale) * q
+        if update.ndim < 2:
+            lb = update.norm(float("inf"))
         else:
-            target_scale = g_numel / q.shape[0]
-            update = promote(mm) - target_scale * q
+            lb = max_singular_value(update, None, power_iter=power_iter)
+            update = promote(update)
+            if store_triu_as_line:
+                update = triu_to_line([update])[0][1]
+
         lb = promote(lb)
         lb = lb.maximum(promote(lb_state) + (lb - promote(lb_state)) * (1 - lower_bount_beta))
         copy_stochastic_(lb_state, lb)
-        copy_stochastic_(oq, q - precond_lr / (lb + target_scale) * update)
+        copy_stochastic_(oq, q - update / lb * precond_lr)
+
+
+@decorator_knowngood
+def _psgd_quad_preconditioner_grad(GG: List[Tensor], Q: List[Tensor], numel: int):
+    """
+    I: Identity
+    U: Update / gg / target
+    Q: q, preconditioner
+    scale: scalar scale
+    ---
+    U = T * scale - I
+    F = I - U  # = 2I - U * scale
+    O = F @ Q @ F - Q
+    """
+    out = []
+    for gg, q in zip(GG, Q):
+        if gg.ndim < 2:
+            scale = max(1, gg.numel()) / numel
+            target = promote(gg)
+            update = target * scale - 1
+            out.append(q - (1 - update) * q * (1 - update))
+        else:
+            scale = gg.size(0) / numel
+            gg = 2 * torch.eye(gg.size(0), device=gg.device, dtype=gg.dtype) - gg * scale
+            update = q - gg @ q @ gg
+            out.append(update + update.T)  # make matrix symmetric
+    return out
 
 
 @decorator
@@ -2152,19 +2134,18 @@ def inverse_free_psgd_update_precond(
     assert V is None
     assert ortho_method is None
     assert velocity is None
-    assert not store_triu_as_line  # precond is not triangular
-    del V, ortho_method, velocity, store_triu_as_line
+    del V, ortho_method, velocity
 
-    psgd_balance_Q(oq)
-    Q = oq
+    Q = _balance_to_triu(oq, True)
     precond_lr, beta2, lower_bount_beta = scalar_guard(precond_lr, beta2, lower_bount_beta, G)
+    exprGs = calcG_expr(ndim_tuple(Q), G.ndim)
 
     G = psgd_precond_grad(G, Q)
-    exprGs = calcG_expr(ndim_tuple(Q), G.ndim)
-    terms = [torch.einsum(exprG, G, G) for exprG in exprGs]
-    matmuled = [gg @ q if gg.ndim == 2 else None for gg, q in zip(terms, Q)]
-    lb = [max_singular_value(gg, None, power_iter=power_iter) if gg.ndim == 2 else None for gg in terms]
-    _inverse_free_update_(matmuled, terms, oq, G.numel(), lb, running_lower_bound, lower_bount_beta, precond_lr)
+    terms = [compiled_einsum(exprG, G, G) for exprG in exprGs]
+    matmuled = _psgd_quad_preconditioner_grad(terms, Q, G.numel())
+    _psgd_precond_update_(
+        matmuled, oq, running_lower_bound, lower_bount_beta, precond_lr, store_triu_as_line, power_iter
+    )
     return G
 
 
@@ -2204,29 +2185,37 @@ def rmsnorm_clip_(x, clip_at: float = 1.0):
 
 @decorator_knowngood
 def _compilable_global_rmsnorm_clip_(x, clip_at):
-    x = list(map(promote, x))
-    norm = sum([x.square().sum() for x in x]) / sum([x.numel() for x in x])
-    norm = norm**0.5
+    norm = 0
+    items = 0
+    for i in x:
+        norm += promote(i.square().sum())
+        items += i.numel()
+    norm = (norm / items) ** 0.5
     norm = norm.clamp(min=clip_at)
-    return torch._foreach_div(x, norm)
-
-
-@decorator_knowngood
-def _compilable_global_l2norm_clip_(x, clip_at):
-    x = list(map(promote, x))
-    norm = sum([x.square().sum() for x in x])
-    norm = norm**0.5
-    norm = norm.clamp(min=clip_at)
-    return torch._foreach_div(x, norm)
+    stochastic_multiply_(x, 1 / norm)
+    return x
 
 
 def global_rmsnorm_clip(x, clip_at: float = 1.0):
     x = list_guard(x)
+    clip_at = scalar_guard(clip_at, x[0])
     return _compilable_global_rmsnorm_clip_(x, clip_at)
+
+
+@decorator_knowngood
+def _compilable_global_l2norm_clip_(x, clip_at):
+    norm = 0
+    for i in x:
+        norm += promote(i.square().sum())
+    norm = norm**0.5
+    norm = norm.clamp(min=clip_at)
+    stochastic_multiply_(x, 1 / norm)
+    return x
 
 
 def global_l2norm_clip(x, clip_at: float = 1.0):
     x = list_guard(x)
+    clip_at = scalar_guard(clip_at, x[0])
     return _compilable_global_rmsnorm_clip_(x, clip_at)
 
 
@@ -2369,21 +2358,17 @@ def triu_to_line(Q_list: List[Tensor]):
     return out
 
 
-def _triu_shape(numel):
-    n = int((2 * numel) ** 0.5)
-    assert n * (n + 1) == 2 * numel
-    return n, n
-
-
 @decorator_knowngood
-def line_to_triu(Q_list: List[Tuple[Optional[List[int]], Tensor]]):
+def line_to_triu(Q_list: List[Tuple[Optional[List[int]], Tensor]], symmetric_output: bool = False):
     new = []
     for shape, q in Q_list:
         if shape is not None:
-            shape = _triu_shape(q.numel())
-            x = torch.zeros(shape, device=q.device, dtype=q.dtype)
-            x[tuple(torch.triu_indices(*shape, device=q.device))] = q
-            q = x
+            x, y = torch.triu_indices(*shape, device=q.device)
+            q_mat = torch.zeros(shape, device=q.device, dtype=q.dtype)
+            q_mat[x, y] = q
+            if symmetric_output:
+                q_mat[y, x] = q
+            q = q_mat
         new.append(q)
     return new
 
@@ -2433,7 +2418,7 @@ def precond_grad_cached_(
     args = [q.to(md) for q in cached_q]
     args = args + [ea.to(md)]
     expr = cached_precond_grad_expr(ndim_tuple(cached_q), grad.ndim)
-    new = torch.einsum(expr, *args)
+    new = compiled_einsum(expr, *args)
     if cast:
         return new.to(ea.dtype)
     return new
@@ -2471,31 +2456,57 @@ def psgd_precond_grad(
     caution: bool = False,
     grad: Optional[Tensor] = None,
     store_triu_as_line: bool = False,
+    symmetric_output: bool = False,
 ):
     if caution:
         ea = _compilable_cautioning(grad, ea)
     if store_triu_as_line:
-        preconds = line_to_triu(preconds)
+        preconds = line_to_triu(preconds, symmetric_output)
     md = min_dtype(list(preconds) + [ea])
     args = [q.to(md) for q in preconds]
     expr = precond_grad_expr(ndim_tuple(args), ea.ndim)
-    new = torch.einsum(expr, *[a for a in args for _ in (0, 1)], ea.to(md))
+    new = compiled_einsum(expr, *[a for a in args for _ in (0, 1)], ea.to(md))
     return new.to(ea.dtype)
 
 
 @decorator_knowngood
 def _compilable_fused_psgd_precond_grad(
-    ea: Tensor, param, lr, grad, decay, caution, preconds: TriuOrLine, store_triu_as_line: bool = False
+    ea: Tensor,
+    param,
+    lr,
+    grad,
+    decay,
+    caution,
+    preconds: TriuOrLine,
+    store_triu_as_line: bool = False,
+    symmetric_output: bool = False,
 ):
-    precond = psgd_precond_grad(ea, preconds, caution=caution, grad=grad, store_triu_as_line=store_triu_as_line)
+    precond = psgd_precond_grad(
+        ea,
+        preconds,
+        caution=caution,
+        grad=grad,
+        store_triu_as_line=store_triu_as_line,
+        symmetric_output=symmetric_output,
+    )
     update_param_(param, precond, lr, decay, caution=False, grad=grad)
 
 
 def fused_psgd_precond_grad(
-    ea: Tensor, param, lr, grad, decay, caution, preconds: TriuOrLine, store_triu_as_line: bool = False
+    ea: Tensor,
+    param,
+    lr,
+    grad,
+    decay,
+    caution,
+    preconds: TriuOrLine,
+    store_triu_as_line: bool = False,
+    symmetric_output: bool = False,
 ):
     lr = scalar_guard(lr, param[0])
-    _compilable_fused_psgd_precond_grad(ea, param, lr, grad, decay, caution, preconds, store_triu_as_line)
+    _compilable_fused_psgd_precond_grad(
+        ea, param, lr, grad, decay, caution, preconds, store_triu_as_line, symmetric_output
+    )
 
 
 @decorator_knowngood

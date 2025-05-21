@@ -26,6 +26,14 @@ def parse_loss(loss_str):
         return float("nan")
 
 
+def process_str(x, truthy):
+    if x == "No":
+        return ""
+    if x == "Yes":
+        return f"{truthy}-"
+    return f"{x}-"
+
+
 def read_benchmark_results(file_path):
     with open(file_path, "r") as f:
         content = f.read()
@@ -42,9 +50,13 @@ def read_benchmark_results(file_path):
         if len(parts) < 8:
             continue
         try:
+            caution = process_str(parts[2], "cautious")
+            mars = process_str(parts[3], "mars")
+            optimizer = f"{caution}{mars}{parts[1]}"
+            optimizer = optimizer.replace("Foreach", "").replace("Cached", "").strip()
             data.append({
                 "benchmark": parts[0],
-                "optimizer": parts[1].replace("Foreach", "").replace("Cached", ""),
+                "optimizer": optimizer,
                 "success": parts[4] == "✓",
                 "runtime": float(parts[5].replace("s", "")) if parts[5] else float("nan"),
                 "loss": parse_loss(parts[6]) if parts[6] else float("nan"),
@@ -181,7 +193,7 @@ def main(file: str = typer.Argument("benchmark_results.md")):
     if fig is None:
         print("Plot generation failed.")
         return
-    plt.savefig("benchmark_heatmap.png", dpi=300, bbox_inches="tight", facecolor="white", pad_inches=0.3)
+    plt.savefig("benchmark_matrix.png", dpi=300, bbox_inches="tight", facecolor="white", pad_inches=0.3)
     print("Saved heatmap to: benchmark_heatmap.png")
     plt.close(fig)
 
