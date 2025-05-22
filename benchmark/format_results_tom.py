@@ -1,11 +1,11 @@
 import re
-
+from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import typer
 from matplotlib.patches import Rectangle
-
+pd.set_option('future.no_silent_downcasting', True)
 
 def parse_loss(loss_str):
     if loss_str.strip() == "inf":
@@ -19,14 +19,70 @@ def parse_loss(loss_str):
         return float("nan")
 
 
-def read_benchmark_results(file_path):
+def read_benchmark_results(path):
+    """
+    Read benchmark results from a file or all files in a directory.
+    
+    Args:
+        path: Path to a file or directory
+    
+    Returns:
+        DataFrame with benchmark results, averaged if there are duplicates
+    """
+    path = Path(path)
+    
+    # If path is a file, process it directly
+    if path.is_file():
+        return _process_single_file(path)
+    
+    # If path is a directory, process all files and combine results
+    elif path.is_dir():
+        all_data = []
+        for file_path in path.glob('*'):
+            if file_path.is_file():
+                try:
+                    df = _process_single_file(file_path)
+                    all_data.append(df)
+                except Exception as e:
+                    print(f"Error processing file {file_path}: {e}")
+        
+        if not all_data:
+            raise ValueError(f"No valid files found in directory {path}")
+        # Combine all dataframes
+        combined_df = pd.concat(all_data, ignore_index=True)
+        
+        # Group by benchmark and optimizer, and average the numeric columns
+        numeric_cols = ['runtime', 'loss', 'attempts']
+        grouped_df = combined_df.groupby(['benchmark', 'optimizer', 'cautious', 'mars']).agg({
+            'success': 'mean',  # This will give the success rate
+            'runtime': 'mean',
+            'loss': 'mean',
+            'attempts': 'mean'
+        }).reset_index()
+        
+        return grouped_df
+    
+    else:
+        raise ValueError(f"Path {path} is neither a file nor a directory")
+
+def process_str(x, truthy):
+    if x == "No":
+        return ""
+    if x == "Yes":
+        return f"{truthy}-"
+    return f"{x}-"
+
+
+def _process_single_file(file_path):
+    """Process a single benchmark results file."""
+    print(f"Processing file: {file_path}")
     with open(file_path, "r") as f:
         content = f.read()
-
+    
     details_section = re.search(r"## Details\n\n(.*?)(?=\n\n|$)", content, re.DOTALL)
     if not details_section:
-        raise ValueError("Could not find Details section")
-
+        raise ValueError(f"Could not find Details section in {file_path}")
+    
     lines = details_section.group(1).strip().split("\n")[2:]
     data = []
     for line in lines:
@@ -35,9 +91,13 @@ def read_benchmark_results(file_path):
         parts = [p.strip() for p in line.split("|")[1:-1]]
         if len(parts) < 8:
             continue
+        caution = process_str(parts[2], "cautious")
+        mars = process_str(parts[3], "mars")
+        optimizer = f"{caution}{mars}{parts[1]}"
+        optimizer = optimizer.replace("Foreach", "").replace("Cached", "").strip()
         data.append({
             "benchmark": parts[0],
-            "optimizer": parts[1],
+            "optimizer": optimizer,
             "cautious": parts[2] == "Yes",
             "mars": parts[3] == "Yes",
             "success": parts[4] == "✓",
@@ -45,7 +105,7 @@ def read_benchmark_results(file_path):
             "loss": parse_loss(parts[6]),
             "attempts": int(parts[7]),
         })
-
+    
     return pd.DataFrame(data)
 
 
@@ -111,7 +171,7 @@ def get_color_for_cell(normalized_value, success, best_in_row=False):
 
 
 def to_bool(x):
-    return x.fillna(False).astype(bool)
+    return x.fillna(False).infer_objects(copy=False).astype(bool)
 
 
 def create_visual_matrix(success_matrix, attempts_matrix, runtime_matrix, loss_matrix):
@@ -131,12 +191,6 @@ def create_visual_matrix(success_matrix, attempts_matrix, runtime_matrix, loss_m
 
     # Main heatmap
     main_ax = fig.add_subplot(gs[:, 0])
-
-    # Side panels (Optimizer Statistics)
-    stats_ax1 = fig.add_subplot(gs[0, 2])
-    stats_ax2 = fig.add_subplot(gs[0, 3])
-    stats_ax3 = fig.add_subplot(gs[1, 2])
-    stats_ax4 = fig.add_subplot(gs[1, 3])
 
     # Normalize attempts per row
     normalized_attempts = pd.DataFrame(index=success_matrix.index, columns=success_matrix.columns)
@@ -160,21 +214,46 @@ def create_visual_matrix(success_matrix, attempts_matrix, runtime_matrix, loss_m
 
             if min_attempts_mask.sum() > 1:
                 # If multiple with same attempts, use runtime as tiebreaker
-                best_idx = row_runtime[min_attempts_mask].idxmin()
+                #best_idx = row_runtime[min_attempts_mask].idxmin()
+                best_idx = None
             else:
                 best_idx = min_attempts_mask[min_attempts_mask].index[0]
 
             best_performers.loc[idx, best_idx] = True
+        
+    # Convert to boolean after loop
+    best_performers = to_bool(best_performers)
 
+    # === Add summary row with star counts ===
+    star_counts = best_performers.sum(axis=0)
+    best_performers_with_header = pd.concat(
+        [pd.DataFrame([star_counts], index=["★ Count"]), best_performers],
+        axis=0
+)
+    
     # Plot main heatmap
-    for i in range(success_matrix.shape[0]):
+    for i in range(success_matrix.shape[0] + 1):
         for j in range(success_matrix.shape[1]):
-            success = success_matrix.iloc[i, j]
-            attempts = attempts_matrix.iloc[i, j]
-            runtime = runtime_matrix.iloc[i, j]
-            normalized = normalized_attempts.iloc[i, j]
-            is_best = best_performers.iloc[i, j]
-
+            success = success_matrix.iloc[i-1, j]
+            attempts = attempts_matrix.iloc[i-1, j]
+            runtime = runtime_matrix.iloc[i-1, j]
+            normalized = normalized_attempts.iloc[i-1, j]
+            is_best = best_performers_with_header.iloc[i, j]
+            
+            if i == 0:
+                # Top summary row with star counts
+                count = int(best_performers_with_header.iloc[0, j])
+                main_ax.text(
+                    j,
+                    i,
+                    f"{count}",
+                    ha="center",
+                    va="center",
+                    color="black",
+                    fontsize=10,
+                    fontweight="bold",
+                )
+                continue
             # Get cell color
             color = get_color_for_cell(normalized, success, is_best)
 
@@ -222,7 +301,7 @@ def create_visual_matrix(success_matrix, attempts_matrix, runtime_matrix, loss_m
                     color=text_color,
                     fontsize=8,
                 )
-                """
+                
                 # Add star for best performer
                 if is_best:
                     main_ax.text(
@@ -235,7 +314,7 @@ def create_visual_matrix(success_matrix, attempts_matrix, runtime_matrix, loss_m
                         fontsize=14,
                         fontweight="bold",
                     )
-                """
+                
 
     # Add grid lines
     for i in range(success_matrix.shape[0] + 1):
@@ -245,89 +324,10 @@ def create_visual_matrix(success_matrix, attempts_matrix, runtime_matrix, loss_m
 
     # Format axis labels
     main_ax.set_xticks(range(len(success_matrix.columns)))
-    main_ax.set_yticks(range(len(success_matrix.index)))
+    main_ax.set_yticks(range(len(success_matrix.index) + 1))
     main_ax.set_xticklabels(success_matrix.columns, rotation=45, ha="right", fontsize=10, fontweight="bold")
-    main_ax.set_yticklabels(success_matrix.index, fontsize=10, fontweight="bold")
-
-    # Create statistics panels
-    def create_stats_panel(ax, title, data, is_percentage=False, cmap=plt.cm.RdYlGn):
-        ax.clear()
-        ax.set_title(title, fontsize=10, fontweight="bold", pad=10)
-
-        # Add value labels
-        for i, v in enumerate(data.values):
-            text = f"{v:.1%}" if is_percentage else f"{v:.1f}"
-            ax.text(v + max(data.values) * 0.02, i, text, va="center", fontsize=8)
-
-        # Format axis
-        ax.set_yticks(range(len(data)))
-        ax.set_yticklabels(data.index, fontsize=8)
-        ax.set_xlim(0, max(data.values) * 1.15)
-
-        # Remove frame
-        ax.spines["top"].set_visible(False)
-        ax.spines["right"].set_visible(False)
-
-        return ax
-
-    # Calculate and plot optimizer success rates
-    success_rates = success_matrix.mean()
-    create_stats_panel(
-        stats_ax1,
-        "Optimizer Success Rates (↑)",
-        success_rates.sort_values(ascending=True),
-        is_percentage=True,
-        cmap=plt.cm.Greens,
-    )
-
-    # Calculate and plot average attempts for successful runs
-    avg_attempts = pd.Series(index=success_matrix.columns, dtype=float)
-    for col in success_matrix.columns:
-        success_mask = to_bool(success_matrix[col])
-        successful_attempts = attempts_matrix[success_mask][col]
-        avg_attempts[col] = successful_attempts.mean() if len(successful_attempts) > 0 else np.nan
-    create_stats_panel(
-        stats_ax2,
-        "Avg Attempts Needed (↓)",
-        avg_attempts.sort_values(ascending=False),
-        cmap=plt.cm.GnBu,
-    )
-
-    # Calculate and plot average runtime for successful runs
-    avg_runtime = pd.Series(index=success_matrix.columns, dtype=float)
-    for col in success_matrix.columns:
-        success_mask = to_bool(success_matrix[col])
-        successful_runtime = runtime_matrix[success_mask][col]
-        avg_runtime[col] = successful_runtime.mean() if len(successful_runtime) > 0 else np.nan
-    create_stats_panel(
-        stats_ax3,
-        "Avg Runtime Needed (↓)",
-        avg_runtime.sort_values(ascending=False),
-        cmap=plt.cm.YlOrBr,
-    )
-
-    # Calculate and plot average loss for successful runs
-    avg_best = pd.Series(index=runtime_matrix.columns, dtype=float)
-    avg_best[:] = 0
-    for (_, ru), (_, su), (_, at) in zip(
-        runtime_matrix.iterrows(), success_matrix.iterrows(), attempts_matrix.iterrows()
-    ):
-        score = ru + at * 1000  # minimize attempt count. if tie, use runtime
-        score = score - su * 1e12  # only count successful runs
-        avg_best[runtime_matrix.columns[score.argmin()]] += 1
-    avg_best /= avg_best.sum() / 100
-    create_stats_panel(stats_ax4, "Best Optimizer% (↑)", avg_best.sort_values(ascending=True), cmap=plt.cm.YlGn)
-
-    # Add title and subtitle
-    plt.suptitle("Optimizer Performance Matrix", y=0.98, fontsize=16, fontweight="bold")
-    fig.text(
-        0.25,
-        0.94,
-        "Color intensity shows relative number of attempts per benchmark (row-normalized)\n"
-        + "★ indicates best performer per benchmark",
-        ha="center",
-        fontsize=11,
-    )
+    main_ax.set_yticklabels(["Benchmarks won (★)"] + list(success_matrix.index), fontsize=10, fontweight="bold")
+    
 
     # Adjust layout
     plt.tight_layout(rect=[0, 0.02, 1, 0.92])
