@@ -918,6 +918,14 @@ class StatefulOptimizer(torch.optim.Optimizer):
         old_gs = [self.state_(p)["mars_old_grad"] for p in p_list]
         mars_correction(g_list, old_gs, mars_gamma, beta)
 
+    def mars_correct_list_ema(self, group, p_list, g_list, mars_gamma, beta, ema_update):
+        for p, g in zip(p_list, g_list):
+            state = self.state_(p)
+            if "mars_old_grad" not in state:
+                state["mars_old_grad"] = torch.zeros_like(g)
+        old_gs = [self.state_(p)["mars_old_grad"] for p in p_list]
+        mars_correction(g_list, ema_update, mars_gamma, beta)
+
     def _init_mapping(self, group: dict | None = None):
         if group is None:
             for group in self.param_groups:
@@ -938,9 +946,13 @@ class StatefulOptimizer(torch.optim.Optimizer):
         beta1: float = -1.0,
         raw: bool = False,
         use_ema: bool = False,
+        ema_update: Tensor = 0,
     ):
+        
         for p in group["params"]:
+           
             grad = getattr(p, "grad", None)
+            
             if grad is None and skip_none:
                 continue
 
@@ -968,10 +980,13 @@ class StatefulOptimizer(torch.optim.Optimizer):
             ]
 
             for pv, g, v, hv in zip(p_views, grad, vs, hvs):
+                
                 g = promote_detach(g, should_promote)
                 if beta1 >= 0 and group.get("mars", False):
+
                     if use_ema:
-                        self.mars_correct_list(group, [pv], [g], group["mars_gamma"], beta1)
+                        
+                        self.mars_correct_list_ema(group, [pv], [g], group["mars_gamma"], beta1, ema_update)
                     else:
                         self.mars_correct_list(group, [pv], [g], group["mars_gamma"], beta1)
                 pv.vector = promote_detach(v, should_promote)

@@ -882,6 +882,7 @@ def _inner_chain(state, group, update, grad, param, *fns):
 def chain(state: Union[callable, dict], group, grad, param, *fns):
     update = [torch.clone(g, memory_format=torch.preserve_format) for g in grad]
     update, skip_update = _inner_chain(state, group, update, grad, param, *fns)
+    
     if not skip_update and update is not None:
         utils.update_param_(param, update, group["lr"], group["weight_decay"], caution=group["caution"], grad=grad)
 
@@ -937,7 +938,7 @@ class ChainOpt(utils.StatefulOptimizer):
         super().__init__(params, defaults, foreach)
         self.fns = fns
         self.gamma_schedule = CosineSandwichSchedule(1000, 0.025)
-
+        self.ema_update = torch.tensor([0.0,0.0], dtype=torch.float32).cuda()
         # We use a dummy optimizer because OneCycleLR operates on an optimizer
         # This parameter won't be trained — we're only using the scheduler output
         param = torch.nn.Parameter(torch.zeros(1))
@@ -952,7 +953,7 @@ class ChainOpt(utils.StatefulOptimizer):
             div_factor=25,     
             final_div_factor=1e9  # minimum lr = initial_lr / final_div_factor → set very small = 0
         )
-
+    print("y0")
     @property
     def fns(self):
         return self._fns
@@ -974,13 +975,18 @@ class ChainOpt(utils.StatefulOptimizer):
                 f"only supported with foreach=True (currently foreach={group['foreach']})."
             )
             group["base_lr"] = group["lr"]
-
+        
         caution = group["caution"]
-        if group.get("use_ema", False):
-            use_ema = group["use_ema"]
+        use_ema = group.get("use_ema", False)
+        if use_ema:
+            ema_update = self.ema_update
+            if ema_update!=[]:
+                print(ema_update)
+                print(ema_update.dtype)
         else:
-            use_ema = False
-        vals = list(self.split_p_and_g_in_group(group, should_promote=self.promote, beta1=utils.get_beta1(group),use_ema=use_ema))
+            ema_update = torch.tensor([0.0,0.0], dtype=torch.float32).cuda()
+        
+        vals = list(self.split_p_and_g_in_group(group, should_promote=self.promote, beta1=utils.get_beta1(group), use_ema=use_ema, ema_update=ema_update))
 
         if not vals:
             return
@@ -988,6 +994,8 @@ class ChainOpt(utils.StatefulOptimizer):
 
         for param in p:
             state = self.state_(param)
+            if "update_by_adam_exp_avg_0" in state:
+                self.ema_update = state["update_by_adam_exp_avg_0"]
             if "step" in state:
                 step = state["step"]
             elif self.compile_step:
@@ -1004,7 +1012,7 @@ class ChainOpt(utils.StatefulOptimizer):
                 chain(self.state_, group, [grad], [param], *self.fns)
         else:
             chain(self.state_, group, g, p, *self.fns)
-    
+        
         if group.get("mars_schedule", False):
             #gamma = self.gamma_schedule.get_gamma(group["step"])
             self.scheduler.step()  # Move to next step in the cycle

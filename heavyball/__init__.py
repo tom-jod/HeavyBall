@@ -73,6 +73,39 @@ class ForeachAdamWScheduled(C.BaseOpt):
         super().__init__(params, defaults, foreach, gradient_clipping, update_clipping, palm, C.update_by_adam)
 
 
+class ForeachAdamWEMA(C.BaseOpt):
+    def __init__(
+        self,
+        params,
+        lr=0.0025,
+        betas=(0.9, 0.99),
+        eps=1e-8,
+        weight_decay=0,
+        warmup_steps=0,
+        foreach: bool = True,
+        storage_dtype: str = "float32",
+        mars: bool = False,
+        caution: bool = False,
+        mars_gamma: float = 0.0025,
+        gradient_clipping: C.str_or_fn = C.use_default,
+        update_clipping: C.str_or_fn = C.use_default,
+        palm: bool = C.use_default,
+        beta2_scale: float = 0.8,
+        mars_schedule: bool = False,
+        use_ema: bool = True,
+        **kwargs,
+    ):
+        defaults = locals()
+        defaults.pop("self")
+        params = defaults.pop("params")
+        defaults.update(defaults.pop("kwargs"))
+
+        if kwargs:
+            utils.warn_once(f"Working with uncaptured keyword arguments: {kwargs}")
+
+        super().__init__(params, defaults, foreach, gradient_clipping, update_clipping, palm, C.update_by_adam)
+
+
 class ForeachAdamW(C.BaseOpt):
     def __init__(
         self,
@@ -880,6 +913,7 @@ DelayedPSGDLRA = ForeachDelayedPSGDLRA
 PSGDLRA = ForeachPSGDLRA
 NewtonPSGDLRA = ForeachNewtonPSGDLRA
 AdamWScheduled = ForeachAdamWScheduled
+AdamWEMA = ForeachAdamWEMA
 __all__ = [
     "Muon",
     "RMSprop",
@@ -926,4 +960,5 @@ __all__ = [
     "NewtonHybrid2PSGDKron",
     "MSAMLaProp",
     "ForeachAdamWScheduled",
+    "ForeachAdamWEMA",
 ]
