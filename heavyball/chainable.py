@@ -938,7 +938,7 @@ class ChainOpt(utils.StatefulOptimizer):
         super().__init__(params, defaults, foreach)
         self.fns = fns
         self.gamma_schedule = CosineSandwichSchedule(1000, 0.025)
-        self.ema_update = torch.tensor([0.0,0.0], dtype=torch.float32).cuda()
+        self.ema_update = []
         # We use a dummy optimizer because OneCycleLR operates on an optimizer
         # This parameter won't be trained — we're only using the scheduler output
         param = torch.nn.Parameter(torch.zeros(1))
@@ -978,13 +978,14 @@ class ChainOpt(utils.StatefulOptimizer):
         
         caution = group["caution"]
         use_ema = group.get("use_ema", False)
-        if use_ema:
+        
+        if use_ema and self.ema_update != []:
             ema_update = self.ema_update
-            if ema_update!=[]:
-                print(ema_update)
-                print(ema_update.dtype)
+            
         else:
-            ema_update = torch.tensor([0.0,0.0], dtype=torch.float32).cuda()
+        # if not using ema or if there is no previous momentum update fall back to not using ema
+            use_ema = False
+            ema_update = []
         
         vals = list(self.split_p_and_g_in_group(group, should_promote=self.promote, beta1=utils.get_beta1(group), use_ema=use_ema, ema_update=ema_update))
 
@@ -994,8 +995,11 @@ class ChainOpt(utils.StatefulOptimizer):
 
         for param in p:
             state = self.state_(param)
+        
             if "update_by_adam_exp_avg_0" in state:
+                
                 self.ema_update = state["update_by_adam_exp_avg_0"]
+                
             if "step" in state:
                 step = state["step"]
             elif self.compile_step:
@@ -1012,7 +1016,7 @@ class ChainOpt(utils.StatefulOptimizer):
                 chain(self.state_, group, [grad], [param], *self.fns)
         else:
             chain(self.state_, group, g, p, *self.fns)
-        
+                
         if group.get("mars_schedule", False):
             #gamma = self.gamma_schedule.get_gamma(group["step"])
             self.scheduler.step()  # Move to next step in the cycle

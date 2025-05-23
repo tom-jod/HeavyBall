@@ -916,14 +916,11 @@ class StatefulOptimizer(torch.optim.Optimizer):
             if "mars_old_grad" not in state:
                 state["mars_old_grad"] = torch.zeros_like(g)
         old_gs = [self.state_(p)["mars_old_grad"] for p in p_list]
+        
         mars_correction(g_list, old_gs, mars_gamma, beta)
 
     def mars_correct_list_ema(self, group, p_list, g_list, mars_gamma, beta, ema_update):
-        for p, g in zip(p_list, g_list):
-            state = self.state_(p)
-            if "mars_old_grad" not in state:
-                state["mars_old_grad"] = torch.zeros_like(g)
-        old_gs = [self.state_(p)["mars_old_grad"] for p in p_list]
+        
         mars_correction(g_list, ema_update, mars_gamma, beta)
 
     def _init_mapping(self, group: dict | None = None):
@@ -983,10 +980,13 @@ class StatefulOptimizer(torch.optim.Optimizer):
                 
                 g = promote_detach(g, should_promote)
                 if beta1 >= 0 and group.get("mars", False):
-
+                    
                     if use_ema:
-                        
-                        self.mars_correct_list_ema(group, [pv], [g], group["mars_gamma"], beta1, ema_update)
+                        state = self.state_(p)  
+                        if "update_by_adam_exp_avg_0" in state:
+                            ema_update = state["update_by_adam_exp_avg_0"]
+                            
+                        self.mars_correct_list_ema(group, [pv], [g], group["mars_gamma"], beta1, [ema_update])
                     else:
                         self.mars_correct_list(group, [pv], [g], group["mars_gamma"], beta1)
                 pv.vector = promote_detach(v, should_promote)
@@ -1226,6 +1226,7 @@ def adam_(
     step: int,
     eps: float = 1e-8,
 ):
+    
     exp_avg, exp_avg_sq, grad = map(list_guard, (exp_avg, exp_avg_sq, grad))
     beta1, beta2, step, eps = scalar_guard(beta1, beta2, step, eps, exp_avg[0])
     _compilable_adam_(exp_avg, exp_avg_sq, grad, beta1, beta2, step, eps)
@@ -1249,7 +1250,7 @@ def _fused_compilable_adam_(
 ):
     beta1 = beta_debias(beta1, step)
     beta2 = beta_debias(beta2, step)
-
+    
     u32, g32 = [list(map(promote, x)) for x in [update, grad]]
     exp_avg32 = _lerp(exp_avg, u32, beta1)
     denom = _compilable_exp_avg_sq_(exp_avg_sq, u32, beta2, eps, [None])
@@ -1271,6 +1272,7 @@ def fused_adam_(
     decay: float,
     caution: bool,
 ):
+    
     y, exp_avg, exp_avg_sq, grad = list_guard(y, exp_avg, exp_avg_sq, grad)
     beta1, beta2, step, lr = scalar_guard(beta1, beta2, step, lr, y[0])
     _fused_compilable_adam_(y, exp_avg, exp_avg_sq, update, grad, beta1, beta2, step, decay, lr, eps, caution)
@@ -2536,6 +2538,20 @@ def mars_correction(g, old_g, beta1, gamma):
     g, old_g = list_guard(g), list_guard(old_g)
     a = scalar_guard(a, g[0])
     _compilable_mars_correction_(g, old_g, a)
+
+
+@decorator_knowngood
+def _compilable_mars_correction_ema_(g: Tensor, old_g: Tensor, a: Tensor):
+    g_copy = [g_.clone() for g_ in g]
+    _compilable_stochastic_lerp_(g, old_g, a)
+    copy_stochastic_list_(old_g, g_copy)
+
+
+def mars_correction_ema(g, old_g, beta1, gamma):
+    a = -gamma * beta1 / (1 - beta1)
+    g, old_g = list_guard(g), list_guard(old_g)
+    a = scalar_guard(a, g[0])
+    _compilable_mars_correction_ema_(g, old_g, a)
 
 
 @decorator_knowngood
