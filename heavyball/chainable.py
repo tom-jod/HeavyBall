@@ -331,7 +331,7 @@ def update_by_adamc(group, update, grad, param, exp_avg, exp_avg_sq):
         group["step"],
         group["lr"],
         group["eps"],
-        group["weight_decay"] ** 2 / group["max_lr"],
+        group["lr"] * group["weight_decay"] / group["max_lr"],
         group["caution"],
     )
     raise SkipUpdate from None
