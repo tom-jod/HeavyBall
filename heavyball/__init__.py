@@ -80,7 +80,7 @@ class ForeachAdamC(C.BaseOpt):
         betas=(0.9, 0.99),
         eps=1e-8,
         weight_decay=0,
-        max_lr=0.0025,
+        max_lr: float | None = None,
         warmup_steps=0,
         foreach: bool = True,
         storage_dtype: str = "float32",
@@ -93,6 +93,10 @@ class ForeachAdamC(C.BaseOpt):
         beta2_scale: float = 0.8,
         **kwargs,
     ):
+        if max_lr is None:
+            utils.warn_one(f"max_lr was not set. setting it to the current learning rate, under the assumption that it strictly decreases")
+            max_lr = lr
+
         defaults = locals()
         defaults.pop("self")
         params = defaults.pop("params")
@@ -100,7 +104,7 @@ class ForeachAdamC(C.BaseOpt):
 
         if kwargs:
             utils.warn_once(f"Working with uncaptured keyword arguments: {kwargs}")
-
+            
         super().__init__(params, defaults, foreach, gradient_clipping, update_clipping, palm, C.update_by_adamc)
 
 
