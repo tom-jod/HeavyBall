@@ -5,6 +5,13 @@ import numpy as np
 import pandas as pd
 import typer
 from matplotlib.patches import Rectangle
+import matplotlib.cm as cm
+import matplotlib.colors as mcolors
+import matplotlib
+plt.rcParams.update({'font.size': 14})
+
+
+
 pd.set_option('future.no_silent_downcasting', True)
 
 def parse_loss(loss_str):
@@ -150,24 +157,21 @@ def normalize_row_attempts(row_attempts, row_success):
     return normalized
 
 
+attempts_cmap = matplotlib.colormaps.get_cmap('RdYlGn')  # Or try 'RdYlGn_r' for green to red reversed
+
 def get_color_for_cell(normalized_value, success, best_in_row=False):
-    """Generate color for a cell based on normalized value and success"""
     if pd.isna(normalized_value) or not success:
-        return "#FF3B30"  # Failure color (red)
+        return "#000000"  # Red for failure
 
-    # Create a gradient from light green to dark blue
-    light_green = np.array([0.7, 1.0, 0.7])  # Light green
-    dark_blue = np.array([0.0, 0.3, 0.8])  # Dark blue
+    # Use colormap to get RGB color (normalized_value is between 0 and 1)
+    color = attempts_cmap(1 - normalized_value)  # Invert so lower attempts → greener
 
-    # Interpolate between light green and dark blue based on normalized value (inverted)
-    # Invert normalized value because lower attempts are better
-    color = light_green * normalized_value + dark_blue * (1 - normalized_value)
-
-    # If this is the best in row, add a slight golden tint
+    # Add golden tint if best
     if best_in_row:
-        color = color * 0.9 + np.array([0.8, 0.6, 0.0]) * 0.1  # Golden tint
+        color = np.array(color[:3]) * 0.9 + np.array([0.8, 0.6, 0.0]) * 0.1
+        return tuple(color)
 
-    return tuple(color)
+    return color[:3]  # Remove alpha
 
 
 def to_bool(x):
@@ -211,11 +215,12 @@ def create_visual_matrix(success_matrix, attempts_matrix, runtime_matrix, loss_m
         if successful_mask.any():
             min_attempts = row_attempts[successful_mask].min()
             min_attempts_mask = (row_attempts == min_attempts) & successful_mask
-
-            if min_attempts_mask.sum() > 1:
+            
+            if min_attempts_mask.sum() > 1 and min_attempts_mask.sum()!=len(success_matrix.columns):
                 # If multiple with same attempts, use runtime as tiebreaker
-                #best_idx = row_runtime[min_attempts_mask].idxmin()
-                best_idx = None
+                print(min_attempts_mask)
+                best_idx = row_runtime[min_attempts_mask].idxmin()
+              
             else:
                 best_idx = min_attempts_mask[min_attempts_mask].index[0]
 
@@ -250,7 +255,7 @@ def create_visual_matrix(success_matrix, attempts_matrix, runtime_matrix, loss_m
                     ha="center",
                     va="center",
                     color="black",
-                    fontsize=10,
+                    fontsize=14,
                     fontweight="bold",
                 )
                 continue
@@ -279,19 +284,20 @@ def create_visual_matrix(success_matrix, attempts_matrix, runtime_matrix, loss_m
                     brightness = 0.299 * color[0] + 0.587 * color[1] + 0.114 * color[2]
                     text_color = "white" if brightness < 0.65 else "black"
                 else:
-                    text_color = "white" if color == "#FF3B30" else "black"
+                    text_color = "white" if color == "#000000" else "black"
 
                 # Add text with better formatting
                 main_ax.text(
                     j,
-                    i - 0.15,
+                    i ,
                     attempts_text,
                     ha="center",
                     va="center",
                     color=text_color,
-                    fontsize=9,
+                    fontsize=14,
                     fontweight="bold",
                 )
+                """
                 main_ax.text(
                     j,
                     i + 0.15,
@@ -301,7 +307,7 @@ def create_visual_matrix(success_matrix, attempts_matrix, runtime_matrix, loss_m
                     color=text_color,
                     fontsize=8,
                 )
-                
+                """
                 # Add star for best performer
                 if is_best:
                     main_ax.text(
@@ -325,8 +331,8 @@ def create_visual_matrix(success_matrix, attempts_matrix, runtime_matrix, loss_m
     # Format axis labels
     main_ax.set_xticks(range(len(success_matrix.columns)))
     main_ax.set_yticks(range(len(success_matrix.index) + 1))
-    main_ax.set_xticklabels(success_matrix.columns, rotation=45, ha="right", fontsize=10, fontweight="bold")
-    main_ax.set_yticklabels(["Benchmarks won (★)"] + list(success_matrix.index), fontsize=10, fontweight="bold")
+    main_ax.set_xticklabels(success_matrix.columns, rotation=45, ha="right", fontsize=14, fontweight="bold")
+    main_ax.set_yticklabels(["Benchmarks won (★)"] + list(success_matrix.index), fontsize=14, fontweight="bold")
     
 
     # Adjust layout

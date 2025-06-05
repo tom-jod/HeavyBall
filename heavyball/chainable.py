@@ -953,7 +953,7 @@ class ChainOpt(utils.StatefulOptimizer):
             div_factor=25,     
             final_div_factor=1e9  # minimum lr = initial_lr / final_div_factor → set very small = 0
         )
-    print("y0")
+
     @property
     def fns(self):
         return self._fns
@@ -978,16 +978,8 @@ class ChainOpt(utils.StatefulOptimizer):
         
         caution = group["caution"]
         use_ema = group.get("use_ema", False)
-        
-        if use_ema and self.ema_update != []:
-            ema_update = self.ema_update
-            
-        else:
-        # if not using ema or if there is no previous momentum update fall back to not using ema
-            use_ema = False
-            ema_update = []
-        
-        vals = list(self.split_p_and_g_in_group(group, should_promote=self.promote, beta1=utils.get_beta1(group), use_ema=use_ema, ema_update=ema_update))
+      
+        vals = list(self.split_p_and_g_in_group(group, should_promote=self.promote, beta1=utils.get_beta1(group), use_ema=use_ema)) # updates gradient to include mars correction and creates compute efficient views of parameters
 
         if not vals:
             return
@@ -995,11 +987,9 @@ class ChainOpt(utils.StatefulOptimizer):
 
         for param in p:
             state = self.state_(param)
-        
+            print(state)
             if "update_by_adam_exp_avg_0" in state:
-                
                 self.ema_update = state["update_by_adam_exp_avg_0"]
-                
             if "step" in state:
                 step = state["step"]
             elif self.compile_step:

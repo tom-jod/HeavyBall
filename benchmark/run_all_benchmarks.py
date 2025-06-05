@@ -16,6 +16,7 @@ import ast
 import torch._dynamo
 torch._dynamo.config.suppress_errors = True
 app = typer.Typer()
+
 torch._dynamo.config.disable = True
 
 benchmarks = [

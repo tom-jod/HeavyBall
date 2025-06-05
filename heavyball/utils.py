@@ -943,7 +943,6 @@ class StatefulOptimizer(torch.optim.Optimizer):
         beta1: float = -1.0,
         raw: bool = False,
         use_ema: bool = False,
-        ema_update: Tensor = 0,
     ):
         
         for p in group["params"]:
@@ -981,12 +980,10 @@ class StatefulOptimizer(torch.optim.Optimizer):
                 g = promote_detach(g, should_promote)
                 if beta1 >= 0 and group.get("mars", False):
                     
-                    if use_ema:
-                        state = self.state_(p)  
-                        if "update_by_adam_exp_avg_0" in state:
-                            ema_update = state["update_by_adam_exp_avg_0"]
-                            
+                    if use_ema and "update_by_adam_exp_avg_0" in self.state_(p):
+                        ema_update = self.state_(p)["update_by_adam_exp_avg_0"]  
                         self.mars_correct_list_ema(group, [pv], [g], group["mars_gamma"], beta1, [ema_update])
+            
                     else:
                         self.mars_correct_list(group, [pv], [g], group["mars_gamma"], beta1)
                 pv.vector = promote_detach(v, should_promote)

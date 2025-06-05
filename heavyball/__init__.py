@@ -52,7 +52,7 @@ class ForeachAdamWScheduled(C.BaseOpt):
         warmup_steps=0,
         foreach: bool = True,
         storage_dtype: str = "float32",
-        mars: bool = False,
+        mars: bool = True,
         caution: bool = False,
         mars_gamma: float = 0.0025,
         gradient_clipping: C.str_or_fn = C.use_default,
@@ -84,7 +84,7 @@ class ForeachAdamWEMA(C.BaseOpt):
         warmup_steps=0,
         foreach: bool = True,
         storage_dtype: str = "float32",
-        mars: bool = False,
+        mars: bool = True,
         caution: bool = False,
         mars_gamma: float = 0.0025,
         gradient_clipping: C.str_or_fn = C.use_default,
@@ -117,7 +117,7 @@ class ForeachAdamWEMAScheduled(C.BaseOpt):
         warmup_steps=0,
         foreach: bool = True,
         storage_dtype: str = "float32",
-        mars: bool = False,
+        mars: bool = True,
         caution: bool = False,
         mars_gamma: float = 0.0025,
         gradient_clipping: C.str_or_fn = C.use_default,
@@ -158,6 +158,7 @@ class ForeachAdamW(C.BaseOpt):
         palm: bool = C.use_default,
         beta2_scale: float = 0.8,
         mars_schedule: bool = False,
+        use_ema: bool = False,
         **kwargs,
     ):
         defaults = locals()
@@ -216,6 +217,50 @@ class ForeachRMSprop(C.BaseOpt):
         )
 
 
+class ForeachSFAdamWEMA(C.ScheduleFree):
+    def __init__(
+        self,
+        params,
+        lr=0.0025,
+        betas=(0.9, 0.99),
+        eps=1e-6,
+        weight_decay=0,
+        warmup_steps=0,
+        r=0.0,
+        weight_lr_power=2.0,
+        foreach: bool = True,
+        storage_dtype: str = "float32",
+        mars: bool = True,
+        caution: bool = False,
+        mars_gamma: float = 0.0025,
+        gradient_clipping: C.str_or_fn = C.use_default,
+        update_clipping: C.str_or_fn = C.use_default,
+        palm: bool = C.use_default,
+        beta2_scale: float = 0.8,
+        mars_schedule: bool = False,
+        use_ema: bool = True,
+        **kwargs,
+    ):
+        defaults = locals()
+        defaults.pop("self")
+        params = defaults.pop("params")
+        defaults.update(defaults.pop("kwargs"))
+
+        if kwargs:
+            utils.warn_once(f"Working with uncaptured keyword arguments: {kwargs}")
+
+        super().__init__(
+            params,
+            defaults,
+            foreach,
+            gradient_clipping,
+            update_clipping,
+            palm,
+            C.scale_by_exp_avg_sq,
+            C.update_by_schedule_free,
+        )
+
+
 class ForeachSFAdamW(C.ScheduleFree):
     def __init__(
         self,
@@ -236,6 +281,8 @@ class ForeachSFAdamW(C.ScheduleFree):
         update_clipping: C.str_or_fn = C.use_default,
         palm: bool = C.use_default,
         beta2_scale: float = 0.8,
+        mars_schedule: bool = False,
+        use_ema: bool = False,
         **kwargs,
     ):
         defaults = locals()
@@ -948,7 +995,7 @@ NewtonPSGDLRA = ForeachNewtonPSGDLRA
 AdamWScheduled = ForeachAdamWScheduled
 AdamWEMA = ForeachAdamWEMA
 AdamWEMAScheduled = ForeachAdamWEMAScheduled
-
+SFAdamWEMA = ForeachSFAdamWEMA
 __all__ = [
     "Muon",
     "RMSprop",
@@ -997,4 +1044,5 @@ __all__ = [
     "ForeachAdamWScheduled",
     "ForeachAdamWEMA",
     "ForeachAdamWEMAScheduled",
+    "ForeachSFAdamWEMA",
 ]
