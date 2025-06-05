@@ -319,6 +319,26 @@ def update_by_adam(group, update, grad, param, exp_avg, exp_avg_sq):
 
 @zero_guard("exp_avg", "exp_avg_sq")
 @no_state
+def update_by_adamc(group, update, grad, param, exp_avg, exp_avg_sq):
+    utils.fused_adam_(
+        param,
+        exp_avg,
+        exp_avg_sq,
+        update,
+        grad,
+        utils.get_beta1(group),
+        utils.get_beta2(group),
+        group["step"],
+        group["lr"],
+        group["eps"],
+        group["lr"] * group["weight_decay"] / group["max_lr"],
+        group["caution"],
+    )
+    raise SkipUpdate from None
+
+
+@zero_guard("exp_avg", "exp_avg_sq")
+@no_state
 def scale_by_laprop(group, update, grad, param, exp_avg, exp_avg_sq):
     return utils.laprop_(exp_avg, exp_avg_sq, update, utils.get_beta1(group), utils.get_beta2(group), group["step"])
 
