@@ -94,7 +94,9 @@ class ForeachAdamC(C.BaseOpt):
         **kwargs,
     ):
         if max_lr is None:
-            utils.warn_one(f"max_lr was not set. setting it to the current learning rate, under the assumption that it strictly decreases")
+            utils.warn_one(
+                "max_lr was not set. setting it to the current learning rate, under the assumption that it strictly decreases"
+            )
             max_lr = lr
 
         defaults = locals()
@@ -104,7 +106,7 @@ class ForeachAdamC(C.BaseOpt):
 
         if kwargs:
             utils.warn_once(f"Working with uncaptured keyword arguments: {kwargs}")
-            
+
         super().__init__(params, defaults, foreach, gradient_clipping, update_clipping, palm, C.update_by_adamc)
 
 
