@@ -318,6 +318,26 @@ def update_by_adam(group, update, grad, param, exp_avg, exp_avg_sq):
     )
     raise SkipUpdate from None
 
+@zero_guard("exp_avg", "exp_avg_sq")
+@no_state
+def update_by_STORM(group, update, grad, param, exp_avg, exp_avg_sq):
+    prev_grads = group.get("prev_grads", [])
+    utils.fused_STORM_(
+        param,
+        exp_avg,
+        exp_avg_sq,
+        update,
+        grad,
+        prev_grads,
+        utils.get_beta1(group),
+        utils.get_beta2(group),
+        group["step"],
+        group["lr"],
+        group["eps"],
+        group["weight_decay"],
+        group["caution"],
+    )
+    raise SkipUpdate from None
 
 @zero_guard("exp_avg", "exp_avg_sq")
 @no_state
@@ -978,7 +998,12 @@ class ChainOpt(utils.StatefulOptimizer):
         
         caution = group["caution"]
         use_ema = group.get("use_ema", False)
-      
+        # Extract previous gradients from group
+        prev_grads = group.get("prev_grads", [])
+        prev_loss = group.get("prev_loss", None)
+        
+        group["prev_grads"] = prev_grads 
+            
         vals = list(self.split_p_and_g_in_group(group, should_promote=self.promote, beta1=utils.get_beta1(group), use_ema=use_ema)) # updates gradient to include mars correction and creates compute efficient views of parameters
 
         if not vals:
@@ -1106,13 +1131,17 @@ class BaseOpt(ChainOpt):
     This will turn off
     This is syntactic sugar, equivalent to manually passing the function as the last element of the optimizer chain.
 
+    requires_prev_minibatch: bool = False
+    Whether this optimizer requires access to the previous minibatch for computation.
+    When True, the training loop should provide both current and previous batch data.
     """
-
+    
     gradient_clipping: str_or_fn = None
     update_clipping: str_or_fn = None
     palm: bool = False
     auto_fuse: bool = True
-
+    requires_prev_minibatch: bool = False  
+    requires_prev_model: bool = False
     def __init__(
         self,
         params,
@@ -1120,11 +1149,23 @@ class BaseOpt(ChainOpt):
         foreach: bool,
         gradient_clipping: str_or_fn,
         update_clipping: str_or_fn,
-        palm: bool = use_default,
+        palm: bool = use_default, 
         *fns,
         compile_step: bool = use_default,
         promote: bool = use_default,
+        requires_prev_minibatch: bool = use_default, 
+        requires_prev_model: bool = use_default, 
     ):
+        
+        self.compile_step = default(compile_step, self.compile_step)
+        self.promote = default(promote, self.promote)
+
+        self.requires_prev_minibatch = default(requires_prev_minibatch, self.requires_prev_minibatch)  
+        defaults['requires_prev_minibatch'] = self.requires_prev_minibatch 
+
+        self.requires_prev_model = default(requires_prev_model, self.requires_prev_model)  
+        defaults['requires_prev_model'] = self.requires_prev_model
+
         if not fns:
             raise ValueError("No functions provided. If that's on purpose (SGD-like), use `identity`")
 

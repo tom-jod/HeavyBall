@@ -1154,6 +1154,55 @@ class StatefulOptimizer(torch.optim.Optimizer):
             warn_once(f"Exact HVP calculation failed.\n{_fd_error}{e}")
         self._fallback_enabled = True
         return self._handle_closure(closure)
+    
+
+    def _handle_prev_closure(self, prev_closure):
+        """Handle previous model closure and store gradients separately"""
+        if prev_closure is None:
+            return None
+        
+        # Store current gradients temporarily
+        current_grads = {}
+        for group in self.param_groups:
+            for i, p in enumerate(group['params']):
+                if p.grad is not None:
+                    current_grads[id(p)] = p.grad.clone()
+        
+        # Clear gradients for previous model computation
+        for group in self.param_groups:
+            for p in group['params']:
+                if p.grad is not None:
+                    p.grad.zero_()
+        
+        # Compute previous model loss and gradients
+        with torch.enable_grad():
+            prev_loss = prev_closure()  # This calls loss.backward() and fills p.grad
+        
+        # Store previous gradients in param_groups
+        for group in self.param_groups:
+            if 'prev_grads' not in group:
+                group['prev_grads'] = []
+            if 'prev_loss' not in group:
+                group['prev_loss'] = prev_loss.item() if prev_loss is not None else None
+            
+            group['prev_grads'].clear()
+            for p in group['params']:
+                if p.grad is not None:
+                    group['prev_grads'].append(p.grad.clone())  # Store prev gradient
+                    
+                else:
+                    group['prev_grads'].append(torch.zeros_like(p.data))
+        
+        # Restore current gradients
+        for group in self.param_groups:
+            for p in group['params']:
+                if id(p) in current_grads:
+                    p.grad = current_grads[id(p)]  # Restore current gradient
+                else:
+                    p.grad = None
+        
+        return prev_loss
+
 
     def step(self, closure: Optional[Callable] = None):
         if self.precond_schedule is None:
@@ -1177,6 +1226,33 @@ class StatefulOptimizer(torch.optim.Optimizer):
                             if hasattr(tensor, key):
                                 setattr(tensor, key, None)
         return loss
+    
+
+    def step_with_prev(self, closure: Optional[Callable] = None, prev_closure: Optional[Callable] = None):
+        if self.precond_schedule is None:
+            self._is_preconditioning = False
+        else:
+            self._is_preconditioning = psgd_should_update(self.inner_group, self.precond_schedule, self.precond_rng)
+        
+        loss = self._handle_closure(closure)
+        if prev_closure is not None:
+            prev_loss = self._handle_prev_closure(prev_closure)
+        # we assume that parameters are constant and that there are no excessive recompiles
+        with torch.no_grad(), torch._dynamo.utils.disable_cache_limit():
+            for group in self.param_groups:
+                if "param_count" not in group:
+                    group["param_count"] = sum(p.numel() for p in group["params"])
+                group["is_preconditioning"] = self._is_preconditioning
+                self._step(group)
+                if self.use_ema:
+                    self.ema_update()
+                for real, views in self.mapping.items():
+                    for tensor in (real, *views):
+                        for key in ("grad", "vector", "hessian_vector", "orig"):
+                            if hasattr(tensor, key):
+                                setattr(tensor, key, None)
+        return loss
+
 
 
 def copy_stochastic_list_(target: List[Tensor], source: List[Tensor]):
@@ -1273,6 +1349,61 @@ def fused_adam_(
     y, exp_avg, exp_avg_sq, grad = list_guard(y, exp_avg, exp_avg_sq, grad)
     beta1, beta2, step, lr = scalar_guard(beta1, beta2, step, lr, y[0])
     _fused_compilable_adam_(y, exp_avg, exp_avg_sq, update, grad, beta1, beta2, step, decay, lr, eps, caution)
+
+
+
+@decorator_knowngood
+def _fused_compilable_STORM_(
+    y: List[Tensor],
+    exp_avg: List[Tensor],
+    exp_avg_sq: List[Tensor],
+    update: List[Tensor],
+    grad: List[Tensor],
+    prev_grads: List[Tensor],
+    beta1: Tensor,
+    beta2: Tensor,
+    step: Tensor,
+    decay: Tensor,
+    lr: Tensor,
+    eps: Tensor,
+    caution: bool,
+):
+    beta1 = beta_debias(beta1, step)
+    beta2 = beta_debias(beta2, step)
+    
+    u32, g32, prev_g32 = [list(map(promote, x)) for x in [update, grad, prev_grads]]
+    print(f"prevexp{exp_avg}")
+    if prev_g32 and len(prev_g32) == len(exp_avg):
+        exp_avg_corrected = torch._foreach_sub(exp_avg, prev_g32)
+    else:
+        exp_avg_corrected = exp_avg
+    print(f"new{exp_avg_corrected}")
+    exp_avg32 = _lerp(exp_avg_corrected, u32, beta1)
+    
+    denom = _compilable_exp_avg_sq_(exp_avg_sq, u32, beta2, eps, [None])
+    u32 = torch._foreach_div(exp_avg32, denom)
+    _compilable_update_(y, u32, decay, lr, caution, g32)
+
+
+def fused_STORM_(
+    y: List[Tensor],
+    exp_avg: List[Tensor],
+    exp_avg_sq: List[Tensor],
+    update: List[Tensor],
+    grad: List[Tensor],
+    prev_grads: List[Tensor],
+    beta1: float,
+    beta2: float,
+    step: int,
+    lr: float,
+    eps: float,
+    decay: float,
+    caution: bool,
+):
+    
+    y, exp_avg, exp_avg_sq, grad, prev_grads = list_guard(y, exp_avg, exp_avg_sq, grad, prev_grads)
+    beta1, beta2, step, lr = scalar_guard(beta1, beta2, step, lr, y[0])
+    _fused_compilable_STORM_(y, exp_avg, exp_avg_sq, update, grad, prev_grads, beta1, beta2, step, decay, lr, eps, caution)
 
 
 @decorator_knowngood

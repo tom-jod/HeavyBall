@@ -331,7 +331,17 @@ class Objective:
         if loss is not None:
             self._last_loss = loss
         return self._win_condition(self.m, self._last_loss)[0]
-
+    
+    def requires_prev_minibatch(self, opt):
+        """Safely check if optimizer requires previous minibatch"""
+        
+        return getattr(opt, 'requires_prev_minibatch', False)
+    
+    def requires_prev_model(self, opt):
+        """Safely check if optimizer requires previous model"""
+        
+        return getattr(opt, 'requires_prev_model', False)
+    
     def _inner(self, params):
         self.current_losses = []
         input_kwargs = locals()
@@ -346,13 +356,18 @@ class Objective:
             "precond_lr": params[3],
             # we never have both precond_lr and shampoo_beta
         }
+        
         if self.set_precond_init_scale:
             params["precond_init_scale"] = 0.1
         self.m = copy.deepcopy(self.model)
         o = get_optim(self.opt, self.m.parameters(), **params, weight_decay=self.weight_decay, **self.kwargs)
         torch_hist = torch.empty(self.group, dtype=torch.float64, device="cuda")
         validator = self.validator.new()
-        
+
+        if self.requires_prev_model(o):
+            print("Hello")
+        else:
+            print("no")
         # Create a list to track losses for this run
         step_losses = []
         
@@ -361,8 +376,44 @@ class Objective:
                 o.train()
             
             for j in range(self.group):
-                inp, tgt = self.data()
-                
+                if self.requires_prev_minibatch(o):
+                    # Get current batch
+                    curr_inp, curr_tgt = self.data()
+                    
+                    # Initialize previous batch storage if needed
+                    if not hasattr(self, '_prev_batch'):
+                        self._prev_batch = None
+                    
+                    if self._prev_batch is None:
+                        # First iteration: duplicate current batch
+                        prev_inp, prev_tgt = curr_inp.clone(), curr_tgt.clone()
+                    else:
+                        # Use actual previous batch
+                        prev_inp, prev_tgt = self._prev_batch
+                    
+                    # Update previous batch for next iteration
+                    # Use .detach().clone() to avoid keeping gradients
+                    self._prev_batch = (curr_inp.detach().clone(), curr_tgt.detach().clone())
+                    
+                    # Return both batches (you can modify this based on how you want to use them)
+                    inp, tgt = {
+                        'current': (curr_inp, curr_tgt),
+                        'previous': (prev_inp, prev_tgt)
+                    }, None  # tgt set to None since it's in the dict
+                   
+                else:
+                    inp, tgt = self.data()
+
+                # Store previous model state
+                if not hasattr(self, '_prev_model_state'):
+                    self._prev_model_state = None
+
+                # Save current model state for next iteration
+                self._prev_model_state = {
+                    name: param.clone().detach() 
+                    for name, param in self.m.named_parameters()
+                }
+       
                 def _closure():
                     loss = self.m() if inp is None else self.m(inp)
                     if self.loss_fn is not None:
@@ -370,8 +421,39 @@ class Objective:
                     loss.backward()
                     return loss
                 
+                # Later, when you need previous model:
+                def _prev_closure():
+                    if self._prev_model_state is None:
+                        # First iteration - use current model
+                        return _closure()
+                    
+                    # Save current state
+                    current_state = {name: param.clone() for name, param in self.m.named_parameters()}
+                    
+                    try:
+                        # Load previous state
+                        for name, param in self.m.named_parameters():
+                            if name in self._prev_model_state:
+                                param.data.copy_(self._prev_model_state[name])
+                        
+                        # Compute loss with previous model
+                        loss = self.m() if inp is None else self.m(inp)
+                        if self.loss_fn is not None:
+                            loss = self.loss_fn(loss, tgt)
+                        loss.backward()
+                        return loss
+                    
+                    finally:
+                        # Restore current state
+                        for name, param in self.m.named_parameters():
+                            if name in current_state:
+                                param.data.copy_(current_state[name])
+                
                 try:
-                    loss = o.step(_closure)
+                    if self.requires_prev_model(o):
+                        loss = o.step_with_prev(_closure,_prev_closure)
+                    else:
+                        loss = o.step(_closure)
                 except PrecondInitError:
                     self.set_precond_init_scale = True
                     return self._inner(**input_kwargs)

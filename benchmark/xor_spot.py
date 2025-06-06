@@ -20,6 +20,11 @@ from heavyball.utils import set_torch
 
 app = typer.Typer(pretty_exceptions_enable=False)
 set_torch()
+import torch._dynamo
+torch._dynamo.config.suppress_errors = True
+app = typer.Typer()
+
+torch._dynamo.config.disable = True
 configs = {
     "trivial": {"length": 4},
     "easy": {"length": 8},
