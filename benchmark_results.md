@@ -1,56 +1,40 @@
 # Benchmark Results
-Generated: 2025-06-04 22:07:34.484386
-Last updated: 2025-06-04 22:07:34.484393
+Generated: 2025-06-06 22:10:10.521641
+Last updated: 2025-06-06 22:10:10.521646
 
 ## Summary (In Progress)
 
 | Optimizer | Caution | Mars | Success | Runtime | Average Attempts |
 |-----------|---|---|---------|----------|------|
-| SFAdamW | No | Yes | 7/9 | 11926.78s | 7.1 |
-| SFAdamWEMA | No | Yes | 7/9 | 11801.32s | 7.1 |
-| SFAdamW | No | No | 6/9 | 11697.09s | 7.7 |
-| AdamW | No | No | 2/9 | 4982.55s | 6.0 |
+| MARSAdamW | No | No | 5/7 | 1892.22s | 37.4 |
+| AdamW | No | No | 4/7 | 889.01s | 19.2 |
+| AdamW | No | Yes | 4/7 | 982.27s | 19.5 |
 
 ## Details
 
 | Benchmark | Optimizer | Cautious | Mars | Success | Runtime | Loss | Attempts | Seed | Winning Config |
 |-----------|-----------|---------|---|---|----------|------|---|---|----------------|
-| beale-trivial | AdamW | No | No | ✗ | 11382.49s | 1.32e+01 | 15 | 0 | `ForeachAdamW(lr=0.00010, betas=(0.100, 0.0010), shampoo_beta=0.001)` |
-| beale-trivial | SFAdamW | No | No | ✓ | 14470.21s | 9.21e-09 | 13 | 0 | `ForeachSFAdamW(lr=64.21445, betas=(0.006, 0.9975), shampoo_beta=0.830)` |
-| beale-trivial | SFAdamW | No | Yes | ✓ | 13058.47s | 6.73e-09 | 7 | 0 | `ForeachSFAdamW(lr=99.04932, betas=(0.989, 0.9604), shampoo_beta=0.757)` |
-| beale-trivial | SFAdamWEMA | No | Yes | ✓ | 14750.39s | 6.73e-09 | 7 | 0 | `ForeachSFAdamWEMA(lr=99.04932, betas=(0.989, 0.9604), shampoo_beta=0.757)` |
-| layer_wise_scale-trivial | AdamW | No | No | ✗ | 8757.71s | 1.17e-01 | 15 | 0 | `ForeachAdamW(lr=0.00010, betas=(0.100, 0.0010), shampoo_beta=0.001)` |
-| layer_wise_scale-trivial | SFAdamW | No | No | ✓ | 13529.37s | 1.00e-04 | 4 | 0 | `ForeachSFAdamW(lr=0.03492, betas=(1.000, 1.0000), shampoo_beta=0.408)` |
-| layer_wise_scale-trivial | SFAdamW | No | Yes | ✓ | 14314.31s | 1.00e-04 | 4 | 0 | `ForeachSFAdamW(lr=0.03492, betas=(1.000, 1.0000), shampoo_beta=0.408)` |
-| layer_wise_scale-trivial | SFAdamWEMA | No | Yes | ✓ | 14301.42s | 1.00e-04 | 4 | 0 | `ForeachSFAdamWEMA(lr=0.03492, betas=(1.000, 1.0000), shampoo_beta=0.408)` |
-| noisy_matmul-trivial | AdamW | No | No | ✗ | 5426.57s | 1.51e-01 | 15 | 0 | `ForeachAdamW(lr=0.00100, betas=(0.100, 0.0010), shampoo_beta=0.001)` |
-| noisy_matmul-trivial | SFAdamW | No | No | ✗ | 9288.34s | 1.42e-13 | 15 | 0 | `ForeachSFAdamW(lr=0.00100, betas=(0.100, 0.0010), shampoo_beta=0.001)` |
-| noisy_matmul-trivial | SFAdamW | No | Yes | ✓ | 9587.77s | 1.24e-14 | 11 | 0 | `ForeachSFAdamW(lr=10.27253, betas=(0.997, 1.0000), shampoo_beta=0.729)` |
-| noisy_matmul-trivial | SFAdamWEMA | No | Yes | ✓ | 8696.08s | 1.24e-14 | 11 | 0 | `ForeachSFAdamWEMA(lr=10.27253, betas=(0.997, 1.0000), shampoo_beta=0.729)` |
-| parameter_scale-trivial | AdamW | No | No | ✗ | 16025.29s | 1.29e-02 | 15 | 0 | `ForeachAdamW(lr=0.00010, betas=(0.100, 0.0010), shampoo_beta=0.001)` |
-| parameter_scale-trivial | SFAdamW | No | No | ✗ | 16335.96s | 8.24e-02 | 15 | 0 | `ForeachSFAdamW(lr=0.00010, betas=(0.100, 0.0010), shampoo_beta=0.001)` |
-| parameter_scale-trivial | SFAdamW | No | Yes | ✗ | 15559.73s | 2.19e-01 | 15 | 0 | `ForeachSFAdamW(lr=0.00010, betas=(0.100, 0.0010), shampoo_beta=0.001)` |
-| parameter_scale-trivial | SFAdamWEMA | No | Yes | ✗ | 16191.15s | 2.19e-01 | 15 | 0 | `ForeachSFAdamWEMA(lr=0.00010, betas=(0.100, 0.0010), shampoo_beta=0.001)` |
-| quadratic_varying_scale-trivial | AdamW | No | No | ✗ | 15075.16s | 2.55e-02 | 15 | 0 | `ForeachAdamW(lr=0.00100, betas=(0.100, 0.0010), shampoo_beta=0.001)` |
-| quadratic_varying_scale-trivial | SFAdamW | No | No | ✓ | 12984.42s | 6.01e-14 | 10 | 0 | `ForeachSFAdamW(lr=0.89992, betas=(0.985, 0.9999), shampoo_beta=0.971)` |
-| quadratic_varying_scale-trivial | SFAdamW | No | Yes | ✓ | 15055.39s | 1.18e-14 | 10 | 0 | `ForeachSFAdamW(lr=0.26674, betas=(0.470, 1.0000), shampoo_beta=1.000)` |
-| quadratic_varying_scale-trivial | SFAdamWEMA | No | Yes | ✓ | 15059.94s | 1.18e-14 | 10 | 0 | `ForeachSFAdamWEMA(lr=0.26674, betas=(0.470, 1.0000), shampoo_beta=1.000)` |
-| quadratic_varying_target-trivial | AdamW | No | No | ✗ | 14988.19s | 1.22e-01 | 15 | 0 | `ForeachAdamW(lr=0.00100, betas=(0.100, 0.0010), shampoo_beta=0.001)` |
-| quadratic_varying_target-trivial | SFAdamW | No | No | ✓ | 15070.21s | 5.33e-15 | 9 | 0 | `ForeachSFAdamW(lr=76.32257, betas=(1.000, 1.0000), shampoo_beta=0.211)` |
-| quadratic_varying_target-trivial | SFAdamW | No | Yes | ✓ | 15097.61s | 7.11e-15 | 8 | 0 | `ForeachSFAdamW(lr=61.71814, betas=(1.000, 1.0000), shampoo_beta=0.995)` |
-| quadratic_varying_target-trivial | SFAdamWEMA | No | Yes | ✓ | 13358.79s | 7.11e-15 | 8 | 0 | `ForeachSFAdamWEMA(lr=61.71814, betas=(1.000, 1.0000), shampoo_beta=0.995)` |
-| rastrigin-trivial | AdamW | No | No | ✗ | 7050.80s | 4.01e+00 | 15 | 0 | `ForeachAdamW(lr=0.00010, betas=(0.100, 0.0010), shampoo_beta=0.001)` |
-| rastrigin-trivial | SFAdamW | No | No | ✗ | 16286.87s | 3.98e+00 | 15 | 0 | `ForeachSFAdamW(lr=0.00010, betas=(0.100, 0.0010), shampoo_beta=0.001)` |
-| rastrigin-trivial | SFAdamW | No | Yes | ✗ | 16128.35s | 3.98e+00 | 15 | 0 | `ForeachSFAdamW(lr=0.00010, betas=(0.100, 0.0010), shampoo_beta=0.001)` |
-| rastrigin-trivial | SFAdamWEMA | No | Yes | ✗ | 16125.69s | 3.98e+00 | 15 | 0 | `ForeachSFAdamWEMA(lr=0.00010, betas=(0.100, 0.0010), shampoo_beta=0.001)` |
-| rosenbrock-trivial | AdamW | No | No | ✓ | 9754.75s | 9.98e-10 | 6 | 0 | `ForeachAdamW(lr=0.03076, betas=(0.972, 0.9996), shampoo_beta=0.892)` |
-| rosenbrock-trivial | SFAdamW | No | No | ✓ | 12193.66s | 6.08e-10 | 6 | 0 | `ForeachSFAdamW(lr=99.64541, betas=(0.960, 0.9953), shampoo_beta=0.996)` |
-| rosenbrock-trivial | SFAdamW | No | Yes | ✓ | 14350.51s | 2.22e-10 | 6 | 0 | `ForeachSFAdamW(lr=99.64541, betas=(0.960, 0.9953), shampoo_beta=0.996)` |
-| rosenbrock-trivial | SFAdamWEMA | No | Yes | ✓ | 14412.91s | 2.22e-10 | 6 | 0 | `ForeachSFAdamWEMA(lr=99.64541, betas=(0.960, 0.9953), shampoo_beta=0.996)` |
-| sparse_gradient-trivial | AdamW | No | No | ✓ | 210.34s | 9.66e-05 | 6 | 0 | `ForeachAdamW(lr=0.00425, betas=(0.742, 1.0000), shampoo_beta=0.714)` |
-| sparse_gradient-trivial | SFAdamW | No | No | ✓ | 1934.65s | 9.99e-05 | 4 | 0 | `ForeachSFAdamW(lr=0.03492, betas=(1.000, 1.0000), shampoo_beta=0.408)` |
-| sparse_gradient-trivial | SFAdamW | No | Yes | ✓ | 2023.39s | 1.00e-04 | 4 | 0 | `ForeachSFAdamW(lr=0.03492, betas=(1.000, 1.0000), shampoo_beta=0.408)` |
-| sparse_gradient-trivial | SFAdamWEMA | No | Yes | ✓ | 2029.73s | 1.00e-04 | 4 | 0 | `ForeachSFAdamWEMA(lr=0.03492, betas=(1.000, 1.0000), shampoo_beta=0.408)` |
+| noisy_matmul-medium | AdamW | No | No | ✓ | 73.55s | 9.46e-17 | 6 | 0 | `ForeachAdamW(lr=0.14392, betas=(0.924, 1.0000), shampoo_beta=0.906)` |
+| noisy_matmul-medium | MARSAdamW | No | No | ✓ | 65.89s | 9.46e-17 | 6 | 0 | `ForeachMARSAdamW(lr=0.14392, betas=(0.924, 1.0000), shampoo_beta=0.906)` |
+| noisy_matmul-medium | AdamW | No | Yes | ✓ | 592.60s | 8.02e-17 | 18 | 0 | `ForeachAdamW(lr=0.18313, betas=(0.816, 1.0000), shampoo_beta=0.895)` |
+| xor_digit-medium | AdamW | No | No | ✗ | 17360.86s | 6.81e-01 | 1000 | 0 | `ForeachAdamW(lr=0.00000, betas=(0.100, 0.0010), shampoo_beta=0.001)` |
+| xor_digit-medium | MARSAdamW | No | No | ✓ | 3793.84s | 9.84e-04 | 84 | 0 | `ForeachMARSAdamW(lr=0.00626, betas=(0.026, 0.3519), shampoo_beta=0.187)` |
+| xor_digit-medium | AdamW | No | Yes | ✗ | 13376.78s | 6.71e-01 | 1000 | 0 | `ForeachAdamW(lr=0.00000, betas=(0.100, 0.0010), shampoo_beta=0.001)` |
+| xor_digit_rnn-medium | AdamW | No | No | ✗ | 13360.20s | 6.85e-01 | 1000 | 0 | `ForeachAdamW(lr=0.00000, betas=(0.100, 0.0010), shampoo_beta=0.001)` |
+| xor_digit_rnn-medium | MARSAdamW | No | No | ✗ | 16836.87s | 6.83e-01 | 1000 | 0 | `ForeachMARSAdamW(lr=0.00000, betas=(0.100, 0.0010), shampoo_beta=0.001)` |
+| xor_digit_rnn-medium | AdamW | No | Yes | ✗ | 18583.08s | 6.79e-01 | 1000 | 0 | `ForeachAdamW(lr=0.00000, betas=(0.100, 0.0010), shampoo_beta=0.001)` |
+| xor_sequence-medium | AdamW | No | No | ✓ | 609.70s | 9.17e-03 | 10 | 0 | `ForeachAdamW(lr=0.00962, betas=(0.939, 1.0000), shampoo_beta=0.705)` |
+| xor_sequence-medium | MARSAdamW | No | No | ✓ | 592.64s | 7.06e-03 | 8 | 0 | `ForeachMARSAdamW(lr=0.02137, betas=(0.732, 1.0000), shampoo_beta=0.754)` |
+| xor_sequence-medium | AdamW | No | Yes | ✓ | 381.21s | 9.99e-03 | 6 | 0 | `ForeachAdamW(lr=0.01099, betas=(0.844, 1.0000), shampoo_beta=0.822)` |
+| xor_sequence_rnn-medium | AdamW | No | No | ✓ | 840.61s | 9.80e-03 | 16 | 0 | `ForeachAdamW(lr=0.00120, betas=(0.736, 1.0000), shampoo_beta=0.999)` |
+| xor_sequence_rnn-medium | MARSAdamW | No | No | ✓ | 1670.42s | 9.44e-03 | 24 | 0 | `ForeachMARSAdamW(lr=0.00945, betas=(0.455, 1.0000), shampoo_beta=0.760)` |
+| xor_sequence_rnn-medium | AdamW | No | Yes | ✓ | 727.50s | 9.85e-03 | 12 | 0 | `ForeachAdamW(lr=0.00374, betas=(0.178, 1.0000), shampoo_beta=0.016)` |
+| xor_spot-medium | AdamW | No | No | ✓ | 2032.18s | 9.47e-03 | 45 | 0 | `ForeachAdamW(lr=0.00287, betas=(0.262, 1.0000), shampoo_beta=0.590)` |
+| xor_spot-medium | MARSAdamW | No | No | ✓ | 3338.34s | 4.83e-03 | 65 | 0 | `ForeachMARSAdamW(lr=0.00299, betas=(0.051, 0.1643), shampoo_beta=0.141)` |
+| xor_spot-medium | AdamW | No | Yes | ✓ | 2227.76s | 8.26e-03 | 42 | 0 | `ForeachAdamW(lr=0.00350, betas=(0.488, 1.0000), shampoo_beta=0.011)` |
+| xor_spot_rnn-medium | AdamW | No | No | ✗ | 18410.11s | 6.89e-01 | 1000 | 0 | `ForeachAdamW(lr=0.00100, betas=(0.100, 0.0010), shampoo_beta=0.001)` |
+| xor_spot_rnn-medium | MARSAdamW | No | No | ✗ | 19478.60s | 6.92e-01 | 1000 | 0 | `ForeachMARSAdamW(lr=0.00100, betas=(0.100, 0.0010), shampoo_beta=0.001)` |
+| xor_spot_rnn-medium | AdamW | No | Yes | ✗ | 18739.41s | 6.89e-01 | 1000 | 0 | `ForeachAdamW(lr=0.00100, betas=(0.100, 0.0010), shampoo_beta=0.001)` |
 
 ## Errors
 

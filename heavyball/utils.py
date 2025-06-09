@@ -1351,38 +1351,48 @@ def fused_adam_(
     _fused_compilable_adam_(y, exp_avg, exp_avg_sq, update, grad, beta1, beta2, step, decay, lr, eps, caution)
 
 
-
 @decorator_knowngood
 def _fused_compilable_STORM_(
     y: List[Tensor],
-    exp_avg: List[Tensor],
-    exp_avg_sq: List[Tensor],
+    exp_avg_d: List[Tensor],
+    exp_avg_g: List[Tensor],
     update: List[Tensor],
     grad: List[Tensor],
     prev_grads: List[Tensor],
-    beta1: Tensor,
-    beta2: Tensor,
     step: Tensor,
     decay: Tensor,
     lr: Tensor,
     eps: Tensor,
     caution: bool,
+    a: float,
 ):
-    beta1 = beta_debias(beta1, step)
-    beta2 = beta_debias(beta2, step)
-    
     u32, g32, prev_g32 = [list(map(promote, x)) for x in [update, grad, prev_grads]]
-    print(f"prevexp{exp_avg}")
-    if prev_g32 and len(prev_g32) == len(exp_avg):
-        exp_avg_corrected = torch._foreach_sub(exp_avg, prev_g32)
-    else:
-        exp_avg_corrected = exp_avg
-    print(f"new{exp_avg_corrected}")
-    exp_avg32 = _lerp(exp_avg_corrected, u32, beta1)
     
-    denom = _compilable_exp_avg_sq_(exp_avg_sq, u32, beta2, eps, [None])
-    u32 = torch._foreach_div(exp_avg32, denom)
-    _compilable_update_(y, u32, decay, lr, caution, g32)
+    if prev_g32 and len(prev_g32) == len(exp_avg_d):
+        exp_avg_corrected = torch._foreach_sub(exp_avg_d, prev_g32)
+    else:
+        exp_avg_corrected = exp_avg_d
+
+    exp_avg_d = _lerp(exp_avg_corrected, u32, a)
+   
+    exp_avg_g = torch._foreach_add(exp_avg_g, g32)
+    
+    norm_grad_sq = sum(torch.sum(g**2) for g in g32)
+    sum_of_norm_grad_sq = torch._foreach_add(sum_of_norm_grad_sq, norm_grad_sq)
+    # Calculate a_t = 1/(1 + sum_{i=1}^{t-1} ||g_i||^2)^{2/3} - SCALAR
+    a = torch.pow(1.0 + sum_of_norm_grad_sq, -2.0/3.0)
+    
+    # Calculate ||d_t||^2 as a SCALAR (sum across all parameters)  
+    norm_d_sq = sum(torch.sum(d**2) for d in exp_avg_d)
+    sum_of_norm_d_sq = torch._foreach_add(sum_of_norm_d_sq, norm_d_sq)
+    # Calculate eta_t = 1/(||d_t||^2 / a_t)^{1/3} - SCALAR
+    eta_t_denom = sum_of_norm_d_sq / (a + eps)
+    eta_t = torch.pow(eta_t_denom + eps, -1.0/3.0) 
+    
+    # Apply the SCALAR eta_t to all parameters
+    u32 = torch._foreach_mul(exp_avg_d, eta_t)
+    
+    _compilable_update_(y, u32, decay, torch.tensor(1.0), caution, g32)
 
 
 def fused_STORM_(
@@ -1404,6 +1414,69 @@ def fused_STORM_(
     y, exp_avg, exp_avg_sq, grad, prev_grads = list_guard(y, exp_avg, exp_avg_sq, grad, prev_grads)
     beta1, beta2, step, lr = scalar_guard(beta1, beta2, step, lr, y[0])
     _fused_compilable_STORM_(y, exp_avg, exp_avg_sq, update, grad, prev_grads, beta1, beta2, step, decay, lr, eps, caution)
+
+@decorator_knowngood
+def _fused_compilable_MARSAdamW_(
+    y: List[Tensor],
+    exp_avg: List[Tensor],
+    exp_avg_sq: List[Tensor],
+    update: List[Tensor],
+    grad: List[Tensor],
+    prev_grads: List[Tensor],
+    scaled_gamma: Tensor,
+    beta1: Tensor,
+    beta2: Tensor,
+    step: Tensor,
+    decay: Tensor,
+    lr: Tensor,
+    eps: Tensor,
+    caution: bool,
+):
+    beta1 = beta_debias(beta1, step)
+    beta2 = beta_debias(beta2, step)
+    u32, g32, prev_g32 = [list(map(promote, x)) for x in [update, grad, prev_grads]]
+    
+    if prev_g32 and len(prev_g32) == len(u32):
+        u32_corrected = torch._foreach_sub(u32, prev_g32)
+    else:
+        u32_corrected = u32
+    
+    gradient_correction = torch._foreach_mul(u32_corrected, scaled_gamma)
+    u32_gamma_corrected = torch._foreach_add(u32, gradient_correction)
+    
+   
+    norms = torch._foreach_norm(u32_gamma_corrected)
+    ones_tensor = torch.tensor(1.0, device=u32_gamma_corrected[0].device, dtype=u32_gamma_corrected[0].dtype)
+    max_norms = torch._foreach_maximum(norms, ones_tensor)
+    clip_coef = torch._foreach_reciprocal(max_norms)  
+    u32_gamma_corrected = torch._foreach_mul(u32_gamma_corrected, clip_coef)
+    
+    exp_avg32 = _lerp(exp_avg, u32_gamma_corrected, beta1)
+    denom = _compilable_exp_avg_sq_(exp_avg_sq, u32_gamma_corrected, beta2, eps, [None])
+    u32 = torch._foreach_div(exp_avg32, denom)
+    _compilable_update_(y, u32, decay, lr, caution, g32)
+
+
+def fused_MARSAdamW_(
+    y: List[Tensor],
+    exp_avg: List[Tensor],
+    exp_avg_sq: List[Tensor],
+    update: List[Tensor],
+    grad: List[Tensor],
+    prev_grads: List[Tensor],
+    mars_gamma: float,
+    beta1: float,
+    beta2: float,
+    step: int,
+    lr: float,
+    eps: float,
+    decay: float,
+    caution: bool,
+):
+    scaled_gamma = (mars_gamma * beta1)/(1 - beta1)
+    y, exp_avg, exp_avg_sq, grad, prev_grads = list_guard(y, exp_avg, exp_avg_sq, grad, prev_grads)
+    scaled_gamma, beta1, beta2, step, lr = scalar_guard(scaled_gamma, beta1, beta2, step, lr, y[0])
+    _fused_compilable_MARSAdamW_(y, exp_avg, exp_avg_sq, update, grad, prev_grads, scaled_gamma, beta1, beta2, step, decay, lr, eps, caution)
 
 
 @decorator_knowngood

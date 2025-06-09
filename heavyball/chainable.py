@@ -318,6 +318,7 @@ def update_by_adam(group, update, grad, param, exp_avg, exp_avg_sq):
     )
     raise SkipUpdate from None
 
+
 @zero_guard("exp_avg", "exp_avg_sq")
 @no_state
 def update_by_STORM(group, update, grad, param, exp_avg, exp_avg_sq):
@@ -338,6 +339,31 @@ def update_by_STORM(group, update, grad, param, exp_avg, exp_avg_sq):
         group["caution"],
     )
     raise SkipUpdate from None
+
+
+@zero_guard("exp_avg", "exp_avg_sq")
+@no_state
+def update_by_MARSAdamW(group, update, grad, param, exp_avg, exp_avg_sq):
+    prev_grads = group.get("prev_grads", [])
+    mars_gamma = group.get("mars_gamma", 0.0)
+    utils.fused_MARSAdamW_(
+        param,
+        exp_avg,
+        exp_avg_sq,
+        update,
+        grad,
+        prev_grads,
+        mars_gamma,
+        utils.get_beta1(group),
+        utils.get_beta2(group),
+        group["step"],
+        group["lr"],
+        group["eps"],
+        group["weight_decay"],
+        group["caution"],
+    )
+    raise SkipUpdate from None
+
 
 @zero_guard("exp_avg", "exp_avg_sq")
 @no_state
@@ -1012,7 +1038,7 @@ class ChainOpt(utils.StatefulOptimizer):
 
         for param in p:
             state = self.state_(param)
-            print(state)
+        
             if "update_by_adam_exp_avg_0" in state:
                 self.ema_update = state["update_by_adam_exp_avg_0"]
             if "step" in state:

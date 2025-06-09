@@ -364,10 +364,7 @@ class Objective:
         torch_hist = torch.empty(self.group, dtype=torch.float64, device="cuda")
         validator = self.validator.new()
 
-        if self.requires_prev_model(o):
-            print("Hello")
-        else:
-            print("no")
+       
         # Create a list to track losses for this run
         step_losses = []
         
