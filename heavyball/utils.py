@@ -1352,7 +1352,7 @@ def fused_adam_(
 
 
 @decorator_knowngood
-def _fused_compilable_STORM_(
+def _fused_compilable_STORM_plus_(
     y: List[Tensor],
     exp_avg_d: List[Tensor],
     exp_avg_g: List[Tensor],
@@ -1398,7 +1398,7 @@ def _fused_compilable_STORM_(
     _compilable_update_(y, u32, decay, torch.tensor(1.0), caution, g32)
 
 
-def fused_STORM_(
+def fused_STORM_plus_(
     y: List[Tensor],
     exp_avg_d: List[Tensor],
     exp_avg_g: List[Tensor],
@@ -1417,7 +1417,72 @@ def fused_STORM_(
     
     y, exp_avg_d, exp_avg_g, grad, prev_grads = list_guard(y, exp_avg_d, exp_avg_g, grad, prev_grads)
     step, lr, a = scalar_guard(step, lr, a, y[0])
-    _fused_compilable_STORM_(y, exp_avg_d, exp_avg_g, sum_of_norm_grad_sq, sum_of_norm_d_sq, update, grad, prev_grads, step, decay, lr, eps, caution, a)
+    _fused_compilable_STORM_plus_(y, exp_avg_d, exp_avg_g, sum_of_norm_grad_sq, sum_of_norm_d_sq, update, grad, prev_grads, step, decay, lr, eps, caution, a)
+
+
+@decorator_knowngood
+def _fused_compilable_STORM_(
+    y: List[Tensor],
+    exp_avg_d: List[Tensor],
+    exp_avg_g: List[Tensor],
+    sum_of_norm_grad_sq: List[Tensor],
+    sum_of_norm_d_sq: List[Tensor],
+    update: List[Tensor],
+    grad: List[Tensor],
+    prev_grads: List[Tensor],
+    step: Tensor,
+    decay: Tensor,
+    lr: Tensor,
+    eps: Tensor,
+    caution: bool,
+    eta: Tensor, 
+):
+    """ Setting k=lr, w=eps and c=1??"""
+    u32, g32, prev_g32 = [list(map(promote, x)) for x in [update, grad, prev_grads]]
+    
+    if prev_g32 and len(prev_g32) == len(exp_avg_d):
+        exp_avg_corrected = torch._foreach_sub(exp_avg_d, prev_g32)
+    else:
+        exp_avg_corrected = exp_avg_d
+    a = torch._foreach_pow(eta, 2.)
+    exp_avg_d = _lerp(exp_avg_corrected, u32, a)
+   
+    exp_avg_g = torch._foreach_add(exp_avg_g, g32)
+    
+    norm_grad_sq = torch._foreach_norm(g32)
+    sum_of_norm_grad_sq = torch._foreach_add(sum_of_norm_grad_sq, norm_grad_sq)
+    # add epsilon to protect against dividing by zero
+    sum_of_norm_grad_sq = torch._foreach_add(sum_of_norm_grad_sq, eps)
+    
+    eta_denom = torch._foreach_pow(sum_of_norm_grad_sq, 1.0/3.0)
+    eta = torch._foreach_div(lr, eta_denom)
+    
+    u32 = torch._foreach_mul(exp_avg_d, eta)
+    
+    _compilable_update_(y, u32, decay, torch.tensor(1.0), caution, g32)
+
+
+def fused_STORM_(
+    y: List[Tensor],
+    exp_avg_d: List[Tensor],
+    exp_avg_g: List[Tensor],
+    sum_of_norm_grad_sq: List[Tensor],
+    sum_of_norm_d_sq: List[Tensor],
+    update: List[Tensor],
+    grad: List[Tensor],
+    prev_grads: List[Tensor],
+    step: Tensor,
+    decay: Tensor,
+    lr: Tensor,
+    eps: Tensor,
+    caution: bool,
+    eta: Tensor,
+):
+    
+    y, exp_avg_d, exp_avg_g, grad, prev_grads = list_guard(y, exp_avg_d, exp_avg_g, grad, prev_grads)
+    step, lr, eta = scalar_guard(step, lr, eta, y[0])
+    _fused_compilable_STORM_(y, exp_avg_d, exp_avg_g, sum_of_norm_grad_sq, sum_of_norm_d_sq, update, grad, prev_grads, step, decay, lr, eps, caution, eta)
+
 
 @decorator_knowngood
 def _fused_compilable_MARSAdamW_(

@@ -319,11 +319,34 @@ def update_by_adam(group, update, grad, param, exp_avg, exp_avg_sq):
     raise SkipUpdate from None
 
 
+@zero_guard("exp_avg", "exp_avg_sq", "sum_of_norm_grad_sq",  "sum_of_norm_d_sq", "eta")
+@no_state
+def update_by_STORM_(group, update, grad, param, exp_avg_d, exp_avg_g, sum_of_norm_grad_sq, sum_of_norm_d_sq, eta):
+    prev_grads = group.get("prev_grads", [])
+    utils.fused_STORM_plus_(
+        param,
+        exp_avg_d,
+        exp_avg_g,
+        sum_of_norm_grad_sq,
+        sum_of_norm_d_sq,
+        update,
+        grad,
+        prev_grads,
+        group["step"],
+        group["lr"],
+        group["eps"],
+        group["weight_decay"],
+        group["caution"],
+        eta,
+    )
+    raise SkipUpdate from None
+
+
 @zero_guard("exp_avg", "exp_avg_sq", "sum_of_norm_grad_sq",  "sum_of_norm_d_sq")
 @no_state
-def update_by_STORM(group, update, grad, param, exp_avg_d, exp_avg_g, sum_of_norm_grad_sq, sum_of_norm_d_sq):
+def update_by_STORM_plus(group, update, grad, param, exp_avg_d, exp_avg_g, sum_of_norm_grad_sq, sum_of_norm_d_sq):
     prev_grads = group.get("prev_grads", [])
-    utils.fused_STORM_(
+    utils.fused_STORM_plus_(
         param,
         exp_avg_d,
         exp_avg_g,
