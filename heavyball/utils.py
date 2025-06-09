@@ -1356,6 +1356,8 @@ def _fused_compilable_STORM_(
     y: List[Tensor],
     exp_avg_d: List[Tensor],
     exp_avg_g: List[Tensor],
+    sum_of_norm_grad_sq: List[Tensor],
+    sum_of_norm_d_sq: List[Tensor],
     update: List[Tensor],
     grad: List[Tensor],
     prev_grads: List[Tensor],
@@ -1380,16 +1382,17 @@ def _fused_compilable_STORM_(
     norm_grad_sq = torch._foreach_norm(g32)
     sum_of_norm_grad_sq = torch._foreach_add(sum_of_norm_grad_sq, norm_grad_sq)
     # Calculate a_t = 1/(1 + sum_{i=1}^{t-1} ||g_i||^2)^{2/3} - SCALAR
-    a = torch.pow(1.0 + sum_of_norm_grad_sq, -2.0/3.0)
+    one_plus = torch._foreach_add(sum_of_norm_grad_sq, 1.0)
+    a = torch._foreach_pow(one_plus, -2.0/3.0)
     
     # Calculate ||d_t||^2 as a SCALAR (sum across all parameters)  
     norm_d_sq = torch._foreach_norm(exp_avg_d)
     sum_of_norm_d_sq = torch._foreach_add(sum_of_norm_d_sq, norm_d_sq)
     # Calculate eta_t = 1/(||d_t||^2 / a_t)^{1/3} - SCALAR
-    eta_t_denom = sum_of_norm_d_sq / (a + eps)
-    eta_t = torch.pow(eta_t_denom + eps, -1.0/3.0) 
-    
-    # Apply the SCALAR eta_t to all parameters
+    non_zero_a = torch._foreach_add(a, eps)
+    eta_t_denom = torch._foreach_div(sum_of_norm_d_sq, non_zero_a)
+    eta_t = torch._foreach_pow(eta_t_denom, -1.0/3.0) 
+    # Apply eta_t to all parameters
     u32 = torch._foreach_mul(exp_avg_d, eta_t)
     
     _compilable_update_(y, u32, decay, torch.tensor(1.0), caution, g32)
@@ -1397,23 +1400,24 @@ def _fused_compilable_STORM_(
 
 def fused_STORM_(
     y: List[Tensor],
-    exp_avg: List[Tensor],
-    exp_avg_sq: List[Tensor],
+    exp_avg_d: List[Tensor],
+    exp_avg_g: List[Tensor],
+    sum_of_norm_grad_sq: List[Tensor],
+    sum_of_norm_d_sq: List[Tensor],
     update: List[Tensor],
     grad: List[Tensor],
     prev_grads: List[Tensor],
-    beta1: float,
-    beta2: float,
-    step: int,
-    lr: float,
-    eps: float,
-    decay: float,
+    step: Tensor,
+    decay: Tensor,
+    lr: Tensor,
+    eps: Tensor,
     caution: bool,
+    a: Tensor,
 ):
     
-    y, exp_avg, exp_avg_sq, grad, prev_grads = list_guard(y, exp_avg, exp_avg_sq, grad, prev_grads)
-    beta1, beta2, step, lr = scalar_guard(beta1, beta2, step, lr, y[0])
-    _fused_compilable_STORM_(y, exp_avg, exp_avg_sq, update, grad, prev_grads, beta1, beta2, step, decay, lr, eps, caution)
+    y, exp_avg_d, exp_avg_g, grad, prev_grads = list_guard(y, exp_avg_d, exp_avg_g, grad, prev_grads)
+    step, lr, a = scalar_guard(step, lr, a, y[0])
+    _fused_compilable_STORM_(y, exp_avg_d, exp_avg_g, sum_of_norm_grad_sq, sum_of_norm_d_sq, update, grad, prev_grads, step, decay, lr, eps, caution, a)
 
 @decorator_knowngood
 def _fused_compilable_MARSAdamW_(
@@ -1443,8 +1447,8 @@ def _fused_compilable_MARSAdamW_(
     
     gradient_correction = torch._foreach_mul(u32_corrected, scaled_gamma)
     u32_gamma_corrected = torch._foreach_add(u32, gradient_correction)
-    #print(f"prev{prev_g32[0]}")
-    #print(f"g{g32[0]}")
+    print(f"prev{prev_g32[0]}")
+    print(f"g{g32[0]}")
     norms = torch._foreach_norm(u32_gamma_corrected)
     ones_tensor = torch.tensor(1.0, device=u32_gamma_corrected[0].device, dtype=u32_gamma_corrected[0].dtype)
     max_norms = torch._foreach_maximum(norms, ones_tensor)
