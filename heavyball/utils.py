@@ -1377,13 +1377,13 @@ def _fused_compilable_STORM_(
    
     exp_avg_g = torch._foreach_add(exp_avg_g, g32)
     
-    norm_grad_sq = sum(torch.sum(g**2) for g in g32)
+    norm_grad_sq = torch._foreach_norm(g32)
     sum_of_norm_grad_sq = torch._foreach_add(sum_of_norm_grad_sq, norm_grad_sq)
     # Calculate a_t = 1/(1 + sum_{i=1}^{t-1} ||g_i||^2)^{2/3} - SCALAR
     a = torch.pow(1.0 + sum_of_norm_grad_sq, -2.0/3.0)
     
     # Calculate ||d_t||^2 as a SCALAR (sum across all parameters)  
-    norm_d_sq = sum(torch.sum(d**2) for d in exp_avg_d)
+    norm_d_sq = torch._foreach_norm(exp_avg_d)
     sum_of_norm_d_sq = torch._foreach_add(sum_of_norm_d_sq, norm_d_sq)
     # Calculate eta_t = 1/(||d_t||^2 / a_t)^{1/3} - SCALAR
     eta_t_denom = sum_of_norm_d_sq / (a + eps)
@@ -1448,7 +1448,8 @@ def _fused_compilable_MARSAdamW_(
     norms = torch._foreach_norm(u32_gamma_corrected)
     ones_tensor = torch.tensor(1.0, device=u32_gamma_corrected[0].device, dtype=u32_gamma_corrected[0].dtype)
     max_norms = torch._foreach_maximum(norms, ones_tensor)
-    clip_coef = torch._foreach_reciprocal(max_norms)  
+    # update clipping
+    clip_coef = torch._foreach_minimum(ones_tensor, torch._foreach_reciprocal(norms))
     u32_gamma_corrected = torch._foreach_mul(u32_gamma_corrected, clip_coef)
     
     exp_avg32 = _lerp(exp_avg, u32_gamma_corrected, beta1)
