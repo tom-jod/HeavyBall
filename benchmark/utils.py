@@ -420,32 +420,36 @@ class Objective:
                 
                 # Later, when you need previous model:
                 def _prev_closure():
-                    if self._prev_model_state is None:
-                        # First iteration - use current model
-                        return _closure()
-                    
-                    # Save current state
-                    current_state = {name: param.clone() for name, param in self.m.named_parameters()}
-                    
                     try:
-                        # Load previous state
-                        for name, param in self.m.named_parameters():
-                            if name in self._prev_model_state:
-                                param.data.copy_(self._prev_model_state[name])
+                        prev_params = params['prev']
+                        # Save current state
+                        current_state = {name: param.clone() for name, param in self.m.named_parameters()}
+
+                        try:
+                            for name, param in self.m.named_parameters():
+                                if name in prev_params:
+                                    param.data.copy_(prev_params[name])
+                                    
+                                    print(prev_params[name])
+                                        
+                            # Compute loss with previous model
+                            loss = self.m() if inp is None else self.m(inp)
+                            if self.loss_fn is not None:
+                                loss = self.loss_fn(loss, tgt)
+                            loss.backward()
+                            return loss
                         
-                        # Compute loss with previous model
-                        loss = self.m() if inp is None else self.m(inp)
-                        if self.loss_fn is not None:
-                            loss = self.loss_fn(loss, tgt)
-                        loss.backward()
-                        return loss
-                    
-                    finally:
-                        # Restore current state
-                        for name, param in self.m.named_parameters():
-                            if name in current_state:
-                                param.data.copy_(current_state[name])
-                
+                        finally:
+                            # Restore current state
+                            for name, param in self.m.named_parameters():
+                                if name in current_state:
+                                    param.data.copy_(current_state[name])
+                                params['prev'] = {name: param.data.clone().detach() for name, param in self.m.named_parameters()}
+                    except KeyError:
+                        # for the first step we set the prev params and use the standard closure function
+                        params['prev'] = {name: param.data.clone().detach() for name, param in self.m.named_parameters()}
+                        return _closure()
+
                 try:
                     if self.requires_prev_model(o):
                         loss = o.step_with_prev(_closure,_prev_closure)

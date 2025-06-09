@@ -346,6 +346,7 @@ def update_by_STORM(group, update, grad, param, exp_avg, exp_avg_sq):
 def update_by_MARSAdamW(group, update, grad, param, exp_avg, exp_avg_sq):
     prev_grads = group.get("prev_grads", [])
     mars_gamma = group.get("mars_gamma", 0.0)
+    #print(f"above{prev_grads[0]}")
     utils.fused_MARSAdamW_(
         param,
         exp_avg,

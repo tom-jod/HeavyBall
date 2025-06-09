@@ -1233,10 +1233,10 @@ class StatefulOptimizer(torch.optim.Optimizer):
             self._is_preconditioning = False
         else:
             self._is_preconditioning = psgd_should_update(self.inner_group, self.precond_schedule, self.precond_rng)
-        
-        loss = self._handle_closure(closure)
+       
         if prev_closure is not None:
             prev_loss = self._handle_prev_closure(prev_closure)
+        loss = self._handle_closure(closure)
         # we assume that parameters are constant and that there are no excessive recompiles
         with torch.no_grad(), torch._dynamo.utils.disable_cache_limit():
             for group in self.param_groups:
@@ -1443,17 +1443,17 @@ def _fused_compilable_MARSAdamW_(
     
     gradient_correction = torch._foreach_mul(u32_corrected, scaled_gamma)
     u32_gamma_corrected = torch._foreach_add(u32, gradient_correction)
-    
-   
+    #print(f"prev{prev_g32[0]}")
+    #print(f"g{g32[0]}")
     norms = torch._foreach_norm(u32_gamma_corrected)
     ones_tensor = torch.tensor(1.0, device=u32_gamma_corrected[0].device, dtype=u32_gamma_corrected[0].dtype)
     max_norms = torch._foreach_maximum(norms, ones_tensor)
     # update clipping
-    clip_coef = torch._foreach_minimum(ones_tensor, torch._foreach_reciprocal(norms))
+    clip_coef = torch._foreach_minimum(torch._foreach_reciprocal(norms), ones_tensor)
     u32_gamma_corrected = torch._foreach_mul(u32_gamma_corrected, clip_coef)
-    
-    exp_avg32 = _lerp(exp_avg, u32_gamma_corrected, beta1)
-    denom = _compilable_exp_avg_sq_(exp_avg_sq, u32_gamma_corrected, beta2, eps, [None])
+
+    exp_avg32 = _lerp(u32_gamma_corrected, exp_avg, beta1)
+    denom = _compilable_exp_avg_sq_(exp_avg_sq, u32_gamma_corrected, 1 - beta2, eps, [None])
     u32 = torch._foreach_div(exp_avg32, denom)
     _compilable_update_(y, u32, decay, lr, caution, g32)
 
