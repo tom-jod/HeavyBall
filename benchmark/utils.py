@@ -430,7 +430,7 @@ class Objective:
                                 if name in prev_params:
                                     param.data.copy_(prev_params[name])
                                     
-                                    print(prev_params[name])
+                                    
                                         
                             # Compute loss with previous model
                             loss = self.m() if inp is None else self.m(inp)

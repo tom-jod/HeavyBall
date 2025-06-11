@@ -916,12 +916,18 @@ class StatefulOptimizer(torch.optim.Optimizer):
             if "mars_old_grad" not in state:
                 state["mars_old_grad"] = torch.zeros_like(g)
         old_gs = [self.state_(p)["mars_old_grad"] for p in p_list]
-        
         mars_correction(g_list, old_gs, mars_gamma, beta)
 
-    def mars_correct_list_ema(self, group, p_list, g_list, mars_gamma, beta, ema_update):
-        
+    def mars_correct_list_ema_c(self, group, p_list, g_list, mars_gamma, beta, ema_update):
         mars_correction(g_list, ema_update, mars_gamma, beta)
+
+    def mars_correct_list_ema_m(self, group, p_list, g_list, mars_gamma, beta):
+        for p, g in zip(p_list, g_list):
+            state = self.state_(p)
+            if "mars_old_grad" not in state:
+                state["mars_old_grad"] = torch.zeros_like(g)
+        old_gs = [self.state_(p)["mars_old_grad"] for p in p_list]
+        mars_correction_ema(g_list, old_gs, mars_gamma, beta)
 
     def _init_mapping(self, group: dict | None = None):
         if group is None:
@@ -982,7 +988,8 @@ class StatefulOptimizer(torch.optim.Optimizer):
                     
                     if use_ema and "update_by_adam_exp_avg_0" in self.state_(p):
                         ema_update = self.state_(p)["update_by_adam_exp_avg_0"]  
-                        self.mars_correct_list_ema(group, [pv], [g], group["mars_gamma"], beta1, [ema_update])
+                        #self.mars_correct_list_ema_c(group, [pv], [g], group["mars_gamma"], beta1, [ema_update])
+                        self.mars_correct_list_ema_m(group, [pv], [g], group["mars_gamma"], beta1)
             
                     else:
                         self.mars_correct_list(group, [pv], [g], group["mars_gamma"], beta1)
@@ -1501,28 +1508,28 @@ def _fused_compilable_MARSAdamW_(
     eps: Tensor,
     caution: bool,
 ):
-    beta1 = beta_debias(beta1, step)
-    beta2 = beta_debias(beta2, step)
+   
     u32, g32, prev_g32 = [list(map(promote, x)) for x in [update, grad, prev_grads]]
     
     if prev_g32 and len(prev_g32) == len(u32):
         u32_corrected = torch._foreach_sub(u32, prev_g32)
     else:
         u32_corrected = u32
-    
+   
     gradient_correction = torch._foreach_mul(u32_corrected, scaled_gamma)
     u32_gamma_corrected = torch._foreach_add(u32, gradient_correction)
-    print(f"prev{prev_g32[0]}")
-    print(f"g{g32[0]}")
+    
     norms = torch._foreach_norm(u32_gamma_corrected)
-    ones_tensor = torch.tensor(1.0, device=u32_gamma_corrected[0].device, dtype=u32_gamma_corrected[0].dtype)
-    max_norms = torch._foreach_maximum(norms, ones_tensor)
+    
+    ones_tensor = torch.tensor(1, device=u32_gamma_corrected[0].device, dtype=u32_gamma_corrected[0].dtype)
     # update clipping
     clip_coef = torch._foreach_minimum(torch._foreach_reciprocal(norms), ones_tensor)
+    
     u32_gamma_corrected = torch._foreach_mul(u32_gamma_corrected, clip_coef)
-
-    exp_avg32 = _lerp(u32_gamma_corrected, exp_avg, beta1)
-    denom = _compilable_exp_avg_sq_(exp_avg_sq, u32_gamma_corrected, 1 - beta2, eps, [None])
+    beta1 = beta_debias(beta1, step)
+    beta2 = beta_debias(beta2, step)
+    exp_avg32 = _lerp(exp_avg, u32_gamma_corrected, beta1)
+    denom = _compilable_exp_avg_sq_(exp_avg_sq, u32_gamma_corrected, beta2, eps, [None])
     u32 = torch._foreach_div(exp_avg32, denom)
     _compilable_update_(y, u32, decay, lr, caution, g32)
 
@@ -1543,6 +1550,7 @@ def fused_MARSAdamW_(
     decay: float,
     caution: bool,
 ):
+    
     scaled_gamma = (mars_gamma * beta1)/(1 - beta1)
     y, exp_avg, exp_avg_sq, grad, prev_grads = list_guard(y, exp_avg, exp_avg_sq, grad, prev_grads)
     scaled_gamma, beta1, beta2, step, lr = scalar_guard(scaled_gamma, beta1, beta2, step, lr, y[0])
@@ -2809,6 +2817,21 @@ def mars_correction(g, old_g, beta1, gamma):
     g, old_g = list_guard(g), list_guard(old_g)
     a = scalar_guard(a, g[0])
     _compilable_mars_correction_(g, old_g, a)
+
+
+@decorator_knowngood
+def _compilable_mars_correction_ema_(g: Tensor, old_g: Tensor, a: Tensor, beta1: Tensor):
+    g_copy = [g_.clone() for g_ in g]
+    _compilable_stochastic_lerp_(g, old_g, a)
+    old_g = _compilable_stochastic_lerp_(g, old_g, beta1)
+    copy_stochastic_list_(old_g, old_g)
+
+
+def mars_correction_ema(g, old_g, beta1, gamma):
+    a = -gamma * beta1 / (1 - beta1)
+    g, old_g = list_guard(g), list_guard(old_g)
+    a, beta1 = scalar_guard(a, beta1, g[0])
+    _compilable_mars_correction_ema_(g, old_g, a, beta1)
 
 
 @decorator_knowngood
