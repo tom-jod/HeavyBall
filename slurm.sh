@@ -19,4 +19,4 @@ echo CUDA_VISIBLE_DEVICES $CUDA_VISIBLE_DEVICES
 source /home/tomjodrell/.bashrc
 conda activate $CONDA_ENV_NAME
 
-python3 -m benchmark.run_all_benchmarks --steps 1000 --dtype float32 --trials 50 --parallelism 256 --seeds 1 --difficulties "medium" --opt="MARSAdamW" --opt="AdamW" --opt "mars-AdamW"  --timeout 155000 --exclude "beale.py,rosenbrock.py,rastrigin.py,quadratic_varying_scale.py,quadratic_varying_target.py,saddle_point.py,discontinuous_gradient.py,wide_linear.py,minimax.py,plateau_navigation.py,scale_invariant.py,momentum_utilization.py,batch_size_scaling.py,sparse_gradient.py,layer_wise_scale.py,parameter_scale.py,gradient_delay.py,gradient_noise_scale.py,adversarial_gradient.py,dynamic_landscape.py,constrained_optimization.py, xor_digit.py, xor_digit_rnn.py, xor_spot_rnn.py"
+python3 -m benchmark.run_all_benchmarks --steps 100000 --dtype float32 --trials 50 --parallelism 256 --seeds 1 --difficulties "trivial" --opt="SGD" --timeout 155000 --exclude "wide_linear.py, minimax.py"

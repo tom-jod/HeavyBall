@@ -299,6 +299,21 @@ def scale_by_adam(group, update, grad, param, exp_avg, exp_avg_sq):
     )
 
 
+@no_state
+def update_by_SGD(group, update, grad, param):
+    utils.fused_SGD_(
+        param,
+        update,
+        grad,
+        group["step"],
+        group["lr"],
+        group["eps"],
+        group["weight_decay"],
+        group["caution"],
+    )
+    raise SkipUpdate from None
+
+
 @zero_guard("exp_avg", "exp_avg_sq")
 @no_state
 def update_by_adam(group, update, grad, param, exp_avg, exp_avg_sq):

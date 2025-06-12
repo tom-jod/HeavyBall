@@ -1278,6 +1278,58 @@ def _lerp(state: List[Tensor], grad: List[Tensor], beta):
 
 
 @decorator_knowngood
+def _compilable_SGD_(
+    grad: List[Tensor],
+    step: Tensor,
+    eps: Tensor,
+):
+    g32 = list(map(promote, grad))
+    copy_stochastic_list_(grad, g32)
+
+
+def SGD_(
+    grad: List[Tensor],
+    step: int,
+    eps: float = 1e-8,
+):
+    grad = map(list_guard, ( grad))
+    step, eps = scalar_guard( step, eps, grad[0])
+    _compilable_SGD_( grad, step, eps)
+    return grad
+
+
+@decorator_knowngood
+def _fused_compilable_SGD_(
+    y: List[Tensor],
+    update: List[Tensor],
+    grad: List[Tensor],
+    step: Tensor,
+    decay: Tensor,
+    lr: Tensor,
+    eps: Tensor,
+    caution: bool,
+):
+    
+    u32, g32 = [list(map(promote, x)) for x in [update, grad]]
+    _compilable_update_(y, u32, decay, lr, caution, g32)
+
+
+def fused_SGD_(
+    y: List[Tensor],
+    update: List[Tensor],
+    grad: List[Tensor],
+    step: int,
+    lr: float,
+    eps: float,
+    decay: float,
+    caution: bool,
+):
+    y, grad = list_guard(y, grad)
+    step, lr = scalar_guard(step, lr, y[0])
+    _fused_compilable_SGD_(y, update, grad, step, decay, lr, eps, caution)
+
+
+@decorator_knowngood
 def _compilable_adam_(
     exp_avg: List[Tensor],
     exp_avg_sq: List[Tensor],
@@ -1382,26 +1434,25 @@ def _fused_compilable_STORM_plus_(
     else:
         exp_avg_corrected = exp_avg_d
 
-    exp_avg_d = _lerp(exp_avg_corrected, u32, a)
-   
-    exp_avg_g = torch._foreach_add(exp_avg_g, g32)
+    exp_avg_d = torch._foreach_mul(exp_avg_corrected, 1 - a)
+    exp_avg_d = torch._foreach_add(u32, exp_avg_corrected)
     
-    norm_grad_sq = torch._foreach_norm(g32)
-    sum_of_norm_grad_sq = torch._foreach_add(sum_of_norm_grad_sq, norm_grad_sq)
-    # Calculate a_t = 1/(1 + sum_{i=1}^{t-1} ||g_i||^2)^{2/3} - SCALAR
+    norm_grad = torch._foreach_norm(g32)
+    norm_grad_sq = torch._foreach_mul(norm_grad, norm_grad)
+    # use old sum of the norm of grads squared
     one_plus = torch._foreach_add(sum_of_norm_grad_sq, 1.0)
     a = torch._foreach_pow(one_plus, -2.0/3.0)
     
-    # Calculate ||d_t||^2 as a SCALAR (sum across all parameters)  
-    norm_d_sq = torch._foreach_norm(exp_avg_d)
+    norm_d = torch._foreach_norm(exp_avg_d)
+    norm_d_sq = torch._foreach_mul(norm_d, norm_d)
     sum_of_norm_d_sq = torch._foreach_add(sum_of_norm_d_sq, norm_d_sq)
-    # Calculate eta_t = 1/(||d_t||^2 / a_t)^{1/3} - SCALAR
+
     non_zero_a = torch._foreach_add(a, eps)
     eta_t_denom = torch._foreach_div(sum_of_norm_d_sq, non_zero_a)
     eta_t = torch._foreach_pow(eta_t_denom, -1.0/3.0) 
     # Apply eta_t to all parameters
     u32 = torch._foreach_mul(exp_avg_d, eta_t)
-    
+    sum_of_norm_grad_sq = torch._foreach_add(sum_of_norm_grad_sq, norm_grad_sq)
     _compilable_update_(y, u32, decay, torch.tensor(1.0), caution, g32)
 
 
