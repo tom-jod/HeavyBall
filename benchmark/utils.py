@@ -575,6 +575,15 @@ def trial(
     warmup_trial_pct: int = 0.2,
     random_trials: int = 10,
 ):
+    with torch.backends.cudnn.flags(enabled=False):
+        
+        condition_number = estimate_condition_number_hvp(model, data, n_probes=20, n_samples=2000)
+
+
+
+
+
+
     group = min(group, steps)
     heavyball.utils.set_torch()
     
@@ -710,7 +719,7 @@ def trial(
     print(
         f"Took: {end_time - start_time} | Attempt: {obj.attempt} | "
         f"{opt.__name__}(lr={winning_params['lr']:.5f}, betas=({1 - winning_params['1mbeta1']:.3f}, {1 - winning_params['1mbeta2']:.4f}), "
-        f"shampoo_beta={1 - winning_params['1mshampoo_beta']:.3f}) | Best Loss: {obj.best_loss} | loss_trajectory: {obj.best_losses}"
+        f"shampoo_beta={1 - winning_params['1mshampoo_beta']:.3f}) | Best Loss: {obj.best_loss} | loss_trajectory: {obj.best_losses} | condition_number: {condition_number}"
     )
     loss_trajectory = obj.best_losses
     
@@ -721,3 +730,57 @@ def trial(
         best_model.loss_trajectory = loss_trajectory
         return best_model
     
+
+def estimate_condition_number_hvp(model, data_fn, n_probes=20, n_samples=5):
+    """Estimate condition number using Hessian-vector products"""
+    
+    def compute_hvp(loss, params, v):
+        """Compute Hessian-vector product"""
+        grads = torch.autograd.grad(loss, params, create_graph=True)
+        grad_v = sum(torch.sum(g * v_i) for g, v_i in zip(grads, v))
+        hvp = torch.autograd.grad(grad_v, params, retain_graph=True)
+        return hvp
+
+    eigenvals = []
+    
+    for _ in range(n_samples):
+        # Get loss at random point near initialization
+        if data_fn()[0] is not None:
+            x, y = data_fn()
+            loss = torch.nn.functional.binary_cross_entropy_with_logits(model(x), y)  # or appropriate loss
+        else:
+            loss = model()
+        
+        params = list(model.parameters())
+        
+        # Probe with random vectors
+        for _ in range(n_probes):
+            # Random probe vector
+            v = [torch.randn_like(p) for p in params]
+            v_norm = sum(torch.sum(v_i**2) for v_i in v).sqrt()
+            v = [v_i / v_norm for v_i in v]  # Normalize
+            
+            # Compute Hv
+            hvp = compute_hvp(loss, params, v)
+            
+            # Rayleigh quotient: v^T H v / v^T v = v^T H v (since v normalized)
+            eigenval = sum(torch.sum(hv * v_i) for hv, v_i in zip(hvp, v))
+            eigenvals.append(eigenval.item())
+    
+    eigenvals = np.array(eigenvals)
+    eigenvals = eigenvals[np.isfinite(eigenvals)]  # Remove NaN/inf
+    
+    if len(eigenvals) == 0:
+        
+        return float('inf')
+    
+    # Condition number approximation
+    abs_eigenvals = np.abs(eigenvals)
+    max_eig = np.max(eigenvals)
+    min_eig = np.min(abs_eigenvals)
+    
+    if min_eig <= 0:
+        
+        return float('inf')  # Indefinite Hessian
+    
+    return max_eig / (min_eig+1e-8)

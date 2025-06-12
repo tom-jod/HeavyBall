@@ -133,6 +133,7 @@ def run_benchmark(script, opt, steps, dtype, trials, seed, difficulty):
     runtime = last_match(r"Took: ([0-9.]+)", output)
     loss = last_match(r"Best Loss: ([0-9.e\-+]+)", output)
     attempts = int(last_match(r"Attempt: ([0-9]+)", output) or trials)
+    condition_number = last_match(r"condition_number: ([0-9.e\-+]+)", output)
     # Try to find a list called loss_trajectory in the output
     if not loss_trajectory:  # Only search if we haven't found it yet
         # Look for patterns like "[1.2, 3.4, 5.6, ...]" in the output
@@ -176,6 +177,7 @@ def run_benchmark(script, opt, steps, dtype, trials, seed, difficulty):
         "seed": seed,
         "config_str": config_str,
         "loss_trajectory": loss_trajectory,
+        "condition_number": condition_number,
     }
 
 
@@ -248,6 +250,7 @@ def plot_loss_curves(results, opt, output):
     benchmarks = set()
     for r in results:
         benchmarks.add(r["name"])
+        print(f'{r["name"]}, has condition number: {r["condition_number"]}')
 
     for benchmark in list(benchmarks):
         benchmark_results = [r for r in results if r["name"] == benchmark]

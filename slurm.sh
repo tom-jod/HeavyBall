@@ -19,4 +19,4 @@ echo CUDA_VISIBLE_DEVICES $CUDA_VISIBLE_DEVICES
 source /home/tomjodrell/.bashrc
 conda activate $CONDA_ENV_NAME
 
-python3 -m benchmark.run_all_benchmarks --steps 100000 --dtype float32 --trials 50 --parallelism 256 --seeds 1 --difficulties "trivial" --opt="SGD" --timeout 155000 --exclude "wide_linear.py, minimax.py"
+python3 -m benchmark.run_all_benchmarks --steps 1 --dtype float32 --trials 1 --parallelism 256 --seeds 1 --difficulties "trivial" --opt="SGD" --timeout 155000 --exclude "wide_linear.py, minimax.py"
