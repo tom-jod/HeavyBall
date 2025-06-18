@@ -32,17 +32,20 @@ base_args = {
     "beta": 0.9,
     "max_size_triangular": 2**16,
     "split": False,
-    "precond_grad_accum": True,
+    "precond_grad_accum": False,
     "momentum_into_precond_update": True,
     "eps": 1e-8,
     "weight_decay": 0,
     "precond_update_power_iterations": 8,
+    "precond_init_scale": 1,
     "dampening": 2**-18,
 }
 
 
-def get_optim(optim, params, **kwargs) -> C.BaseOpt:
+def get_optim(optim: str | C.BaseOpt, params, **kwargs) -> C.BaseOpt:
     args = {**base_args, **kwargs}
+    if isinstance(optim, str):
+        optim = getattr(heavyball, optim)
     signature = inspect.signature(optim)
     o = optim(params, **{k: v for k, v in args.items() if k in signature.parameters})
     return o
@@ -432,12 +435,8 @@ def trial(
     steps,
     opt,
     dtype,
-    size,
-    batch,
     weight_decay,
     method,
-    length,
-    depth,
     trials=10,
     failure_threshold=3,
     group=256,
@@ -445,6 +444,7 @@ def trial(
     return_best: bool = False,
     warmup_trial_pct: int = 0.2,
     random_trials: int = 10,
+    **kwargs,
 ):
     group = min(group, steps)
     heavyball.utils.set_torch()
@@ -472,8 +472,11 @@ def trial(
     if opt.startswith("ortho-"):
         opt = opt[len("ortho-") :]
         kwargs["ortho_method"] = "newtonschulz-graft"
-    opt = getattr(heavyball, opt)
-    if "soap" not in opt.__name__.lower() and method != "qr":
+    if opt == "adam":
+        opt = torch.optim.Adam
+    else:
+        opt = getattr(heavyball, opt)
+    if "soap" not in opt.__name__.lower() and "adam" not in opt.__name__.lower() and method != "qr":
         return
 
     heavyball.utils._ignore_warning("logei_candidates_func is experimental")

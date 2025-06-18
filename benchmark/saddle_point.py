@@ -16,28 +16,29 @@ app = typer.Typer(pretty_exceptions_enable=False)
 set_torch()
 
 configs = {
-    "trivial": {"coords": (0.1, 0.1)},
-    "easy": {"coords": (1e-4, 1e-4)},
-    "medium": {"coords": (1e-8, 1e-8)},
-    "hard": {"coords": (1e-10, 1e-10)},
-    "extreme": {"coords": (1e-10, 0)},
-    "nightmare": {"coords": (0, 0)},
+    "trivial": {"power": 1},
+    "easy": {"power": 2},
+    "medium": {"power": 4},
+    "hard": {"power": 8},
+    "extreme": {"power": 16},
+    "nightmare": {"power": 32},
 }
 
 
-def objective(x, y):
+def objective(*xs, power):
     """Classic saddle point objective - tests ability to escape saddle points."""
-    return x**2 - y**2  # Saddle point at (0,0)
+    return sum(x**power for x in xs)
 
 
 class Model(nn.Module):
-    def __init__(self, x, offset):
+    def __init__(self, power, offset):
         super().__init__()
-        self.param = nn.Parameter(torch.tensor(x).float())
+        self.param = nn.Parameter(torch.tensor([1.2, 1.9]).float())
         self.offset = offset
+        self.power = 2 * power + 1
 
     def forward(self):
-        return objective(*self.param) + self.offset
+        return objective(*self.param, power=self.power) + self.offset
 
 
 @app.command()
@@ -53,7 +54,7 @@ def main(
     config: Optional[str] = None,
 ):
     dtype = [getattr(torch, d) for d in dtype]
-    coords = configs.get(config, {}).get("coords", (1e-6, 1e-6))
+    coords = configs.get(config, {}).get("power", 1)
 
     # Clean up old plots
     for path in pathlib.Path(".").glob("saddle_point.png"):

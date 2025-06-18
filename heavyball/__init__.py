@@ -41,6 +41,34 @@ class SAMWrapper(torch.optim.Optimizer):
         self.wrapped_optimizer.zero_grad()
 
 
+class SGD(C.BaseOpt):
+    def __init__(
+        self,
+        params,
+        lr=0.0025,
+        beta=0.9,
+        weight_decay=0,
+        warmup_steps=0,
+        foreach: bool = True,
+        storage_dtype: str = "float32",
+        mars: bool = False,
+        caution: bool = False,
+        mars_gamma: float = 0.0025,
+        gradient_clipping: C.str_or_fn = C.use_default,
+        update_clipping: C.str_or_fn = C.use_default,
+        **kwargs,
+    ):
+        defaults = locals()
+        defaults.pop("self")
+        params = defaults.pop("params")
+        defaults.update(defaults.pop("kwargs"))
+
+        if kwargs:
+            utils.warn_once(f"Working with uncaptured keyword arguments: {kwargs}")
+
+        super().__init__(params, defaults, foreach, gradient_clipping, update_clipping, False, C.heavyball_momentum)
+
+
 class ForeachAdamW(C.BaseOpt):
     def __init__(
         self,
@@ -846,6 +874,7 @@ SignLaProp = ForeachSignLaProp
 DelayedPSGDLRA = ForeachDelayedPSGDLRA
 PSGDLRA = ForeachPSGDLRA
 NewtonPSGDLRA = ForeachNewtonPSGDLRA
+NewtonPSGDKron = ForeachCachedNewtonPSGD
 
 __all__ = [
     "Muon",
@@ -892,4 +921,5 @@ __all__ = [
     "NewtonHybrid2PSGDLRA",
     "NewtonHybrid2PSGDKron",
     "MSAMLaProp",
+    "NewtonPSGDKron",
 ]

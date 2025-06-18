@@ -4,7 +4,6 @@ import random
 from typing import List, Optional
 
 import matplotlib.colors
-import matplotlib.pyplot as plt
 import torch
 import torch.backends.opt_einsum
 import typer
@@ -63,18 +62,15 @@ def main(
         path.unlink()
 
     colors = list(matplotlib.colors.TABLEAU_COLORS.values())
-    stride = max(1, steps // 20)
     rng = random.Random(0x1239121)
     rng.shuffle(colors)
 
     if show_image:
+        model = Model(coords)
         model = Plotter(
-            lambda *x: objective(*x).log(),
-            coords=coords,
-            xlim=(-8, 2),
-            ylim=(-8, 2),
-            normalize=8,
-            after_step=torch.exp,
+            model,
+            x_limits=(-8, 2),
+            y_limits=(-8, 2),
         )
     else:
         model = Model(coords)
@@ -105,23 +101,7 @@ def main(
     if not show_image:
         return
 
-    fig, ax = model.plot_image(cmap="gray", levels=20, return_fig=True, xlim=(-8, 2), ylim=(-8, 2))
-    ax.set_frame_on(False)
-
-    c = colors[0]
-    ax.plot(
-        *list(zip(*model.coords_history)),
-        linewidth=1,
-        color=c,
-        zorder=2,
-        label=f"{method[0]} {opt[0]}",
-    )
-    ax.scatter(*list(zip(*model.coords_history[::stride])), s=8, zorder=1, alpha=0.75, marker="x", color=c)
-    ax.scatter(*model.coords_history[-1], s=64, zorder=3, marker="x", color=c)
-
-    fig.legend()
-    fig.savefig("rastrigin.png", dpi=1000)
-    plt.close(fig)
+    model.plot(title=f"{method[0]} {opt[0]}", save_path="rastrigin.png")
 
 
 if __name__ == "__main__":

@@ -64,7 +64,6 @@ def run_benchmark(script, opt, steps, dtype, trials, seed, difficulty):
 
         # Build arguments
         arguments = {
-            "method": ["qr"],
             "dtype": [dtype],
             "steps": steps,
             "weight_decay": 0,
@@ -73,6 +72,8 @@ def run_benchmark(script, opt, steps, dtype, trials, seed, difficulty):
             "win_condition_multiplier": 1.0,
             "config": difficulty,
         }
+        if "saddle" not in script:
+            arguments["method"] = ["qr"]
         # Run the main function
         module.main(**arguments)
     except SkipConfig:
@@ -261,31 +262,6 @@ def main(
         "beale.py",
         "rosenbrock.py",
         "rastrigin.py",
-        "quadratic_varying_scale.py",
-        "quadratic_varying_target.py",
-        "noisy_matmul.py",
-        "xor_sequence.py",
-        "xor_digit.py",
-        "xor_spot.py",
-        "xor_sequence_rnn.py",
-        "xor_digit_rnn.py",
-        "xor_spot_rnn.py",
-        "saddle_point.py",
-        "discontinuous_gradient.py",
-        "wide_linear.py",
-        "minimax.py",
-        "plateau_navigation.py",
-        "scale_invariant.py",
-        "momentum_utilization.py",
-        "batch_size_scaling.py",
-        "sparse_gradient.py",
-        "layer_wise_scale.py",
-        "parameter_scale.py",
-        "gradient_delay.py",
-        "gradient_noise_scale.py",
-        "adversarial_gradient.py",
-        "dynamic_landscape.py",
-        "constrained_optimization.py",
     ]
 
     if mars:
@@ -294,6 +270,11 @@ def main(
         opt = ["cautious-" + o for o in opt]
     if unscaled_caution:
         opt = ["unscaled_cautious-" + o for o in opt]
+
+    if not opt:
+        opt = ["adam"]
+    if not difficulties:
+        difficulties = ["easy"]
 
     task_queue = multiprocessing.Queue()
     result_queue = multiprocessing.Queue()

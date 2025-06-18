@@ -54,7 +54,7 @@ def main(
     rng.shuffle(colors)
 
     if show_image:
-        model = Plotter(Model(coords), coords, x_limits=(-8, 2), y_limits=(-8, 2), should_normalize=True)
+        model = Plotter(Model(coords), x_limits=(-8, 2), y_limits=(-8, 2), should_normalize=True)
     else:
         model = Model(coords)
     model.double()
