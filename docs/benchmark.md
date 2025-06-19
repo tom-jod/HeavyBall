@@ -87,8 +87,6 @@ maximum in another. The gradient approaches zero at the center, trapping first-o
 gradient.
 
 ![Animation: Optimizer paths on a saddle point, showing SGD getting stuck while a momentum-based optimizer successfully escapes.](assets/saddle_point_comparison.gif)
-*Momentum allows the orange curve to escape the saddle point, while the gradient-only SGD (blue) stalls where the
-gradient is flat.*
 
 Our benchmark includes a specific test for this challenge. An optimizer that passes demonstrates a greater capacity to
 handle the complex non-convex landscapes common in deep learning. A failure provides a clear diagnostic signal that the
