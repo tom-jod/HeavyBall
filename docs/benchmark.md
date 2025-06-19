@@ -69,7 +69,7 @@ reinforcing the need for diagnostic rather than purely comparative evaluation.
 <small>² `Mars`: Reduces variance in gradients</small>
 
 *This is a subset of the full results. For a complete breakdown, see
-the [full benchmark results](benchmark/benchmark_results.md).*
+the [full benchmark results](https://github.com/HomebrewML/HeavyBall/blob/main/benchmark/benchmark_results.md).*
 
 ### Case Study: The `AdamW` Family
 
