@@ -2212,7 +2212,7 @@ def _compilable_global_l2norm_clip_(x, clip_at):
 def global_l2norm_clip(x, clip_at: float = 1.0):
     x = list_guard(x)
     clip_at = scalar_guard(clip_at, x[0])
-    return _compilable_global_rmsnorm_clip_(x, clip_at)
+    return _compilable_global_l2norm_clip_(x, clip_at)
 
 
 def rmsnorm_normalize_(x, clip_at: float = 1e-6):
