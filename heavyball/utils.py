@@ -367,20 +367,33 @@ def set_torch(benchmark_limit: int = 32, einsum_strategy: str = "auto-hq"):
     )
 
 
-@decorator_knowngood
+@decorator
 def zeropower_via_newtonschulz5(G, steps=5, eps=1e-7):
-    assert len(G.shape) == 2
-    a, b, c = (3.4445, -4.7750, 2.0315)
+    assert (
+        G.ndim >= 2
+    )  # batched Muon implementation by @scottjmaddox, and put into practice in the record by @YouJiacheng
+    assert steps == 5
     X = G if G.dtype == torch.float64 else stochastic_round_(G)
-    stochastic_multiply_(X, G.norm() + eps)  # ensure top singular value <= 1
-    if G.size(0) > G.size(1):
-        X = X.T
-    for _ in range(steps):
-        A = X @ X.T
-        B = b * A + c * A @ A  # adapted from suggestion by @jxbz, @leloykun, and @YouJiacheng
+    if G.size(-2) > G.size(-1):
+        X = X.mT
+
+    stochastic_multiply_(X, G.norm(dim=(-2, -1)) + eps)  # ensure top singular value <= 1
+    # Perform the NS iterations
+    for a, b, c in [
+        (4.0848, -6.8946, 2.9270),
+        (3.9505, -6.3029, 2.6377),
+        (3.7418, -5.5913, 2.3037),
+        (2.8769, -3.1427, 1.2046),
+        (2.8366, -3.0525, 1.2012),
+    ]:
+        A = X @ X.mT
+        B = (
+            b * A + c * A @ A
+        )  # quintic computation strategy adapted from suggestion by @jxbz, @leloykun, and @YouJiacheng
         X = a * X + B @ X
-    if G.size(0) > G.size(1):
-        X = X.T
+
+    if G.size(-2) > G.size(-1):
+        X = X.mT
     return X.to(G.dtype)
 
 
