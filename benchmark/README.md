@@ -28,16 +28,33 @@ python run_all_benchmarks.py --help
 
 ### Running New Benchmarks
 
-To run any of the new benchmarks individually, use:
+The benchmark suite includes four new tasks that expand coverage to multi-objective optimization, imbalanced classification, memory constraints, and domain adaptation:
+
+- **multi_objective_pareto.py**: Tests optimizer performance on Pareto trade-offs between accuracy and efficiency.
+- **class_imbalance_rare.py**: Evaluates learning from severely imbalanced datasets, focusing on rare event detection.
+- **memory_constrained.py**: Assesses optimizer stability and efficiency under strict memory budgets.
+- **transfer_domain_shift.py**: Measures adaptation to domain shift in transfer learning scenarios.
+
+To run any of these new benchmarks individually, use:
 
 ```bash
-python multi_objective_pareto.py
-python class_imbalance_rare.py
-python memory_constrained.py
-python transfer_domain_shift.py
+python multi_objective_pareto.py [options]
+python class_imbalance_rare.py [options]
+python memory_constrained.py [options]
+python transfer_domain_shift.py [options]
 ```
 
 Each script supports configuration via command-line arguments or preset configs (see `--help` for details). Results and metrics are reported in the same format as other benchmarks.
+
+**Example:**
+```bash
+python class_imbalance_rare.py --opt Adam --epochs 100
+```
+
+For troubleshooting or more advanced usage, consult the help for each script:
+```bash
+python <benchmark_script>.py --help
+```
 
 ### Core Philosophy and Design Principles
 
