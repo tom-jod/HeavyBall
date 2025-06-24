@@ -154,7 +154,6 @@ def transfer_win_condition(accuracy_threshold, domain_gap_threshold):
 
 @app.command()
 def main(
-    method: List[str] = typer.Option(["qr"], help="Eigenvector method to use (for SOAP)"),
     dtype: List[str] = typer.Option(["float32"], help="Data type to use"),
     feature_dim: int = 128,
     n_classes: int = 16,
@@ -171,6 +170,9 @@ def main(
 ):
     """
     Transfer learning domain shift robustness benchmark.
+
+    Tests optimizer's ability to adapt pre-trained models to new domains
+    with distribution shift, simulating real-world transfer learning scenarios.
     """
     if config:
         cfg = configs.get(config, {})
@@ -187,7 +189,7 @@ def main(
     ).cuda()
 
     def data():
-        return None, None
+        return None, None  # Data is embedded in model
 
     base_accuracy = 0.7
     base_domain_gap = 0.2
@@ -203,7 +205,6 @@ def main(
         opt[0],
         weight_decay,
         trials=trials,
-        group=32,
         failure_threshold=4,
     )
 

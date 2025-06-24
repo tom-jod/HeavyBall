@@ -441,7 +441,6 @@ def trial(
     return_best: bool = False,
     warmup_trial_pct: int = 0.2,
     random_trials: int = 10,
-    **kwargs,
 ):
     group = min(group, steps)
     heavyball.utils.set_torch()

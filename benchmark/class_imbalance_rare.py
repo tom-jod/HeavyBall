@@ -95,7 +95,6 @@ def imbalanced_win_condition(f1_threshold, recall_threshold):
 
 @app.command()
 def main(
-    method: List[str] = typer.Option(["qr"], help="Eigenvector method to use (for SOAP)"),
     dtype: List[str] = typer.Option(["float32"], help="Data type to use"),
     n_samples: int = 5000,
     input_dim: int = 48,
@@ -111,6 +110,9 @@ def main(
 ):
     """
     Class imbalance rare event detection benchmark.
+
+    Tests optimizer's ability to learn from severely imbalanced datasets
+    where detecting rare positive events is critical.
     """
     if config:
         cfg = configs.get(config, {})
@@ -124,12 +126,13 @@ def main(
     model = ImbalancedClassifier(n_samples, input_dim, hidden_dim, imbalance_ratio, noise_level).cuda()
 
     def data():
-        return None, None
+        return None, None  # Data is embedded in model
 
+    # Success thresholds scale with difficulty, but must not exceed 1.0
     base_f1 = 0.7
     base_recall = 0.8
-    f1_threshold = win_condition_multiplier * base_f1 * imbalance_ratio * 10
-    recall_threshold = win_condition_multiplier * base_recall * imbalance_ratio * 8
+    f1_threshold = min(1.0, win_condition_multiplier * base_f1 * imbalance_ratio * 10)
+    recall_threshold = min(1.0, win_condition_multiplier * base_recall * imbalance_ratio * 8)
 
     trial(
         model,
