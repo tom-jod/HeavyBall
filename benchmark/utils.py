@@ -576,8 +576,10 @@ def trial(
     random_trials: int = 10,
 ):
     with torch.backends.cudnn.flags(enabled=False):
-        
-        condition_number = estimate_condition_number_hvp(model, data, n_probes=20, n_samples=2000)
+        condition_numbers = []
+        for i in range(5):
+            condition_numbers.append( estimate_condition_number_hvp(model, data, n_probes=20, n_samples=500, loss_fn=loss_fn))
+        #condition_number = estimate_condition_number_hvp(model, data, n_probes=20, n_samples=2000)
 
 
 
@@ -715,11 +717,13 @@ def trial(
         print("Successfully found the minimum.")
     else:
         winning_params = {"lr": base_lr, "1mbeta1": 0.9, "1mbeta2": 0.999, "1mshampoo_beta": 0.999}
-    
+
+    mean_cond = np.mean(condition_numbers)
+    std_err_cond = np.std(condition_numbers) / np.sqrt(len(condition_numbers))
     print(
         f"Took: {end_time - start_time} | Attempt: {obj.attempt} | "
         f"{opt.__name__}(lr={winning_params['lr']:.5f}, betas=({1 - winning_params['1mbeta1']:.3f}, {1 - winning_params['1mbeta2']:.4f}), "
-        f"shampoo_beta={1 - winning_params['1mshampoo_beta']:.3f}) | Best Loss: {obj.best_loss} | loss_trajectory: {obj.best_losses} | condition_number: {condition_number}"
+        f"shampoo_beta={1 - winning_params['1mshampoo_beta']:.3f}) | Best Loss: {obj.best_loss} | loss_trajectory: {obj.best_losses} | mean_cond: {mean_cond} | std_err_cond: {std_err_cond}"
     )
     loss_trajectory = obj.best_losses
     
@@ -731,7 +735,7 @@ def trial(
         return best_model
     
 
-def estimate_condition_number_hvp(model, data_fn, n_probes=20, n_samples=5):
+def estimate_condition_number_hvp(model, data_fn, n_probes=20, n_samples=5, loss_fn=torch.nn.functional.binary_cross_entropy_with_logits):
     """Estimate condition number using Hessian-vector products"""
     
     def compute_hvp(loss, params, v):
@@ -747,14 +751,15 @@ def estimate_condition_number_hvp(model, data_fn, n_probes=20, n_samples=5):
         # Get loss at random point near initialization
         if data_fn()[0] is not None:
             x, y = data_fn()
-            loss = torch.nn.functional.binary_cross_entropy_with_logits(model(x), y)  # or appropriate loss
+            loss = loss_fn(model(x), y)
+            #loss = torch.nn.functional.binary_cross_entropy_with_logits(model(x), y)  # or appropriate loss
         else:
             loss = model()
         
         params = list(model.parameters())
         
         # Probe with random vectors
-        for _ in range(n_probes):
+        for i in range(n_probes):
             # Random probe vector
             v = [torch.randn_like(p) for p in params]
             v_norm = sum(torch.sum(v_i**2) for v_i in v).sqrt()
@@ -766,6 +771,7 @@ def estimate_condition_number_hvp(model, data_fn, n_probes=20, n_samples=5):
             # Rayleigh quotient: v^T H v / v^T v = v^T H v (since v normalized)
             eigenval = sum(torch.sum(hv * v_i) for hv, v_i in zip(hvp, v))
             eigenvals.append(eigenval.item())
+       
     
     eigenvals = np.array(eigenvals)
     eigenvals = eigenvals[np.isfinite(eigenvals)]  # Remove NaN/inf
@@ -784,3 +790,4 @@ def estimate_condition_number_hvp(model, data_fn, n_probes=20, n_samples=5):
         return float('inf')  # Indefinite Hessian
     
     return max_eig / (min_eig+1e-8)
+
