@@ -52,15 +52,8 @@ def main(
         param_norm_win_condition(win_condition_multiplier * 1e-4, 0),
         steps,
         opt[0],
-        dtype[0],
-        1,
-        1,
         weight_decay,
-        method[0],
-        1,
-        1,
         failure_threshold=3,
-        base_lr=1e-3,
         trials=trials,
     )
 

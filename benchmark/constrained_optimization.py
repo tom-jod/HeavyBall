@@ -85,15 +85,8 @@ def main(
         win_condition,
         steps,
         opt[0],
-        dtype[0],
-        1,  # size (not relevant here)
-        1,  # batch (not relevant here)
         weight_decay,
-        method[0],
-        1,  # length (not relevant here)
-        1,  # depth (not relevant here)
         failure_threshold=3,
-        base_lr=1e-3,  # Default base LR, hyperopt will search
         trials=trials,
         group=32,  # Smaller group size might be better for simple problems
     )

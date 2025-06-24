@@ -8,7 +8,6 @@ testing the optimizer's:
 3. Ability to make progress despite extreme gradient values
 """
 
-import itertools
 from typing import List, Optional
 
 import torch
@@ -58,33 +57,23 @@ def main(
     """Run exploding gradient benchmark with specified parameters."""
     dtype = [getattr(torch, d) for d in dtype]
 
-    for args in itertools.product(method, dtype, [dim], opt, [weight_decay]):
-        m, d, dim, o, wd = args
+    model = ExplodingGradient(dim, scale)
 
-        model = ExplodingGradient(dim, scale)
+    def data():
+        return None, None
 
-        def data():
-            return None, None
-
-        # Win condition: loss should be close to 1.0 (exp(0) = 1)
-        # Using 1.1 as threshold since perfect convergence is hard
-        trial(
-            model,
-            data,
-            None,
-            param_norm_win_condition(0.01 * win_condition_multiplier, 0),
-            steps,
-            [o],
-            [d],
-            1,
-            1,
-            wd,
-            m,
-            1,
-            1,
-            base_lr=0.001,  # Lower learning rate due to large gradients
-            trials=trials,
-        )
+    # Win condition: loss should be close to 1.0 (exp(0) = 1)
+    # Using 1.1 as threshold since perfect convergence is hard
+    trial(
+        model,
+        data,
+        None,
+        param_norm_win_condition(0.01 * win_condition_multiplier, 0),
+        steps,
+        opt[0],
+        weight_decay,
+        trials=trials,
+    )
 
 
 if __name__ == "__main__":

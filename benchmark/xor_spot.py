@@ -7,7 +7,6 @@ This version is strongly simplified but follows the same basic idea:
 This does NOT elicit memory in the RNN, but it does force it to learn a pointwise forget mechanism.
 """
 
-import itertools
 from typing import List, Optional
 
 import torch
@@ -68,37 +67,28 @@ def main(
     length = configs.get(config, {}).get("length", length)
     dtype = [getattr(torch, d) for d in dtype]
 
-    for args in itertools.product(method, dtype, [(length, size, depth, batch)], opt, [weight_decay]):
-        m, d, (l, s, dp, b), o, wd = args
+    model = Model(size, depth).cuda()
 
-        model = Model(s, dp).cuda()
+    def data():
+        inp = torch.randn((batch, length, 1), device="cuda", dtype=dtype)
+        inp = inp > 0
+        zeros = torch.zeros_like(inp)
+        zeros[:, torch.randint(0, length, (batch,), device="cuda")] = 1
+        zeros[:, torch.randint(0, length, (batch,), device="cuda")] = 1
+        target = (inp * zeros).sum(1) % 2
+        return torch.stack((inp, zeros + 2), 0).to(dtype), target.to(dtype)
 
-        def data():
-            inp = torch.randn((b, l, 1), device="cuda", dtype=d)
-            inp = inp > 0
-            zeros = torch.zeros_like(inp)
-            zeros[:, torch.randint(0, l, (b,), device="cuda")] = 1
-            zeros[:, torch.randint(0, l, (b,), device="cuda")] = 1
-            target = (inp * zeros).sum(1) % 2
-            return torch.stack((inp, zeros + 2), 0).to(d), target.to(d)
-
-        trial(
-            model,
-            data,
-            torch.nn.functional.binary_cross_entropy_with_logits,
-            loss_win_condition(win_condition_multiplier * 1e-2),
-            steps,
-            o,
-            d,
-            s,
-            b,
-            wd,
-            m,
-            l,
-            dp,
-            failure_threshold=10,
-            trials=trials,
-        )
+    trial(
+        model,
+        data,
+        torch.nn.functional.binary_cross_entropy_with_logits,
+        loss_win_condition(win_condition_multiplier * 1e-2),
+        steps,
+        opt[0],
+        weight_decay,
+        failure_threshold=10,
+        trials=trials,
+    )
 
 
 if __name__ == "__main__":

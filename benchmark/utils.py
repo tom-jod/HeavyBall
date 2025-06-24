@@ -434,13 +434,10 @@ def trial(
     win_condition,
     steps,
     opt,
-    dtype,
     weight_decay,
-    method,
     trials=10,
     failure_threshold=3,
     group=256,
-    base_lr: float = 1e-3,
     return_best: bool = False,
     warmup_trial_pct: int = 0.2,
     random_trials: int = 10,
@@ -476,8 +473,6 @@ def trial(
         opt = torch.optim.Adam
     else:
         opt = getattr(heavyball, opt)
-    if "soap" not in opt.__name__.lower() and "adam" not in opt.__name__.lower() and method != "qr":
-        return
 
     heavyball.utils._ignore_warning("logei_candidates_func is experimental")
     heavyball.utils._ignore_warning("BoTorchSampler is experimental")
@@ -486,7 +481,6 @@ def trial(
     heavyball.utils._ignore_warning(
         "The given NumPy array is not writable, and PyTorch does not support non-writable tensors. This means writing to this tensor will result in undefined behavior."
     )
-    heavyball.utils.zeroth_power_mode = method
 
     cleanup()
     set_seed()
@@ -561,7 +555,7 @@ def trial(
     if winning_params:
         print("Successfully found the minimum.")
     else:
-        winning_params = {"lr": base_lr, "1mbeta1": 0.9, "1mbeta2": 0.999, "1mshampoo_beta": 0.999}
+        winning_params = {"lr": 1, "1mbeta1": 0.9, "1mbeta2": 0.999, "1mshampoo_beta": 0.999}
     print(
         f"Took: {end_time - start_time} | Attempt: {obj.attempt} | "  #
         f"{opt.__name__}(lr={winning_params['lr']:.5f}, betas=({1 - winning_params['1mbeta1']:.3f}, {1 - winning_params['1mbeta2']:.4f}), "  #

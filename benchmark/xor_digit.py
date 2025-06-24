@@ -72,15 +72,8 @@ def main(
         loss_win_condition(win_condition_multiplier * 1e-3),
         steps,
         opt[0],
-        dtype[0],
-        size,
-        batch,
         weight_decay,
-        method[0],
-        length,
-        depth,
         failure_threshold=10,
-        base_lr=1e-6,
         trials=trials,
     )
 
