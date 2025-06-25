@@ -369,10 +369,12 @@ class Objective:
         step_losses = []
         
         for i in range(self.steps // self.group):
+            print(i)
             if hasattr(o, "train"):
                 o.train()
             
             for j in range(self.group):
+                print(j)
                 if self.requires_prev_minibatch(o):
                     # Get current batch
                     curr_inp, curr_tgt = self.data()
@@ -574,12 +576,16 @@ def trial(
     return_best: bool = False,
     warmup_trial_pct: int = 0.2,
     random_trials: int = 10,
+    estimate_condition_number: bool = False,
 ):
-    with torch.backends.cudnn.flags(enabled=False):
-        condition_numbers = []
-        for i in range(5):
-            condition_numbers.append( estimate_condition_number_hvp(model, data, n_probes=20, n_samples=500, loss_fn=loss_fn))
-        #condition_number = estimate_condition_number_hvp(model, data, n_probes=20, n_samples=2000)
+    condition_numbers = [0]
+    
+    if estimate_condition_number:
+        with torch.backends.cudnn.flags(enabled=False):
+            condition_numbers = []
+            for i in range(5):
+                condition_numbers.append( estimate_condition_number_hvp(model, data, n_probes=20, n_samples=500, loss_fn=loss_fn))
+            #condition_number = estimate_condition_number_hvp(model, data, n_probes=20, n_samples=2000)
 
 
 
@@ -717,7 +723,7 @@ def trial(
         print("Successfully found the minimum.")
     else:
         winning_params = {"lr": base_lr, "1mbeta1": 0.9, "1mbeta2": 0.999, "1mshampoo_beta": 0.999}
-
+    
     mean_cond = np.mean(condition_numbers)
     std_err_cond = np.std(condition_numbers) / np.sqrt(len(condition_numbers))
     print(

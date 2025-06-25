@@ -125,7 +125,7 @@ def main(
             train_iter = iter(trainloader)
             inputs, targets = next(train_iter)
         return inputs.cuda(), targets.cuda()
-
+   
     trial(
         model,
         data,
