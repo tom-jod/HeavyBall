@@ -72,8 +72,6 @@ def run_benchmark(script, opt, steps, dtype, trials, seed, difficulty):
             "win_condition_multiplier": 1.0,
             "config": difficulty,
         }
-        if "saddle" not in script:
-            arguments["method"] = ["qr"]
         # Run the main function
         module.main(**arguments)
     except SkipConfig:

@@ -33,7 +33,7 @@ class Model(nn.Module):
         )
         self.classes = classes
         self.items = items
-        self.weight = nn.Buffer(torch.randn((classes,)))
+        self.weight = nn.Buffer(torch.randn((items,)))
 
     def forward(self):
         data = torch.randint(0, self.classes, (16, self.items), device=self.model[0].weight.device)

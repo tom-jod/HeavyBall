@@ -12,12 +12,12 @@ app = typer.Typer(pretty_exceptions_enable=False)
 set_torch()
 
 configs = {
-    "trivial": {"classes": 64, "items": 4, "add_class_every": 2**6},
-    "easy": {"classes": 64, "items": 4, "add_class_every": 2**8},
-    "medium": {"classes": 64, "items": 4, "add_class_every": 2**10},
-    "hard": {"classes": 64, "items": 4, "add_class_every": 2**12},
-    "extreme": {"classes": 64, "items": 4, "add_class_every": 2**14},
-    "nightmare": {"classes": 64, "items": 4, "add_class_every": 2**16},
+    "trivial": {"classes": 16, "items": 8, "add_class_every": 2**6},
+    "easy": {"classes": 16, "items": 8, "add_class_every": 2**8},
+    "medium": {"classes": 16, "items": 8, "add_class_every": 2**10},
+    "hard": {"classes": 16, "items": 8, "add_class_every": 2**12},
+    "extreme": {"classes": 16, "items": 8, "add_class_every": 2**14},
+    "nightmare": {"classes": 16, "items": 8, "add_class_every": 2**16},
 }
 
 
