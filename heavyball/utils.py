@@ -549,6 +549,13 @@ def get_orthogonal_matrix(mat, max_eps: float = 1e-3, min_eps: float = 1e-30):
         eps = min_eps
         while True:
             try:
+                    # Check for NaN/inf BEFORE any operations
+                if torch.isnan(m).any():
+                    m = torch.where(torch.isnan(m), torch.randn_like(m) * 1e-8, m)
+        
+                if torch.isinf(m).any():
+                    m = torch.where(torch.isinf(m), torch.sign(m) * 1e8, m)
+
                 eye = torch.eye(m.shape[0], device=m.device, dtype=m.dtype)
                 _eigval, eigvec = torch.linalg.eigh(m + eps * eye)
                 eigvec = eigvec.to(device=device, dtype=dtype)
@@ -1364,6 +1371,53 @@ def adam_(
     _compilable_adam_(exp_avg, exp_avg_sq, grad, beta1, beta2, step, eps)
     return grad
 
+
+@decorator_knowngood
+def _compilable_LION_(
+    exp_avg_c: List[Tensor],  # c_t (momentum buffer)
+    exp_avg_m: List[Tensor],  # m_t (second moment buffer) 
+    grad: List[Tensor],
+    beta1: Tensor,
+    beta2: Tensor,
+    step: Tensor,
+):
+    beta1 = beta_debias(beta1, step)
+    beta2 = beta_debias(beta2, step)
+    
+    g32 = list(map(promote, grad))
+    
+    # Update c_t (first moment with beta1)
+    exp_avg_c32 = _lerp(exp_avg_c, g32, beta1)
+    
+    # Update m_t (second moment with beta2) 
+    exp_avg_m32 = _lerp(exp_avg_m, g32, beta2)
+    
+    # Compute update direction using interpolation between c_t and m_t
+    # LION uses: sign(beta1 * m_{t-1} + (1 - beta1) * g_t)
+    # which is equivalent to: sign(lerp(m_{t-1}, g_t, 1-beta1))
+    interpolated = _lerp(exp_avg_m32, g32, 1 - beta1)
+    update_direction = [torch._foreach_sign(interp) for interp in interpolated]
+    
+    # Copy results back
+    copy_stochastic_list_(exp_avg_c, exp_avg_c32)
+    copy_stochastic_list_(exp_avg_m, exp_avg_m32) 
+    copy_stochastic_list_(grad, update_direction)
+
+
+def LION_(
+    exp_avg: List[Tensor],
+    exp_avg_sq: List[Tensor],
+    grad: List[Tensor],
+    beta1: float,
+    beta2: float,
+    step: int,
+    eps: float = 1e-8,
+):
+    
+    exp_avg, exp_avg_sq, grad = map(list_guard, (exp_avg, exp_avg_sq, grad))
+    beta1, beta2, step = scalar_guard(beta1, beta2, step , exp_avg[0])
+    _compilable_LION_(exp_avg, exp_avg_sq, grad, beta1, beta2, step)
+    return grad
 
 @decorator_knowngood
 def _fused_compilable_adam_(
