@@ -11,25 +11,22 @@ app = typer.Typer(pretty_exceptions_enable=False)
 set_torch()
 
 configs = {
-    "trivial": {"size": 4},
-    "easy": {"size": 16},
-    "medium": {"size": 512},
-    "hard": {"size": 8192},
-    "extreme": {"size": 2**15},
-    "nightmare": {"size": 2**17},
+    "trivial": {"groups": 1},
+    "easy": {"groups": 2},
+    "medium": {"groups": 4},
+    "hard": {"groups": 8},
+    "extreme": {"groups": 16},
+    "nightmare": {"groups": 32},
 }
 
 
 class Model(nn.Module):
-    def __init__(self, size):
+    def __init__(self, groups: int, size: int = 128):
         super().__init__()
-        self.param = nn.Parameter(torch.randn(size))
-        self.register_buffer("scale", torch.arange(1, 1 + size).float() / (1 + size))
+        self.param = nn.Parameter(torch.randn((size, groups)))
 
     def forward(self):
-        spikes = torch.rand_like(self.scale) < self.scale
-        out = self.param.square()
-        return torch.where(spikes, -out, out).mean()
+        return self.param.sum(-1).square().mean()
 
 
 @app.command()

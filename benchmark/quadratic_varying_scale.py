@@ -44,9 +44,8 @@ def main(
     win_condition_multiplier: float = 1.0,
     config: Optional[str] = None,
 ):
-    size = configs.get(config, {}).get("size", size)
-    dtype = [getattr(torch, d) for d in dtype]
-    model = Model(size).cuda()
+    kwargs = configs[config or "trivial"]
+    model = Model(**kwargs).cuda()
 
     def data():
         return None, None

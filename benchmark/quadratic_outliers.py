@@ -30,7 +30,7 @@ class Model(nn.Module):
     def forward(self):
         spikes = torch.rand_like(self.scale) < self.scale
         out = self.param.square()
-        return torch.where(spikes, out * self.spike, out)
+        return torch.where(spikes, out * self.spike, out).mean()
 
 
 @app.command()

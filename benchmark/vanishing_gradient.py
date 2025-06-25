@@ -20,12 +20,12 @@ from heavyball.utils import set_torch
 app = typer.Typer(pretty_exceptions_enable=False)
 set_torch()
 configs = {
-    "trivial": {"scale": 1},
-    "easy": {"scale": 2},
-    "medium": {"scale": 4},
-    "hard": {"scale": 8},
-    "extreme": {"scale": 12},
-    "nightmare": {"scale": 16},
+    "trivial": {"scale": -1},
+    "easy": {"scale": -2},
+    "medium": {"scale": -4},
+    "hard": {"scale": -8},
+    "extreme": {"scale": -12},
+    "nightmare": {"scale": -16},
 }
 
 
@@ -55,7 +55,6 @@ def main(
 ):
     scale = configs.get(config, {}).get("scale", 2)
     """Run exploding gradient benchmark with specified parameters."""
-    dtype = [getattr(torch, d) for d in dtype]
 
     model = ExplodingGradient(dim, scale)
 

@@ -2,6 +2,7 @@ from typing import List, Optional
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import typer
 
 from benchmark.utils import param_norm_win_condition, trial
@@ -24,12 +25,10 @@ class Model(nn.Module):
     def __init__(self, size):
         super().__init__()
         self.param = nn.Parameter(torch.randn(size))
-        self.register_buffer("scale", torch.arange(1, 1 + size).float() / (1 + size))
+        self.register_buffer("scale", F.normalize(torch.arange(1, 1 + size).float(), dim=0, p=1))
 
     def forward(self):
-        spikes = torch.rand_like(self.scale) < self.scale
-        out = self.param.square()
-        return torch.where(spikes, -out, out).mean()
+        return self.param.square().max()
 
 
 @app.command()

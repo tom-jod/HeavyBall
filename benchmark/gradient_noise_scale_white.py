@@ -1,8 +1,9 @@
 from typing import List, Optional
 
 import torch
-import torch.nn as nn
+import torch.backends.opt_einsum
 import typer
+from torch import nn
 
 from benchmark.utils import param_norm_win_condition, trial
 from heavyball.utils import set_torch
@@ -11,55 +12,55 @@ app = typer.Typer(pretty_exceptions_enable=False)
 set_torch()
 
 configs = {
-    "trivial": {"size": 4},
-    "easy": {"size": 16},
-    "medium": {"size": 512},
-    "hard": {"size": 8192},
-    "extreme": {"size": 2**15},
-    "nightmare": {"size": 2**17},
+    "trivial": {"offset": 32},
+    "easy": {"offset": 16},
+    "medium": {"offset": 8},
+    "hard": {"offset": 4},
+    "extreme": {"offset": 2},
+    "nightmare": {"offset": 1},
 }
 
 
 class Model(nn.Module):
-    def __init__(self, size):
+    def __init__(self, offset, size=4096):
         super().__init__()
         self.param = nn.Parameter(torch.randn(size))
-        self.register_buffer("scale", torch.arange(1, 1 + size).float() / (1 + size))
+        self.offset = offset
 
     def forward(self):
-        spikes = torch.rand_like(self.scale) < self.scale
-        out = self.param.square()
-        return torch.where(spikes, -out, out).mean()
+        noise_scale = 1.0 / self.offset
+        noise = torch.randn_like(self.param) * noise_scale
+        return (self.param + noise).square().mean()
 
 
 @app.command()
 def main(
     method: List[str] = typer.Option(["qr"], help="Eigenvector method to use (for SOAP)"),
     dtype: List[str] = typer.Option(["float32"], help="Data type to use"),
-    size: int = 1024,
-    batch: int = 256,
     steps: int = 100,
     weight_decay: float = 0,
     opt: List[str] = typer.Option(["ForeachSOAP"], help="Optimizers to use"),
-    trials: int = 10,
+    trials: int = 100,
     win_condition_multiplier: float = 1.0,
     config: Optional[str] = None,
 ):
-    kwargs = configs[config or "trivial"]
-    model = Model(**kwargs).cuda()
+    offset = configs.get(config, {}).get("offset", 4)
+    dtype = [getattr(torch, d) for d in dtype]
+    model = Model(offset).cuda().double()
 
     def data():
         return None, None
 
+    # Lenient initial condition due to high initial noise
     trial(
         model,
         data,
         None,
-        param_norm_win_condition(win_condition_multiplier * 1e-7, 0),
+        param_norm_win_condition(win_condition_multiplier * 1e-3, 0),
         steps,
         opt[0],
-        weight_decay=weight_decay,
-        failure_threshold=2,
+        weight_decay,
+        failure_threshold=5,
         trials=trials,
     )
 

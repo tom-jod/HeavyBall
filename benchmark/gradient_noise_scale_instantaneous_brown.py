@@ -25,17 +25,12 @@ class Model(nn.Module):
     def __init__(self, offset, size=4096):
         super().__init__()
         self.param = nn.Parameter(torch.randn(size))
-        self.register_buffer("step", torch.zeros(1))
         self.offset = offset
 
     def forward(self):
-        """Test optimizer's ability to handle changing noise levels during training."""
-        self.step += 1
-        # Noise that decreases over time
-        noise_scale = 1.0 / (self.offset + self.step)
-        noise = torch.empty_like(self.param)
-        noise.cauchy_()
-        return (self.param + noise * noise_scale).square().mean()
+        noise_scale = 1.0 / self.offset
+        noise = torch.randn_like(self.param).cumsum() / self.param.numel() ** 0.5 * noise_scale
+        return (self.param + noise).square().mean()
 
 
 @app.command()

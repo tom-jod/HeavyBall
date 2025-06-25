@@ -5,36 +5,31 @@ import torch.backends.opt_einsum
 import typer
 from torch import nn
 
-from benchmark.utils import param_norm_win_condition, trial
+from benchmark.utils import loss_win_condition, trial
 from heavyball.utils import set_torch
 
 app = typer.Typer(pretty_exceptions_enable=False)
 set_torch()
-
 configs = {
-    "trivial": {"offset": 32},
-    "easy": {"offset": 16},
-    "medium": {"offset": 8},
-    "hard": {"offset": 4},
-    "extreme": {"offset": 2},
-    "nightmare": {"offset": 1},
+    "trivial": {"range": 1},
+    "easy": {"range": 2},
+    "medium": {"range": 3},
+    "hard": {"range": 4},
+    "extreme": {"range": 5},
+    "nightmare": {"range": 6},
 }
 
 
 class Model(nn.Module):
-    def __init__(self, offset, size=4096):
+    def __init__(self, size, value_range):
         super().__init__()
+        self.scale = nn.Buffer(torch.logspace(-value_range, value_range, size))
         self.param = nn.Parameter(torch.randn(size))
-        self.register_buffer("step", torch.zeros(1))
-        self.offset = offset
 
     def forward(self):
-        """Test optimizer's ability to handle changing noise levels during training."""
-        self.step += 1
-        # Noise that decreases over time
-        noise_scale = 1.0 / (self.offset + self.step)
-        noise = torch.randn_like(self.param) * noise_scale
-        return (self.param + noise).square().mean()
+        p2 = self.param**2
+        loss = (p2 * self.scale).mean()
+        return p2.mean().detach() + loss - loss.detach()
 
 
 @app.command()
@@ -46,25 +41,26 @@ def main(
     opt: List[str] = typer.Option(["ForeachSOAP"], help="Optimizers to use"),
     trials: int = 100,
     win_condition_multiplier: float = 1.0,
+    size: int = 512,
     config: Optional[str] = None,
 ):
-    offset = configs.get(config, {}).get("offset", 4)
+    value_range = configs.get(config, {}).get("range", 3)
+
     dtype = [getattr(torch, d) for d in dtype]
-    model = Model(offset).cuda().double()
+    model = Model(size, value_range).cuda().double()
 
     def data():
         return None, None
 
-    # Lenient initial condition due to high initial noise
     trial(
         model,
         data,
         None,
-        param_norm_win_condition(win_condition_multiplier * 1e-3, 0),
+        loss_win_condition(win_condition_multiplier * 1e-3),
         steps,
         opt[0],
         weight_decay,
-        failure_threshold=5,
+        failure_threshold=3,
         trials=trials,
     )
 
