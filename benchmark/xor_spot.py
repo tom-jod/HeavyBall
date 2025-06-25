@@ -65,7 +65,7 @@ def main(
     config: Optional[str] = None,
 ):
     length = configs.get(config, {}).get("length", length)
-    dtype = [getattr(torch, d) for d in dtype]
+    dtype = getattr(torch, dtype[0])
 
     model = Model(size, depth).cuda()
 

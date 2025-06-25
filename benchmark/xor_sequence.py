@@ -64,7 +64,7 @@ def main(
 ):
     length = configs.get(config, {}).get("length", length)
 
-    dtype = [getattr(torch, d) for d in dtype]
+    dtype = getattr(torch, dtype[0])
     torch.manual_seed(0x1239121)
     model = Model(size, depth).cuda()
 
