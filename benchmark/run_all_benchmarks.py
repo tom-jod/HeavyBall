@@ -288,11 +288,14 @@ def main(
         "adversarial_gradient.py",
         "dynamic_landscape.py",
         "constrained_optimization.py",
-        # New benchmarks
         "multi_objective_pareto.py",
         "class_imbalance_rare.py",
         "memory_constrained.py",
         "transfer_domain_shift.py",
+        "plasticity_summod.py",
+        "plasticity_weighted_summod.py",
+        "generalization_summod.py",
+        "generalization_weighted_summod.py",
     ]
 
     if mars:
