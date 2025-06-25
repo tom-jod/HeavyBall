@@ -282,10 +282,8 @@ def main(
         "layer_wise_scale.py",
         "parameter_scale.py",
         "gradient_delay.py",
-        "gradient_noise_scale.py",
         "adversarial_gradient.py",
         "dynamic_landscape.py",
-        "constrained_optimization.py",
         "multi_objective_pareto.py",
         "class_imbalance_rare.py",
         "memory_constrained.py",
@@ -294,6 +292,16 @@ def main(
         "plasticity_weighted_summod.py",
         "generalization_summod.py",
         "generalization_weighted_summod.py",
+        "sparse_parameters.py",
+        "quadratic_flip.py",
+        "quadratic_outliers.py",
+        "quadratic_quantized.py",
+        "ill_conditioned.py",
+        "gradient_brown_noise_scale.py",
+        "gradient_heavy_tailed_noise_scale.py",
+        "gradient_white_noise_scale.py",
+        "constrained_optimization_relu.py",
+        "constrained_optimization_log.py",
     ]
 
     if mars:
