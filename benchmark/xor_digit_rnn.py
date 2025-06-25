@@ -62,9 +62,9 @@ def main(
     model = Model(size, depth).cuda()
 
     def data():
-        inp = torch.randn((batch, length, 1), device="cuda", dtype=dtype[0])
+        inp = torch.randn((batch, length, 1), device="cuda", dtype=dtype)
         inp = inp > 0
-        return inp.to(dtype[0]), (inp.sum(1) % 2).to(dtype[0])
+        return inp.to(dtype[0]), (inp.sum(1) % 2).to(dtype)
 
     trial(
         model,

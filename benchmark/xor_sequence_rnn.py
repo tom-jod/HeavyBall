@@ -70,11 +70,11 @@ def main(
     model = Model(size, depth).cuda()
 
     def data():
-        inp = torch.randn((batch, 2 * length, 1), device="cuda", dtype=dtype[0])
+        inp = torch.randn((batch, 2 * length, 1), device="cuda", dtype=dtype)
         inp = inp > 0
         i0, i1 = inp.chunk(2, 1)
         xored = torch.logical_xor(i0, i1)
-        return inp.long().squeeze(-1), xored.to(dtype[0])
+        return inp.long().squeeze(-1), xored.to(dtype)
 
     trial(
         model,
