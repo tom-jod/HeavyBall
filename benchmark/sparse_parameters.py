@@ -25,10 +25,10 @@ class Model(nn.Module):
         super().__init__()
         self.param = nn.Parameter(torch.randn(size))
         self.sparsity = sparsity
-        self.mask = torch.zeros_like(self.param)
-        while self.mask.sum().item() < 1:
-            self.mask = nn.Buffer(torch.rand_like(self.param) < self.sparsity)
-        self.param.data.mul_(self.mask.data)
+        mask = torch.zeros_like(self.param)
+        while mask.sum().item() < 1:
+            mask = torch.rand_like(self.param) < self.sparsity
+        self.param.data.mul_(mask)
         if size * sparsity < 1:
             print(f"enforcing sparsity = {1 / size}")
 
