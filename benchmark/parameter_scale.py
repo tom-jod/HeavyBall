@@ -44,13 +44,9 @@ def main(
 
     model = Model(size=1024, scale=scale).cuda().double()
 
-    def data():
-        return None, None
-
-    # More lenient win condition due to vastly different scales
     trial(
         model,
-        data,
+        None,
         None,
         loss_win_condition(win_condition_multiplier * 1e-4),
         steps,

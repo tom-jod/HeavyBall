@@ -48,16 +48,11 @@ def main(
     config: Optional[str] = None,
 ):
     powers = configs.get(config, {}).get("powers", powers)
-
-    dtype = [getattr(torch, d) for d in dtype]
     model = Model(size, powers, target).cuda().double()
-
-    def data():
-        return None, None
 
     trial(
         model,
-        data,
+        None,
         None,
         loss_win_condition(win_condition_multiplier * 1e-8),
         steps,

@@ -45,16 +45,11 @@ def main(
     config: Optional[str] = None,
 ):
     offset = configs.get(config, {}).get("offset", 4)
-    dtype = [getattr(torch, d) for d in dtype]
-    model = Model(offset).cuda().double()
+    model = Model(offset).cuda()
 
-    def data():
-        return None, None
-
-    # Lenient initial condition due to high initial noise
     trial(
         model,
-        data,
+        None,
         None,
         param_norm_win_condition(win_condition_multiplier * 1e-3, 0),
         steps,

@@ -45,12 +45,9 @@ def main(
     kwargs = configs[config or "trivial"]
     model = Model(**kwargs).cuda()
 
-    def data():
-        return None, None
-
     trial(
         model,
-        data,
+        None,
         None,
         param_norm_win_condition(win_condition_multiplier * 1e-7, 0),
         steps,

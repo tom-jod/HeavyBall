@@ -49,16 +49,11 @@ def main(
     config: Optional[str] = None,
 ):
     frequency = configs.get(config, {}).get("frequency", 10)
-    dtype = [getattr(torch, d) for d in dtype]
-    model = Model(frequency).cuda().double()
+    model = Model(frequency).cuda()
 
-    def data():
-        return None, None
-
-    # More lenient condition due to adversarial component
     trial(
         model,
-        data,
+        None,
         None,
         param_norm_win_condition(win_condition_multiplier * 1e-3, 0),
         steps,

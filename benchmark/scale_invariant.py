@@ -49,16 +49,11 @@ def main(
     config: Optional[str] = None,
 ):
     value_range = configs.get(config, {}).get("range", 3)
-
-    dtype = [getattr(torch, d) for d in dtype]
     model = Model(size, value_range).cuda().double()
-
-    def data():
-        return None, None
 
     trial(
         model,
-        data,
+        None,
         None,
         loss_win_condition(win_condition_multiplier * 1e-3),
         steps,

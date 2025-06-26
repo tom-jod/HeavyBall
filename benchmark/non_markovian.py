@@ -50,13 +50,9 @@ def main(
     kwargs = configs[config or "trivial"]
     model = Model(**kwargs).cuda()
 
-    def data():
-        return None, None
-
-    # More lenient win condition and more steps due to delayed updates
     trial(
         model,
-        data,
+        None,
         None,
         param_norm_win_condition(win_condition_multiplier * 1e-4, -model.target),
         steps * 2,

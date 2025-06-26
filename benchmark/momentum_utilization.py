@@ -50,12 +50,9 @@ def main(
     dtype = [getattr(torch, d) for d in dtype]
     model = Model(weight).cuda().double()
 
-    def data():
-        return None, None
-
     trial(
         model,
-        data,
+        None,
         None,
         loss_win_condition(win_condition_multiplier * 1e-6),
         steps,

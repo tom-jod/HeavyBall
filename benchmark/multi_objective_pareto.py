@@ -147,9 +147,6 @@ def main(
     dtype = [getattr(torch, d) for d in dtype]
     model = MultiObjectiveModel(input_dim, hidden_dim, output_dim, n_samples).cuda()
 
-    def data():
-        return None, None  # Data is embedded in model
-
     def loss_fn(outputs, target):
         accuracy_loss, efficiency_loss = outputs
         return efficiency_weight * accuracy_loss + (1 - efficiency_weight) * efficiency_loss
@@ -164,7 +161,7 @@ def main(
 
     trial(
         model,
-        data,
+        None,
         loss_fn,
         pareto_win_condition(
             accuracy_threshold=accuracy_thr,

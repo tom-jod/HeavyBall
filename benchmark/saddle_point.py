@@ -79,12 +79,9 @@ def main(
         model = Model(coords, offset)
     model.double()
 
-    def data():
-        return None, None
-
     trial(
         model,
-        data,
+        None,
         None,
         loss_win_condition(0.1),
         steps,

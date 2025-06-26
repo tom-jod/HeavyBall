@@ -46,16 +46,11 @@ def main(
     config: Optional[str] = None,
 ):
     size = configs.get(config, {}).get("size", size)
-
-    dtype = [getattr(torch, d) for d in dtype]
     model = Model(size).cuda()
-
-    def data():
-        return None, None
 
     trial(
         model,
-        data,
+        None,
         None,
         param_norm_win_condition(win_condition_multiplier * 1e-8, -model.target),
         steps,

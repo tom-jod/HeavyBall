@@ -183,13 +183,9 @@ def main(
         pretrain_noise = cfg.get("pretrain_noise", pretrain_noise)
         freeze_layers = cfg.get("freeze_layers", freeze_layers)
 
-    dtype = [getattr(torch, d) for d in dtype]
     model = TransferLearningModel(
         feature_dim, n_classes, n_samples, domain_shift_strength, pretrain_noise, freeze_layers
     ).cuda()
-
-    def data():
-        return None, None  # Data is embedded in model
 
     base_accuracy = 0.7
     base_domain_gap = 0.2
@@ -198,7 +194,7 @@ def main(
 
     trial(
         model,
-        data,
+        None,
         None,
         transfer_win_condition(accuracy_threshold, domain_gap_threshold),
         steps,

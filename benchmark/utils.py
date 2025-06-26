@@ -427,6 +427,10 @@ def cleanup():
         torch.cuda.synchronize()
 
 
+def _none_data():
+    return None, None
+
+
 def trial(
     model,
     data,
@@ -442,6 +446,8 @@ def trial(
     warmup_trial_pct: int = 0.2,
     random_trials: int = 10,
 ):
+    if data is None:
+        data = _none_data
     group = min(group, steps)
     heavyball.utils.set_torch()
 

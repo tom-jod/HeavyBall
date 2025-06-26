@@ -4,7 +4,6 @@ import torch
 import torch.backends.opt_einsum
 import typer
 from torch import nn
-from torch.nn import functional as F
 
 from benchmark.utils import param_norm_win_condition, trial
 from heavyball.utils import set_torch
@@ -58,8 +57,8 @@ def main(
 
     trial(
         model,
-        data,
-        F.mse_loss,
+        None,
+        None,
         param_norm_win_condition(1e-3 * win_condition_multiplier, model.target),
         steps,
         opt[0],

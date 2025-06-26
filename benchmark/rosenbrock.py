@@ -59,12 +59,9 @@ def main(
         model = Model(coords)
     model.double()
 
-    def data():
-        return None, None
-
     model = trial(
         model,
-        data,
+        None,
         None,
         loss_win_condition(win_condition_multiplier * 1e-9 * (not show_image)),
         steps,

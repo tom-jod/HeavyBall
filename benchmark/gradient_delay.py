@@ -65,13 +65,9 @@ def main(
     dtype = [getattr(torch, d) for d in dtype]
     model = Model(max_delay).cuda().double()
 
-    def data():
-        return None, None
-
-    # More lenient win condition and more steps due to delayed updates
     trial(
         model,
-        data,
+        None,
         None,
         loss_win_condition(win_condition_multiplier * 1e-4),
         steps * 2,

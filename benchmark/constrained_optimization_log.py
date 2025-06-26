@@ -1,4 +1,3 @@
-import pathlib
 from typing import List, Optional
 
 import torch
@@ -62,26 +61,12 @@ def main(
     config: Optional[str] = None,
 ):
     penalty = configs.get(config, {}).get("penalty", 1e6)
-    dtype = [getattr(torch, d) for d in dtype]
-
-    # Clean up old plots if any (though this benchmark doesn't plot)
-    for path in pathlib.Path(".").glob("constrained_optimization*.png"):
-        path.unlink()
-
     model = Model(penalty)
-    model.double()  # Use double for precision if needed
-
-    # No external data needed for this simple objective
-    def data():
-        return None, None
-
-    # The loss is the objective value itself
-    loss_fn = None
 
     trial(
         model,
-        data,
-        loss_fn,
+        None,
+        None,
         win_condition,
         steps,
         opt[0],

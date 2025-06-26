@@ -59,14 +59,9 @@ def main(
 
     model = ExplodingGradient(dim, scale)
 
-    def data():
-        return None, None
-
-    # Win condition: loss should be close to 1.0 (exp(0) = 1)
-    # Using 1.1 as threshold since perfect convergence is hard
     trial(
         model,
-        data,
+        None,
         None,
         param_norm_win_condition(0.01 * win_condition_multiplier, 0),
         steps,

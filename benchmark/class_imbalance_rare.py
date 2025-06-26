@@ -122,13 +122,8 @@ def main(
         imbalance_ratio = cfg.get("imbalance_ratio", imbalance_ratio)
         noise_level = cfg.get("noise_level", noise_level)
 
-    dtype = [getattr(torch, d) for d in dtype]
     model = ImbalancedClassifier(n_samples, input_dim, hidden_dim, imbalance_ratio, noise_level).cuda()
 
-    def data():
-        return None, None  # Data is embedded in model
-
-    # Success thresholds scale with difficulty, but must not exceed 1.0
     base_f1 = 0.7
     base_recall = 0.8
     f1_threshold = min(1.0, win_condition_multiplier * base_f1 * imbalance_ratio * 10)
@@ -136,7 +131,7 @@ def main(
 
     trial(
         model,
-        data,
+        None,
         None,
         imbalanced_win_condition(f1_threshold, recall_threshold),
         steps,

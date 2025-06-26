@@ -58,17 +58,12 @@ def main(
 ):
     """Run dynamic landscape benchmark with specified parameters."""
     frequency = configs.get(config, {}).get("frequency", 0.1)
-    dtype = [getattr(torch, d) for d in dtype]
 
     model = ShiftingSphere(dim, frequency)
 
-    def data():
-        return None, None
-
-    # Win condition: average squared error should be small (parameters close to target)
     trial(
         model,
-        data,
+        None,
         None,
         loss_win_condition(0.01 * win_condition_multiplier),
         steps,

@@ -70,12 +70,9 @@ def main(
     assert steps > config["add_class_every"] * (config["classes"] - 2)
     model = Model(**config)
 
-    def data():
-        return None, None
-
     trial(
         model,
-        data,
+        None,
         None,
         loss_win_condition(win_condition_multiplier * 1e-8 * (not show_image)),
         steps,
