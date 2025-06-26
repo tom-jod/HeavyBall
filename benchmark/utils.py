@@ -443,7 +443,7 @@ def trial(
     failure_threshold=3,
     group=256,
     return_best: bool = False,
-    warmup_trial_pct: int = 0.2,
+    warmup_trial_pct: float = 1,
     random_trials: int = 10,
 ):
     if data is None:
