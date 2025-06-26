@@ -25,14 +25,16 @@ configs = {
 class Model(nn.Module):
     def __init__(self, max_delay=16, param_size=256):
         super().__init__()
-        self.params = nn.Parameter(torch.randn(param_size))
+        self.param = nn.Parameter(torch.randn(param_size))
         self.history = deque(maxlen=max_delay)
-        self.target = nn.Buffer(torch.randn_like(self.params))
+        self.target = nn.Buffer(torch.randn_like(self.param))
 
     def forward(self):
         self.history.append(self.param.detach().clone())
         if self.history:
             hist_loss = sum(torch.norm(p - self.target) for p in self.history)
+        else:
+            hist_loss = 0
         return hist_loss + torch.norm(self.param - self.target)
 
 

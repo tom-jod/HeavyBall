@@ -29,7 +29,7 @@ class Model(nn.Module):
 
     def forward(self):
         noise_scale = 1.0 / self.offset
-        noise = torch.randn_like(self.param).cumsum() / self.param.numel() ** 0.5 * noise_scale
+        noise = torch.randn_like(self.param).cumsum(0) / self.param.numel() ** 0.5 * noise_scale
         return (self.param + noise).square().mean()
 
 

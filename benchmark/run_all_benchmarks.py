@@ -305,7 +305,7 @@ def main(
         "gradient_noise_scale_instantaneous_brown.py",
         "gradient_noise_scale_temporal_brown.py",
         "gradient_noise_scale_white.py",
-        "gradient_noise_scale_heavy_tail.py",
+        "gradient_noise_scale_heavy_tailed.py",
         "constrained_optimization_relu.py",
         "constrained_optimization_log.py",
         "non_markovian.py",

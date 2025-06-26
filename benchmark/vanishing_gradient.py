@@ -30,9 +30,9 @@ configs = {
 
 
 class ExplodingGradient(nn.Module):
-    def __init__(self, scale, dim):
+    def __init__(self, scale, size):
         super().__init__()
-        self.param = nn.Parameter(torch.randn(dim))
+        self.param = nn.Parameter(torch.randn(size))
         self.scale = scale  # Controls how quickly gradients grow
 
     def forward(self):
@@ -45,7 +45,7 @@ class ExplodingGradient(nn.Module):
 def main(
     method: List[str] = typer.Option(["qr"], help="Eigenvector method to use (for SOAP)"),
     dtype: List[str] = typer.Option(["float32"], help="Data type to use"),
-    dim: int = 512,
+    size: int = 512,
     steps: int = 500,
     weight_decay: float = 0,
     opt: List[str] = typer.Option(["adamw"], help="Optimizers to use"),
@@ -54,7 +54,7 @@ def main(
     config: Optional[str] = None,
 ):
     scale = configs.get(config, {}).get("scale", 2)
-    model = ExplodingGradient(dim, scale)
+    model = ExplodingGradient(scale, size)
 
     trial(
         model,
