@@ -848,6 +848,10 @@ class ExactHVPFailed(ValueError):
 use_default = object()
 
 
+def _tensor_key(x: Tensor):
+    return x.data_ptr(), x.numel(), x.dtype, x.device
+
+
 class StatefulOptimizer(torch.optim.Optimizer):
     """
     finite_differences saves memory, but needs more compute. (Alternative is true HVP)
@@ -920,7 +924,9 @@ class StatefulOptimizer(torch.optim.Optimizer):
     def state_(self, arg: Tensor, fail: bool = True):
         if not fail and arg not in self.mapping:
             return {}
-        state_param, index = self.mapping_inverse[arg.data_ptr()]
+        if _tensor_key(arg) not in self.mapping_inverse:
+            self._init_mapping()
+        state_param, index = self.mapping_inverse[_tensor_key(arg)]
         if state_param not in self.state:
             self.state[state_param] = collections.defaultdict(dict)
         return self.state[state_param][index]
@@ -943,7 +949,7 @@ class StatefulOptimizer(torch.optim.Optimizer):
             if p not in self.mapping:
                 self.mapping[p] = p_views = merge_group(group, p)
                 for i, pv in enumerate(p_views):
-                    self.mapping_inverse[pv.data_ptr()] = (p, i)
+                    self.mapping_inverse[_tensor_key(pv)] = (p, i)
 
     def split_p_and_g_in_group(
         self,
@@ -966,7 +972,7 @@ class StatefulOptimizer(torch.optim.Optimizer):
 
             self.mapping[p] = p_views = merge_group(group, p)
             for i, pv in enumerate(p_views):
-                self.mapping_inverse[pv.data_ptr()] = (p, i)
+                self.mapping_inverse[_tensor_key(pv)] = (p, i)
 
             vector = getattr(p, "vector", None)
             hessian_vector = getattr(p, "hessian_vector", None)
