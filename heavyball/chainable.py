@@ -672,7 +672,7 @@ def heavyball_momentum(group, updates, grads, params, momentum):
     return utils.heavyball_momentum(momentum, updates, utils.get_beta1(group))
 
 
-_optim_fns = {"adam": utils.adam_, "laprop": utils.laprop_}
+_optim_fns = {"adam": utils.adam_, "laprop": utils.laprop_, "lion": utils.LION_}
 
 
 @zero_guard("exp_avg", "exp_avg_sq")
