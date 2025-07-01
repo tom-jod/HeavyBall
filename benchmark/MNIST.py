@@ -98,7 +98,7 @@ def main(
         model,
         data,
         loss_fn,
-        loss_win_condition(win_condition_multiplier * 2.0),
+        loss_win_condition(win_condition_multiplier * 0.0),
         steps,
         opt[0],
         dtype[0],
@@ -111,6 +111,7 @@ def main(
         failure_threshold=10,
         base_lr=1e-3,
         trials=trials,
+        estimate_condition_number = True
     )
 
 

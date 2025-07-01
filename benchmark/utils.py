@@ -322,7 +322,7 @@ class Objective:
         self.avg = None
         self.use_cudnn = True
         self.set_precond_init_scale = False
-        self.end_time = int(os.environ.get("HEAVYBALL_BENCHMARK_TIMEOUT", 3600 * 4)) + time.time()
+        self.end_time = int(os.environ.get("HEAVYBALL_BENCHMARK_TIMEOUT", 3600 * 4)) + time.time() # was 3600 * 4
         self._last_loss = None
         self.best_losses = []
         self.current_losses = []
@@ -367,14 +367,14 @@ class Objective:
        
         # Create a list to track losses for this run
         step_losses = []
-        
+        prev_model_params = None
         for i in range(self.steps // self.group):
-            print(i)
+            
             if hasattr(o, "train"):
                 o.train()
             
             for j in range(self.group):
-                print(j)
+                
                 if self.requires_prev_minibatch(o):
                     # Get current batch
                     curr_inp, curr_tgt = self.data()
@@ -422,39 +422,41 @@ class Objective:
                 
                 # Later, when you need previous model:
                 def _prev_closure():
-                    try:
-                        prev_params = params['prev']
-                        # Save current state
-                        current_state = {name: param.clone() for name, param in self.m.named_parameters()}
-
-                        try:
-                            for name, param in self.m.named_parameters():
-                                if name in prev_params:
-                                    param.data.copy_(prev_params[name])
-                                    
-                                    
-                                        
-                            # Compute loss with previous model
-                            loss = self.m() if inp is None else self.m(inp)
-                            if self.loss_fn is not None:
-                                loss = self.loss_fn(loss, tgt)
-                            loss.backward()
-                            return loss
-                        
-                        finally:
-                            # Restore current state
-                            for name, param in self.m.named_parameters():
-                                if name in current_state:
-                                    param.data.copy_(current_state[name])
-                                params['prev'] = {name: param.data.clone().detach() for name, param in self.m.named_parameters()}
-                    except KeyError:
-                        # for the first step we set the prev params and use the standard closure function
-                        params['prev'] = {name: param.data.clone().detach() for name, param in self.m.named_parameters()}
+                    nonlocal prev_model_params
+                    
+                    if prev_model_params is None:
+                        # First step: no previous model, use current closure
+                        prev_model_params = {name: param.data.clone().detach() 
+                                        for name, param in self.m.named_parameters()}
                         return _closure()
-
+                    
+                    # Save current state
+                    current_state = {name: param.clone() for name, param in self.m.named_parameters()}
+                    
+                    try:
+                        # Restore previous model state
+                        for name, param in self.m.named_parameters():
+                            if name in prev_model_params:
+                                param.data.copy_(prev_model_params[name])
+                        
+                        # Compute loss with previous model
+                        loss = self.m() if inp is None else self.m(inp)
+                        if self.loss_fn is not None:
+                            loss = self.loss_fn(loss, tgt)
+                        loss.backward()
+                        return loss
+                    finally:
+                        # Restore current state
+                        for name, param in self.m.named_parameters():
+                            if name in current_state:
+                                param.data.copy_(current_state[name])
+                        # Update prev_model_params
+                        prev_model_params = {name: param.data.clone().detach() 
+                                        for name, param in self.m.named_parameters()}
+                
                 try:
                     if self.requires_prev_model(o):
-                        loss = o.step_with_prev(_closure,_prev_closure)
+                        loss = o.step_with_prev(_closure, _prev_closure)
                     else:
                         loss = o.step(_closure)
                 except PrecondInitError:
@@ -496,8 +498,8 @@ class Objective:
             # Store the best losses
             self.best_losses = self.current_losses.copy() 
             
-        if self.best_at * 100 < self.attempt and self.attempt - self.best_at > self.warmup_trials:  # no improvements
-            raise Stop
+        #if self.best_at * 100 < self.attempt and self.attempt - self.best_at > self.warmup_trials:  # no improvements
+        #    raise Stop
         if time.time() > self.end_time:  # timeout
             raise Stop
         return target
@@ -584,7 +586,7 @@ def trial(
         with torch.backends.cudnn.flags(enabled=False):
             condition_numbers = []
             for i in range(5):
-                condition_numbers.append( estimate_condition_number_hvp(model, data, n_probes=20, n_samples=500, loss_fn=loss_fn))
+                condition_numbers.append( estimate_condition_number_hvp(model, data, n_probes=20, n_samples=10, loss_fn=loss_fn))
             #condition_number = estimate_condition_number_hvp(model, data, n_probes=20, n_samples=2000)
 
 
@@ -685,8 +687,12 @@ def trial(
             one_minus_beta1 = trial.suggest_float("1mbeta1", 1e-5, 1, log=True)
             one_minus_beta2 = trial.suggest_float("1mbeta2", 1e-7, 1, log=True)
             one_minus_shampoo_beta = trial.suggest_float("1mshampoo_beta", 1e-5, 1, log=True)
-            out = obj.objective((lr, one_minus_beta1, one_minus_beta2, one_minus_shampoo_beta))
-            
+            try:
+                out = obj.objective((lr, one_minus_beta1, one_minus_beta2, one_minus_shampoo_beta))
+            except Stop:
+                out = float('inf')
+                raise WinConditionMet
+
             if obj.win_condition():
                 winning_params.update({
                     "lr": lr,
@@ -698,12 +704,7 @@ def trial(
                 # Save the loss trajectory to the global variable before raising the exception
                 global current_loss_trajectory
                 current_loss_trajectory = obj.best_losses.copy() if hasattr(obj, 'best_losses') else []
-                
-                # Print the loss trajectory for debugging
-                print(f"Win condition met! Loss trajectory length: {len(current_loss_trajectory)}")
-                print(f"First few losses: {current_loss_trajectory[:5]}")
-                print(f"Last few losses: {current_loss_trajectory[-5:] if len(current_loss_trajectory) >= 5 else current_loss_trajectory}")
-                
+               
                 raise WinConditionMet
             return out
         
@@ -780,6 +781,7 @@ def estimate_condition_number_hvp(model, data_fn, n_probes=20, n_samples=5, loss
        
     
     eigenvals = np.array(eigenvals)
+    print(eigenvals)
     eigenvals = eigenvals[np.isfinite(eigenvals)]  # Remove NaN/inf
     
     if len(eigenvals) == 0:
@@ -788,7 +790,7 @@ def estimate_condition_number_hvp(model, data_fn, n_probes=20, n_samples=5, loss
     
     # Condition number approximation
     abs_eigenvals = np.abs(eigenvals)
-    max_eig = np.max(eigenvals)
+    max_eig = np.max(abs_eigenvals)
     min_eig = np.min(abs_eigenvals)
     
     if min_eig <= 0:

@@ -61,6 +61,10 @@ nightmare_benchmark_data = {
     'gradient_delay-nightmare': {'condition_number': None, 'condition_std_err': None, 'n_params': 256},
 }
 
+real_world_benchmark_data = {
+    'MNIST_MLP': {'condition_number': 20832.22364579695, 'condition_std_err': 8621.244263969105, 'n_params': 118282}, # n_probes=20, n_samples=200
+}
+
 def create_combined_dataframe(trivial_data, nightmare_data):
     """Convert both benchmark datasets to combined DataFrame with error bars"""
     df_data = []
@@ -89,6 +93,18 @@ def create_combined_dataframe(trivial_data, nightmare_data):
                 'log_condition': np.log10(values['condition_number']),
                 'log_params': np.log10(values['n_params']),
                 'difficulty': 'Nightmare'
+            })
+
+    for name, values in real_world_benchmark_data.items():
+        if values['condition_number'] is not None and values['condition_number'] > 1e-10:
+            df_data.append({
+                'benchmark': name.replace('-nightmare', ''),
+                'condition_number': values['condition_number'],
+                'condition_std_err': values['condition_std_err'] if values['condition_std_err'] is not None else 0.0,
+                'n_params': values['n_params'],
+                'log_condition': np.log10(values['condition_number']),
+                'log_params': np.log10(values['n_params']),
+                'difficulty': 'Trivial'
             })
     
     return pd.DataFrame(df_data)
@@ -159,11 +175,20 @@ def plot_condition_vs_params(df, save_path=None):
     
     # Add benchmark names as annotations for classic optimization problems - styled like "beale.py"
     classic_problems = ['saddle_point', 'beale', 'rosenbrock', 'rastrigin']
-    
+    real_world_benchmarks = ['MNIST_MLP']
     for _, row in df.iterrows():
         if any(classic in row['benchmark'] for classic in classic_problems):
             # Format name like "beale.py" - lowercase with .py extension
             formatted_name = f"{row['benchmark'].replace('_', '')}.py"
+            ax.annotate(formatted_name, 
+                       (row['log_params'], row['log_condition']),
+                       xytext=(8, 8), textcoords='offset points',
+                       fontsize=9, alpha=0.8, fontweight='bold',
+                       bbox=dict(boxstyle='round,pad=0.3', facecolor='white', alpha=0.7))
+            
+        if any(name in row['benchmark'] for name in real_world_benchmarks):
+            # Format name like "beale.py" - lowercase with .py extension
+            formatted_name = f"{row['benchmark'].replace('_', ' ')}"
             ax.annotate(formatted_name, 
                        (row['log_params'], row['log_condition']),
                        xytext=(8, 8), textcoords='offset points',

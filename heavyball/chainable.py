@@ -966,10 +966,12 @@ def _inner_chain(state, group, update, grad, param, *fns):
 
 
 def chain(state: Union[callable, dict], group, grad, param, *fns):
+    
     update = [torch.clone(g, memory_format=torch.preserve_format) for g in grad]
     update, skip_update = _inner_chain(state, group, update, grad, param, *fns)
     
     if not skip_update and update is not None:
+        
         utils.update_param_(param, update, group["lr"], group["weight_decay"], caution=group["caution"], grad=grad)
 
 

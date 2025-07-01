@@ -15,7 +15,11 @@ from heavyball.utils import set_torch
 
 app = typer.Typer(pretty_exceptions_enable=False)
 set_torch()
+import torch._dynamo
+torch._dynamo.config.suppress_errors = True
+app = typer.Typer()
 
+torch._dynamo.config.disable = True
 
 class BasicBlock(nn.Module):
     expansion = 1
@@ -113,7 +117,7 @@ def main(
         root='./data', train=False, download=True, transform=transform_test
     )
     testloader = DataLoader(testset, batch_size=batch, shuffle=False, num_workers=2, pin_memory=True)
-
+    
     # Create data iterator that matches the expected format
     train_iter = iter(trainloader)
     
@@ -130,7 +134,7 @@ def main(
         model,
         data,
         F.cross_entropy,
-        loss_win_condition(win_condition_multiplier * 0.5),  # Adjusted for CIFAR-10 difficulty
+        loss_win_condition(win_condition_multiplier * 0.0),  # Adjusted for CIFAR-10 difficulty
         steps,
         opt[0],
         dtype[0],
@@ -143,6 +147,7 @@ def main(
         failure_threshold=10,
         base_lr=1e-3,
         trials=trials,
+        estimate_condition_number = True
     )
 
 

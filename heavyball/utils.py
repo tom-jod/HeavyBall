@@ -1396,7 +1396,15 @@ def _compilable_LION_(
     # LION uses: sign(beta1 * m_{t-1} + (1 - beta1) * g_t)
     # which is equivalent to: sign(lerp(m_{t-1}, g_t, 1-beta1))
     interpolated = _lerp(exp_avg_m32, g32, 1 - beta1)
-    update_direction = [torch._foreach_sign(interp) for interp in interpolated]
+    if isinstance(interpolated, (list, tuple)) and len(interpolated) > 0:
+        # If interpolated is already a list/tuple of tensors
+        update_direction = torch._foreach_sign(interpolated)
+    else:
+        # If interpolated is a single tensor, wrap it in a list
+        update_direction = torch._foreach_sign([interpolated])
+        # If it was a single tensor, unwrap the result
+        if not isinstance(grad, (list, tuple)):
+            update_direction = update_direction[0]
     
     # Copy results back
     copy_stochastic_list_(exp_avg_c, exp_avg_c32)
@@ -1615,7 +1623,9 @@ def _fused_compilable_MARSAdamW_(
 ):
    
     u32, g32, prev_g32 = [list(map(promote, x)) for x in [update, grad, prev_grads]]
-    
+    print(f"Prev:{prev_grads}")
+    print(f"Curr:{grad}")
+    print(f"lr:{lr}")
     if prev_g32 and len(prev_g32) == len(u32):
         u32_corrected = torch._foreach_sub(u32, prev_g32)
     else:
