@@ -1271,7 +1271,7 @@ def fused_adam_(
     caution: bool,
 ):
     y, exp_avg, exp_avg_sq, grad = list_guard(y, exp_avg, exp_avg_sq, grad)
-    beta1, beta2, step, lr = scalar_guard(beta1, beta2, step, lr, y[0])
+    beta1, beta2, step, lr, decay = scalar_guard(beta1, beta2, step, lr, decay, y[0])
     _fused_compilable_adam_(y, exp_avg, exp_avg_sq, update, grad, beta1, beta2, step, decay, lr, eps, caution)
 
 
@@ -1350,7 +1350,7 @@ def fused_laprop_(
     eps: float = 1e-8,
 ):
     exp_avg, exp_avg_sq, grad, y = list_guard(exp_avg, exp_avg_sq, grad, y)
-    beta1, beta2, step, lr, eps = scalar_guard(beta1, beta2, step, lr, eps, exp_avg[0])
+    beta1, beta2, step, lr, eps, decay = scalar_guard(beta1, beta2, step, lr, eps, decay, exp_avg[0])
     _fused_compilable_laprop_(y, exp_avg, exp_avg_sq, update, grad, beta1, beta2, step, lr, decay, caution, eps)
 
 
@@ -1369,7 +1369,7 @@ def _fused_compilable_adopt_(y, update, grad, exp_avg_sq, exp_avg, beta1, beta2,
 
 def fused_adopt_(y, update, grad, exp_avg_sq, exp_avg, beta1, beta2, step, lr, eps, decay, caution):
     exp_avg, exp_avg_sq, grad, y = list_guard(exp_avg, exp_avg_sq, grad, y)
-    beta1, beta2, step, lr = scalar_guard(beta1, beta2, step, lr, exp_avg[0])
+    beta1, beta2, step, lr, decay = scalar_guard(beta1, beta2, step, lr, decay, exp_avg[0])
     _fused_compilable_adopt_(y, update, grad, exp_avg_sq, exp_avg, beta1, beta2, step, lr, eps, decay, caution)
 
 
@@ -2576,7 +2576,7 @@ def _compilable_fused_precond_grad_cached_(ea: Tensor, param, lr, grad, decay, c
 
 
 def fused_precond_grad_cached_(ea: Tensor, param, lr, grad, decay, caution, cached_q: List[Tensor]):
-    lr = scalar_guard(lr, param[0])
+    lr, decay = scalar_guard(lr, decay, param[0])
     _compilable_fused_precond_grad_cached_(ea, param, lr, grad, decay, caution, cached_q)
 
 
@@ -2645,7 +2645,7 @@ def fused_psgd_precond_grad(
     store_triu_as_line: bool = False,
     symmetric_output: bool = False,
 ):
-    lr = scalar_guard(lr, param[0])
+    lr, decay = scalar_guard(lr, decay, param[0])
     _compilable_fused_psgd_precond_grad(
         ea, param, lr, grad, decay, caution, preconds, store_triu_as_line, symmetric_output
     )
