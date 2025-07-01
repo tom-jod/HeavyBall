@@ -571,9 +571,21 @@ def get_orthogonal_matrix(mat, max_eps: float = 1e-3, min_eps: float = 1e-30):
                 if m.device.type == "cpu":
                     raise
                 else:
+                    # Synchronize and clean CUDA state before retry
+                    if m.is_cuda:
+                        torch.cuda.synchronize(m.device)
+                    clean()
                     m = m.cpu()
-            except RuntimeError:  # failed to compute eigenvalues
-                if m.dtype != torch.double:
+            except RuntimeError as e:  # failed to compute eigenvalues
+                # Check if this is a CUDA error that needs special handling
+                if m.is_cuda and ("CUDA" in str(e) or "illegal memory access" in str(e)):
+                    # CUDA context might be corrupted, move to CPU first
+                    torch.cuda.synchronize(m.device)
+                    clean()
+                    m = m.cpu()
+                    if m.dtype != torch.double:
+                        m = m.double()
+                elif m.dtype != torch.double:
                     m = m.double()
                 elif eps < max_eps:
                     eps = eps ** (2 / 3)
@@ -2220,7 +2232,7 @@ def _psgd_precond_update_(
         if update.ndim < 2:
             lb = update.norm(float("inf"))
         else:
-            lb = max_singular_value(update, None, power_iter=power_iter)
+            lb = max_singular_value(update, power_iter=power_iter)
             update = promote(update)
             if store_triu_as_line:
                 update = triu_to_line([update])[0][1]
