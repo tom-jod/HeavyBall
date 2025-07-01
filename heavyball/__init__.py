@@ -695,6 +695,13 @@ class ForeachPSGDKron(C.BaseOpt):
     Originally from Evan Walters and Omead Pooladzandi, 2024
     Modified under Creative Commons Attribution 4.0 International
     Source available at https://github.com/evanatyourservice/kron_torch/blob/97a2b5ee8a1a4c29e4780bbf6c521e545189eff9/kron_torch/kron.py
+
+    Note on default parameters (Issue #58):
+    - Defaults have been changed in 2.0.0 values for backward compatibility
+    - For improved numerical stability, consider using:
+      - lower_bound_beta=0.9 (adds adaptive lower bound to preconditioner)
+      - dampening=2**-13 (adds small dampening for stability)
+      - precond_update_power_iterations=2 (more accurate spectral norm estimation)
     """
 
     delayed: bool = False
@@ -733,10 +740,10 @@ class ForeachPSGDKron(C.BaseOpt):
         adaptive: bool = False,
         ortho_method: Optional[str] = None,  # If None, no orthogonalization
         precond_grad_accum: bool = False,
-        lower_bound_beta: float = 0.9,  # 0.0 recovers pre-2.0.0 PSGD
+        lower_bound_beta: float = 0.0,  # Set to 0.0 for backward compatibility, use 0.9 for improved stability
         inverse_free: bool = C.use_default,
-        dampening: float = 2**-13,
-        precond_update_power_iterations: int = 2,
+        dampening: float = 0.0,  # Set to 0.0 for backward compatibility, use 2**-13 for improved stability
+        precond_update_power_iterations: int = 1,  # Set to 1 for backward compatibility, use 2 for better convergence
         # expert parameters
         precond_init_scale=1.0,
         precond_init_scale_scale: float = 1,
