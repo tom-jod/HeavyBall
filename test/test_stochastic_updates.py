@@ -5,7 +5,7 @@ from torch import nn
 import heavyball
 import heavyball.utils
 from benchmark.utils import get_optim
-from heavyball.utils import PSGDBase, clean, set_torch
+from heavyball.utils import clean, set_torch
 
 
 def get_memory():
@@ -22,7 +22,7 @@ def test_foreach(opt, size, depth: int, iterations: int = 8192, outer_iterations
     set_torch()
 
     opt = getattr(heavyball, opt)
-    if not issubclass(opt, PSGDBase):
+    if "PSGD" not in opt.__name__:
         raise pytest.skip("Only PSGD is supported")
 
     peaks = []

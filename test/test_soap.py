@@ -237,7 +237,6 @@ def _init(size, max_precond, merge_dims, precondition_1d, beta, precondition_fre
         new_state,
         max_precond_dim=max_precond,
         precondition_1d=precondition_1d,
-        merge_dims=merge_dims,
     )
     return grad, ref_state, new_state
 
