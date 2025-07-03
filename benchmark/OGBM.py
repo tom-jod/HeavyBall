@@ -460,12 +460,22 @@ def main(
     
     # Load dataset - automatically downloads via TFDS
     dataset = OGBGDataset(data_dir=data_path, split='train')
+    test_dataset = OGBGDataset(data_dir=data_path, split='test')
     
     # Create data loader
     train_loader = DataLoader(
         dataset,
         batch_size=batch,
         shuffle=True,
+        collate_fn=collate_graphs,
+        num_workers=0,  # Set to 0 to avoid multiprocessing issues with TFDS
+        pin_memory=True
+    )
+
+    test_loader = DataLoader(
+        test_dataset,
+        batch_size=batch,
+        shuffle=False,
         collate_fn=collate_graphs,
         num_workers=0,  # Set to 0 to avoid multiprocessing issues with TFDS
         pin_memory=True
@@ -535,7 +545,8 @@ def main(
         failure_threshold=10,
         base_lr=1e-3,
         trials=trials,
-        estimate_condition_number=True
+        estimate_condition_number=False,
+        test_loader=test_loader
     )
 
 if __name__ == "__main__":

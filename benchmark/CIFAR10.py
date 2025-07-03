@@ -146,8 +146,10 @@ def main(
         3,   # channels parameter (RGB)
         failure_threshold=10,
         base_lr=1e-3,
+        group=391,
         trials=trials,
-        estimate_condition_number = True
+        estimate_condition_number = False,
+        test_loader=testloader
     )
 
 

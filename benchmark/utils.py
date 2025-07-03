@@ -280,6 +280,7 @@ class Objective:
         win_condition,
         weight_decay,
         warmup_trials,
+        test_loader,
         ema_index: int = 0,
         **kwargs,
     ):
@@ -326,6 +327,7 @@ class Objective:
         self._last_loss = None
         self.best_losses = []
         self.current_losses = []
+        self.test_loader = test_loader
 
     def win_condition(self, loss=None):
         if loss is not None:
@@ -356,7 +358,7 @@ class Objective:
             "precond_lr": params[3],
             # we never have both precond_lr and shampoo_beta
         }
-        
+        torch.cuda.reset_peak_memory_stats()
         if self.set_precond_init_scale:
             params["precond_init_scale"] = 0.1
         self.m = copy.deepcopy(self.model)
@@ -368,7 +370,16 @@ class Objective:
         # Create a list to track losses for this run
         step_losses = []
         prev_model_params = None
+        # iterate through each epoch
         for i in range(self.steps // self.group):
+            # estimate variance half way through
+            #if i==int(self.steps//(self.group*2)):
+            #    estimate_minibatch_variance_detailed(self.m, self.data, n_samples=5, loss_fn=self.loss_fn)
+            if not hasattr(self, 'test_accuracies'):
+                self.test_accuracies = []
+            if self.test_loader != None:
+                test_accuracy = evaluate_model(self.m, self.test_loader)
+                self.test_accuracies.append(test_accuracy)
             
             if hasattr(o, "train"):
                 o.train()
@@ -465,27 +476,34 @@ class Objective:
                 o.zero_grad()
                 with torch.no_grad():
                     torch_hist[j] = loss.detach()
-                
-                # Add loss to step_losses and current_losses
-                loss_value = loss.item()
-                step_losses.append(loss_value)
-                self.current_losses.append(loss_value)
-                
+
+                if j==0:
+                    # Add loss to step_losses and current_losses (once per epoch: outer loop)
+                    loss_value = loss.item()
+                    step_losses.append(loss_value)
+                    self.current_losses.append(loss_value)
+                    
                 # Check early stopping conditions immediately after adding to loss trajectories
                 if not np.isfinite(loss_value) or self.win_condition(loss_value):
+                    # Get current memory usage before returning
+                    self.current_memory_usage = get_gpu_memory_usage()
                     return validator.ema_states.min().item(), self.m, loss_value, step_losses
-                
-            with torch.no_grad():
-                for loss in torch_hist:
-                    loss_cpu = loss.item()
-                    # Check early stopping conditions
-                    if not np.isfinite(loss_cpu) or self.win_condition(loss_cpu):
-                        return validator.ema_states.min().item(), self.m, loss_cpu, step_losses
-
-                    if validator(loss).item():
-                        return validator.ema_states.min().item(), self.m, loss_cpu, step_losses
-        
+    
+        # Get current memory usage before returning
+        self.current_memory_usage = get_gpu_memory_usage()
         return validator.ema_states.min().item(), self.m, torch_hist[-1].item(), step_losses
+                
+        #    with torch.no_grad():
+         #       for loss in torch_hist:
+          #          loss_cpu = loss.item()
+           #         # Check early stopping conditions
+            #        if not np.isfinite(loss_cpu) or self.win_condition(loss_cpu):
+             #           return validator.ema_states.min().item(), self.m, loss_cpu, step_losses
+#if validator(loss).item():
+               #         return validator.ema_states.min().item(), self.m, loss_cpu, step_losses
+              #      
+        
+   
     
     def objective(self, params):
         self.attempt += 1
@@ -495,8 +513,10 @@ class Objective:
             self.best_loss = loss
             self.best_at = self.attempt
             self.avg = np.log(np.array(params))
-            # Store the best losses
             self.best_losses = self.current_losses.copy() 
+            self.test_accuracies = self.test_accuracies.copy()
+            self.memory_usage = getattr(self, 'current_memory_usage', 0)/ (1024**2)
+
             
         #if self.best_at * 100 < self.attempt and self.attempt - self.best_at > self.warmup_trials:  # no improvements
         #    raise Stop
@@ -573,12 +593,13 @@ def trial(
     depth,
     trials=10,
     failure_threshold=3,
-    group=256,
+    group=256,# set to epoch size (in steps) 
     base_lr: float = 1e-3,
     return_best: bool = False,
     warmup_trial_pct: int = 0.2,
     random_trials: int = 10,
     estimate_condition_number: bool = False,
+    test_loader=None
 ):
     condition_numbers = [0]
     
@@ -586,8 +607,9 @@ def trial(
         with torch.backends.cudnn.flags(enabled=False):
             condition_numbers = []
             for i in range(5):
-                condition_numbers.append( estimate_condition_number_hvp(model, data, n_probes=20, n_samples=10, loss_fn=loss_fn))
+                condition_numbers.append( estimate_condition_number_hvp(model, data, n_probes=2, n_samples=10, loss_fn=loss_fn))
             #condition_number = estimate_condition_number_hvp(model, data, n_probes=20, n_samples=2000)
+            
 
 
 
@@ -655,6 +677,7 @@ def trial(
         _win_condition,
         weight_decay,
         max(trials * warmup_trial_pct, 1 + random_trials),
+        test_loader,
         **kwargs,
     )
     
@@ -730,7 +753,7 @@ def trial(
     print(
         f"Took: {end_time - start_time} | Attempt: {obj.attempt} | "
         f"{opt.__name__}(lr={winning_params['lr']:.5f}, betas=({1 - winning_params['1mbeta1']:.3f}, {1 - winning_params['1mbeta2']:.4f}), "
-        f"shampoo_beta={1 - winning_params['1mshampoo_beta']:.3f}) | Best Loss: {obj.best_loss} | loss_trajectory: {obj.best_losses} | mean_cond: {mean_cond} | std_err_cond: {std_err_cond}"
+        f"shampoo_beta={1 - winning_params['1mshampoo_beta']:.3f}) | Best Loss: {obj.best_loss} | loss_trajectory: {obj.best_losses} | test_accuracies: {obj.test_accuracies} | mean_cond: {mean_cond} | std_err_cond: {std_err_cond}| memory_usage: {obj.memory_usage} MB"
     )
     loss_trajectory = obj.best_losses
     
@@ -741,6 +764,24 @@ def trial(
         best_model.loss_trajectory = loss_trajectory
         return best_model
     
+def evaluate_model(model, test_loader, device="cuda"):
+    model.eval()
+    correct = 0
+    total = 0
+    with torch.no_grad():
+        for data, target in test_loader:
+            data, target = data.to(device), target.to(device)
+            output = model(data)
+            pred = output.argmax(dim=1, keepdim=True)
+            correct += pred.eq(target.view_as(pred)).sum().item()
+            total += target.size(0)
+    accuracy = 100. * correct / total
+    return accuracy
+
+def get_gpu_memory_usage():
+    """Returns the current GPU memory usage in bytes"""
+    torch.cuda.synchronize()
+    return torch.cuda.max_memory_allocated()
 
 def estimate_condition_number_hvp(model, data_fn, n_probes=20, n_samples=5, loss_fn=torch.nn.functional.binary_cross_entropy_with_logits):
     """Estimate condition number using Hessian-vector products"""
@@ -781,7 +822,7 @@ def estimate_condition_number_hvp(model, data_fn, n_probes=20, n_samples=5, loss
        
     
     eigenvals = np.array(eigenvals)
-    print(eigenvals)
+
     eigenvals = eigenvals[np.isfinite(eigenvals)]  # Remove NaN/inf
     
     if len(eigenvals) == 0:
@@ -794,8 +835,103 @@ def estimate_condition_number_hvp(model, data_fn, n_probes=20, n_samples=5, loss
     min_eig = np.min(abs_eigenvals)
     
     if min_eig <= 0:
-        
+       
         return float('inf')  # Indefinite Hessian
     
     return max_eig / (min_eig+1e-8)
+
+import numpy as np
+import torch
+
+def estimate_minibatch_variance_detailed(model, data_fn, n_samples=100, loss_fn=torch.nn.functional.cross_entropy):
+    """
+    Enhanced minibatch variance estimation that captures dataset-specific effects
+    """
+    model.train()
+    
+    gradient_samples = []
+    loss_samples = []
+    accuracy_samples = []
+    per_class_loss_samples = []
+    
+    for sample_idx in range(n_samples):
+        try:
+            x, y = data_fn()
+            
+            model.zero_grad()
+            output = model(x)
+            loss = loss_fn(output, y)
+            
+            # Compute gradients
+            grads = torch.autograd.grad(loss, model.parameters(), create_graph=False)
+            flat_grad = torch.cat([g.flatten() for g in grads])
+            
+            # Additional metrics
+            with torch.no_grad():
+                pred = output.argmax(dim=1)
+                accuracy = (pred == y).float().mean().item()
+                
+                # Per-class loss variance (key difference between CIFAR-10/100)
+                per_class_losses = []
+                unique_classes = torch.unique(y)
+                for cls in unique_classes:
+                    mask = (y == cls)
+                    if mask.sum() > 0:
+                        cls_loss = loss_fn(output[mask], y[mask], reduction='mean')
+                        per_class_losses.append(cls_loss.item())
+            
+            gradient_samples.append(flat_grad.detach().cpu().numpy())
+            loss_samples.append(loss.item())
+            accuracy_samples.append(accuracy)
+            per_class_loss_samples.append(per_class_losses)
+            
+        except Exception as e:
+            print(f"Error in sample {sample_idx}: {e}")
+            continue
+    
+   
+    
+    # Convert to numpy
+    gradients = np.array(gradient_samples)
+    
+    # Standard gradient variance metrics
+    grad_var = np.var(gradients, axis=0)
+    total_grad_variance = np.mean(grad_var)
+    grad_norm_variance = np.var([np.linalg.norm(g) for g in gradients])
+    
+    # Dataset-specific metrics
+    loss_variance = np.var(loss_samples)
+    accuracy_variance = np.var(accuracy_samples)
+    
+    # Per-class loss variance (should be higher for CIFAR-100)
+    all_per_class_losses = [loss for sample_losses in per_class_loss_samples for loss in sample_losses]
+    per_class_loss_variance = np.var(all_per_class_losses) if all_per_class_losses else 0
+    
+    # Gradient direction variance (cosine similarity between consecutive gradients)
+    cosine_similarities = []
+    for i in range(len(gradients) - 1):
+        g1, g2 = gradients[i], gradients[i + 1]
+        cos_sim = np.dot(g1, g2) / (np.linalg.norm(g1) * np.linalg.norm(g2) + 1e-8)
+        cosine_similarities.append(cos_sim)
+    
+    gradient_direction_variance = np.var(cosine_similarities)
+    
+    print(f"Enhanced minibatch variance metrics:")
+    print(f"  Total gradient variance: {total_grad_variance:.2e}")
+    print(f"  Gradient norm variance: {grad_norm_variance:.2e}")
+    print(f"  Loss variance: {loss_variance:.4f}")
+    print(f"  Accuracy variance: {accuracy_variance:.4f}")
+    print(f"  Per-class loss variance: {per_class_loss_variance:.4f}")
+    print(f"  Gradient direction variance: {gradient_direction_variance:.4f}")
+    
+    return {
+        "gradient_variance": total_grad_variance,
+        "gradient_norm_variance": grad_norm_variance,
+        "loss_variance": loss_variance,
+        "accuracy_variance": accuracy_variance,
+        "per_class_loss_variance": per_class_loss_variance,
+        "gradient_direction_variance": gradient_direction_variance,
+        "mean_loss": np.mean(loss_samples),
+        "mean_accuracy": np.mean(accuracy_samples)
+    }
 

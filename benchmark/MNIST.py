@@ -72,9 +72,19 @@ def main(
         train_dataset, 
         batch_size=batch, 
         shuffle=True,
-        num_workers=1,
+        num_workers=0,
         pin_memory=True
     )
+
+    test_dataset = datasets.MNIST(
+    data_dir, train=False, download=True, transform=transform)
+    test_loader = torch.utils.data.DataLoader(
+        test_dataset,
+        batch_size=batch,
+        shuffle=False,
+        num_workers=0,
+        pin_memory=True
+)
     
     # Create data iterator that matches heavyball format
     data_iter = iter(train_loader)
@@ -109,9 +119,11 @@ def main(
         128,  # sequence parameter (not really applicable for MNIST, but required)
         1,    # some other parameter
         failure_threshold=10,
+        group=938, # set to epoch size
         base_lr=1e-3,
         trials=trials,
-        estimate_condition_number = True
+        estimate_condition_number = False,
+        test_loader=test_loader,
     )
 
 
