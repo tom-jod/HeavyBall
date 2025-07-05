@@ -41,7 +41,7 @@ PROBLEMS = {
     "Ravine": {
         "func": lambda x: (x[0] - 1) ** 2 + (x[1] - 2) ** 100,
         "bounds": [(-3, 5), (-2, 6)],
-        "init": [-1.0, 0.0],
+        "init": [-1.0, 1.0],
         "optimal": [1.0, 2.0],
     },
     "Rosenbrock": {
@@ -102,6 +102,14 @@ OPTIMIZER_BLOCKS = {
                 "func": C.nesterov_ema,
                 "params": {"beta": 0.9},
             },
+            {
+                "id": "basic_ema",
+                "name": "Basic EMA",
+                "icon": "📉",
+                "description": "Simple exponential moving average",
+                "func": C.exp_avg,
+                "params": {"betas": (0.9, 0.999)},
+            },
         ],
     },
     "scaling": {
@@ -154,6 +162,14 @@ OPTIMIZER_BLOCKS = {
                 "func": C.weight_decay_to_init,
                 "params": {"weight_decay_to_init": 0.01},
             },
+            {
+                "id": "l1_weight_decay",
+                "name": "L1 Weight Decay",
+                "icon": "⚡",
+                "description": "L1 regularization to EMA",
+                "func": C.l1_weight_decay_to_ema,
+                "params": {"weight_decay_to_ema": 0.01, "ema_beta": 0.999},
+            },
         ],
     },
     "normalization": {
@@ -176,6 +192,237 @@ OPTIMIZER_BLOCKS = {
                 "func": C.sign,
                 "params": {"graft": True},
             },
+            {
+                "id": "orthogonalize",
+                "name": "Orthogonalize",
+                "icon": "⊥",
+                "description": "Orthogonalize gradient to parameter",
+                "func": C.orthogonalize_grad_to_param,
+                "params": {"eps": 1e-8},
+            },
+            {
+                "id": "orthogonalize_update",
+                "name": "Orthogonalize Update",
+                "icon": "⊗",
+                "description": "Orthogonalize the update itself",
+                "func": C.orthogonalize_update,
+                "params": {},
+            },
+        ],
+    },
+    "advanced_scaling": {
+        "name": "🚀 Advanced Optimizers",
+        "color": COLORS["scaling"],
+        "components": [
+            {
+                "id": "laprop",
+                "name": "Laprop",
+                "icon": "🌊",
+                "description": "Layerwise adaptive propagation",
+                "func": C.scale_by_laprop,
+                "params": {"betas": (0.9, 0.999), "eps": 1e-8},
+            },
+            {
+                "id": "adopt",
+                "name": "ADOPT",
+                "icon": "🎯",
+                "description": "Adaptive gradient methods",
+                "func": C.scale_by_adopt,
+                "params": {"betas": (0.9, 0.9999), "eps": 1e-12},
+            },
+        ],
+    },
+    "preconditioning": {
+        "name": "🔮 Preconditioning",
+        "color": COLORS["gradient"],
+        "components": [
+            {
+                "id": "soap",
+                "name": "SOAP",
+                "icon": "🧼",
+                "description": "Shampoo-based preconditioning",
+                "func": functools.partial(C.scale_by_soap, inner="adam"),
+                "params": {
+                    "shampoo_beta": 0.99,
+                    "max_precond_dim": 10000,
+                    "precondition_1d": False,
+                    "is_preconditioning": True,
+                    "betas": (0.9, 0.999),
+                    "eps": 1e-8,
+                },
+            },
+            {
+                "id": "psgd",
+                "name": "PSGD",
+                "icon": "🎲",
+                "description": "Preconditioned SGD",
+                "func": functools.partial(C.scale_by_psgd, cached=False),
+                "params": {
+                    "precond_lr": 0.1,
+                    "max_size_triangular": 1024,
+                    "precondition_frequency": 10,
+                    "adaptive": False,
+                    "store_triu_as_line": True,
+                    "q_dtype": "float32",
+                    "inverse_free": False,
+                    "precond_init_scale": 1.0,
+                    "precond_init_scale_scale": 0.0,
+                    "precond_init_scale_power": 1.0,
+                    "min_ndim_triangular": 2,
+                    "memory_save_mode": None,
+                    "dampening": 1.0,
+                    "is_preconditioning": True,
+                    "betas": (0.9, 0.999),
+                    "eps": 1e-8,
+                    "ortho_method": "qr",
+                    "lower_bound_beta": 0.999,
+                    "precond_update_power_iterations": 1,
+                },
+            },
+            {
+                "id": "psgd_lra",
+                "name": "PSGD LRA",
+                "icon": "📐",
+                "description": "Low-rank approximation PSGD",
+                "func": C.scale_by_psgd_lra,
+                "params": {
+                    "precond_lr": 0.1,
+                    "rank": 4,
+                    "param_count": 10000,
+                    "precondition_frequency": 10,
+                    "precond_init_scale": 1.0,
+                    "precond_init_scale_scale": 0.0,
+                    "precond_init_scale_power": 1.0,
+                    "q_dtype": "float32",
+                    "is_preconditioning": True,
+                    "eps": 1e-8,
+                    "betas": (0.9, 0.999),
+                },
+            },
+            {
+                "id": "delayed_psgd",
+                "name": "Delayed PSGD",
+                "icon": "⏱️",
+                "description": "PSGD with delayed preconditioner updates",
+                "func": functools.partial(C.scale_by_delayed_psgd, cached=False),
+                "params": {
+                    "precond_lr": 0.1,
+                    "max_size_triangular": 1024,
+                    "precondition_frequency": 10,
+                    "adaptive": False,
+                    "store_triu_as_line": True,
+                    "q_dtype": "float32",
+                    "inverse_free": False,
+                    "precond_init_scale": 1.0,
+                    "precond_init_scale_scale": 0.0,
+                    "precond_init_scale_power": 1.0,
+                    "min_ndim_triangular": 2,
+                    "memory_save_mode": None,
+                    "dampening": 1.0,
+                    "is_preconditioning": True,
+                    "betas": (0.9, 0.999),
+                    "eps": 1e-8,
+                    "ortho_method": "qr",
+                    "lower_bound_beta": 0.999,
+                    "precond_update_power_iterations": 1,
+                },
+            },
+            {
+                "id": "delayed_psgd_lra",
+                "name": "Delayed PSGD LRA",
+                "icon": "⏰",
+                "description": "Delayed low-rank PSGD",
+                "func": C.scale_by_delayed_psgd_lra,
+                "params": {
+                    "precond_lr": 0.1,
+                    "rank": 4,
+                    "param_count": 10000,
+                    "precondition_frequency": 10,
+                    "precond_init_scale": 1.0,
+                    "precond_init_scale_scale": 0.0,
+                    "precond_init_scale_power": 1.0,
+                    "q_dtype": "float32",
+                    "is_preconditioning": True,
+                    "eps": 1e-8,
+                    "betas": (0.9, 0.999),
+                },
+            },
+        ],
+    },
+    "adaptive_lr": {
+        "name": "🎛️ Adaptive Learning Rate",
+        "color": COLORS["regularization"],
+        "components": [
+            {
+                "id": "d_adapt",
+                "name": "D-Adaptation",
+                "icon": "📈",
+                "description": "Automatic learning rate adaptation",
+                "func": C.scale_by_d_adaptation,
+                "params": {"initial_d": 1.0},
+            },
+            {
+                "id": "lr_adapt",
+                "name": "LR Adaptation",
+                "icon": "🔄",
+                "description": "Learning rate adaptation",
+                "func": C.scale_by_lr_adaptation,
+                "params": {"initial_d": 1.0, "lr_lr": 0.1},
+            },
+            {
+                "id": "pointwise_lr_adapt",
+                "name": "Pointwise LR",
+                "icon": "🎚️",
+                "description": "Per-parameter learning rate",
+                "func": C.scale_by_pointwise_lr_adaptation,
+                "params": {"initial_d": 1.0, "lr_lr": 0.1},
+            },
+        ],
+    },
+    "special": {
+        "name": "✨ Special Methods",
+        "color": COLORS["update"],
+        "components": [
+            {
+                "id": "schedule_free",
+                "name": "Schedule-Free",
+                "icon": "🗓️",
+                "description": "No learning rate schedule needed",
+                "func": C.update_by_schedule_free,
+                "params": {"r": 0.0, "weight_lr_power": 2.0},
+            },
+            {
+                "id": "msam",
+                "name": "MSAM",
+                "icon": "🏔️",
+                "description": "Momentum SAM optimizer",
+                "func": C.update_by_msam,
+                "params": {"sam_step_size": 0.05},
+            },
+            {
+                "id": "mup",
+                "name": "μP Approx",
+                "icon": "📏",
+                "description": "Maximal update parametrization",
+                "func": C.mup_approx,
+                "params": {},
+            },
+            {
+                "id": "palm_beta2",
+                "name": "PALM β₂",
+                "icon": "🌴",
+                "description": "Dynamic β₂ scheduling for PALM",
+                "func": C.palm_beta2,
+                "params": {"beta2_scale": 0.8},
+            },
+            {
+                "id": "identity",
+                "name": "Identity",
+                "icon": "🔄",
+                "description": "Pass-through (no operation)",
+                "func": C.identity,
+                "params": {},
+            },
         ],
     },
 }
@@ -188,6 +435,19 @@ RECIPES = {
     "AdamW": ["gradient_input", "adam_scale", "weight_decay"],
     "RMSprop": ["gradient_input", "rmsprop_scale"],
     "Nesterov SGD": ["gradient_input", "nesterov"],
+    "SOAP": ["gradient_input", "soap"],
+    "Laprop": ["gradient_input", "laprop"],
+    "ADOPT": ["gradient_input", "adopt"],
+    "Sign SGD": ["gradient_input", "sign"],
+    "AdamW + Clipping": ["gradient_input", "grad_clip", "adam_scale", "weight_decay"],
+    "D-Adapted Adam": ["gradient_input", "adam_scale", "d_adapt"],
+    "PSGD": ["gradient_input", "psgd"],
+    "Schedule-Free AdamW": ["gradient_input", "adam_scale", "weight_decay", "schedule_free"],
+    "EMA SGD": ["gradient_input", "basic_ema"],
+    "Orthogonal Adam": ["gradient_input", "orthogonalize_update", "adam_scale"],
+    "PALM": ["gradient_input", "palm_beta2", "adam_scale"],
+    "Delayed PSGD": ["gradient_input", "delayed_psgd"],
+    "μP Adam": ["gradient_input", "mup", "adam_scale"],
 }
 
 
@@ -235,7 +495,12 @@ def create_pipeline_display(pipeline):
 def build_optimizer_from_pipeline(pipeline: List[str], params):
     """Build optimizer from pipeline of component IDs"""
     fns = []
-    opt_params = {"lr": 0.001}
+    opt_params = {
+        "lr": 0.001,
+        "step": 1,  # Required for many functions
+        "caution": False,
+        "weight_decay": 0.0,
+    }
 
     for comp_id in pipeline:
         if comp_id == "gradient_input":
@@ -245,11 +510,23 @@ def build_optimizer_from_pipeline(pipeline: List[str], params):
         comp_info, _ = get_component_info(comp_id)
         if comp_info and comp_info["func"] is not None:
             fns.append(comp_info["func"])
-            opt_params.update(comp_info["params"])
+            # Update parameters, handling special cases
+            params_to_add = comp_info["params"].copy()
+
+            # Handle special parameter mappings
+            if "beta" in params_to_add and "betas" not in params_to_add:
+                # Convert single beta to betas tuple for functions expecting it
+                beta = params_to_add.pop("beta")
+                if "betas" in opt_params:
+                    opt_params["betas"] = (beta, opt_params["betas"][1])
+                else:
+                    opt_params["betas"] = (beta, 0.999)
+
+            opt_params.update(params_to_add)
 
     if not fns:
         # Default to simple gradient descent
-        return C.BaseOpt(params, opt_params, fns=[])
+        return C.BaseOpt(params, opt_params, fns=[C.identity])
 
     return C.BaseOpt(params, opt_params, fns=fns)
 
