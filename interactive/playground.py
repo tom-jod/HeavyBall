@@ -730,7 +730,10 @@ def build_optimizer_from_pipeline(pipeline: List[str], params, kwargs):
                 else:
                     opt_params["betas"] = (beta, 0.999)
 
-            opt_params.update(params_to_add)
+            # First add component defaults, then override with user-provided kwargs
+            for key, value in params_to_add.items():
+                if key not in kwargs:  # Only use default if not provided by user
+                    opt_params[key] = value
 
     if not fns:
         # Default to simple gradient descent
@@ -1364,6 +1367,55 @@ def create_app():
                     beta2_slider = gr.Slider(minimum=0.0, maximum=0.999, value=0.999, step=0.001, label="Adam β₂")
                     eps_slider = gr.Slider(minimum=1e-8, maximum=1e-4, value=1e-8, step=1e-8, label="Epsilon")
 
+                    # Weight decay parameters
+                    weight_decay_slider = gr.Slider(
+                        minimum=0.0, maximum=0.1, value=0.01, step=0.001, label="Weight Decay"
+                    )
+                    ema_beta_slider = gr.Slider(
+                        minimum=0.9, maximum=0.999, value=0.999, step=0.001, label="EMA β (for weight decay)"
+                    )
+
+                    # Gradient clipping
+                    max_norm_slider = gr.Slider(
+                        minimum=0.1, maximum=10.0, value=1.0, step=0.1, label="Gradient Clip Norm"
+                    )
+
+                    # Preconditioning parameters
+                    shampoo_beta_slider = gr.Slider(
+                        minimum=0.9, maximum=0.999, value=0.99, step=0.001, label="Shampoo β"
+                    )
+                    precond_lr_slider = gr.Slider(
+                        minimum=0.01, maximum=1.0, value=0.1, step=0.01, label="Preconditioner LR"
+                    )
+                    precondition_frequency_slider = gr.Slider(
+                        minimum=1, maximum=100, value=10, step=1, label="Precondition Frequency"
+                    )
+                    rank_slider = gr.Slider(minimum=1, maximum=32, value=4, step=1, label="Low-rank Approximation Rank")
+                    param_count_slider = gr.Slider(
+                        minimum=1000, maximum=100000, value=10000, step=1000, label="Param Count (PSGD LRA)"
+                    )
+
+                    # Adaptive LR parameters
+                    initial_d_slider = gr.Slider(
+                        minimum=0.1, maximum=10.0, value=1.0, step=0.1, label="Initial D (D-adaptation)"
+                    )
+                    lr_lr_slider = gr.Slider(minimum=0.01, maximum=1.0, value=0.1, step=0.01, label="Learning Rate LR")
+
+                    # Special method parameters
+                    r_slider = gr.Slider(minimum=0.0, maximum=1.0, value=0.0, step=0.1, label="Schedule-Free r")
+                    weight_lr_power_slider = gr.Slider(
+                        minimum=0.0, maximum=4.0, value=2.0, step=0.1, label="Weight LR Power"
+                    )
+                    sam_step_size_slider = gr.Slider(
+                        minimum=0.01, maximum=0.5, value=0.05, step=0.01, label="SAM Step Size"
+                    )
+                    beta2_scale_slider = gr.Slider(
+                        minimum=0.5, maximum=1.0, value=0.8, step=0.01, label="PALM β₂ Scale"
+                    )
+
+                    # Sign SGD parameters
+                    graft_checkbox = gr.Checkbox(value=True, label="Graft (Sign SGD)")
+
                 gr.Markdown("### 📊 Metrics")
 
                 final_loss_display = gr.Textbox(label="Final Loss", value="-")
@@ -1405,14 +1457,60 @@ def create_app():
                 return new_pipeline
             return pipeline
 
-        def run_optimization_handler(problem, pipeline, steps, lr, beta, beta2, eps):
+        def run_optimization_handler(
+            problem,
+            pipeline,
+            steps,
+            lr,
+            beta,
+            beta2,
+            eps,
+            weight_decay,
+            ema_beta,
+            max_norm,
+            shampoo_beta,
+            precond_lr,
+            precondition_frequency,
+            rank,
+            param_count,
+            initial_d,
+            lr_lr,
+            r,
+            weight_lr_power,
+            sam_step_size,
+            beta2_scale,
+            graft,
+        ):
             """Run optimization with current pipeline"""
             if not pipeline or len(pipeline) == 1:
                 pipeline = ["gradient_input"]
 
-            # Run optimization
+            # Run optimization with all parameters
             fig, metrics = run_optimization(
-                problem, pipeline, steps, lr=lr, beta=beta, betas=(beta, beta2), beta2=beta2, eps=eps
+                problem,
+                pipeline,
+                steps,
+                lr=lr,
+                beta=beta,
+                betas=(beta, beta2),
+                beta2=beta2,
+                eps=eps,
+                weight_decay_to_ema=weight_decay,
+                weight_decay_to_init=weight_decay,
+                ema_beta=ema_beta,
+                max_norm=max_norm,
+                shampoo_beta=shampoo_beta,
+                precond_lr=precond_lr,
+                precondition_frequency=precondition_frequency,
+                rank=rank,
+                param_count=param_count,
+                initial_d=initial_d,
+                lr_lr=lr_lr,
+                r=r,
+                weight_lr_power=weight_lr_power,
+                sam_step_size=sam_step_size,
+                beta2_scale=beta2_scale,
+                graft=graft,
             )
 
             return fig, f"{metrics['final_loss']:.2e}", str(metrics["steps_to_converge"])
@@ -1433,7 +1531,30 @@ def create_app():
         # Run optimization
         run_btn.click(
             fn=run_optimization_handler,
-            inputs=[problem_select, pipeline_state, steps_slider, lr_slider, beta_slider, beta2_slider, eps_slider],
+            inputs=[
+                problem_select,
+                pipeline_state,
+                steps_slider,
+                lr_slider,
+                beta_slider,
+                beta2_slider,
+                eps_slider,
+                weight_decay_slider,
+                ema_beta_slider,
+                max_norm_slider,
+                shampoo_beta_slider,
+                precond_lr_slider,
+                precondition_frequency_slider,
+                rank_slider,
+                param_count_slider,
+                initial_d_slider,
+                lr_lr_slider,
+                r_slider,
+                weight_lr_power_slider,
+                sam_step_size_slider,
+                beta2_scale_slider,
+                graft_checkbox,
+            ],
             outputs=[viz_plot, final_loss_display, convergence_display],
         )
 
