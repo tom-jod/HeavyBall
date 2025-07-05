@@ -544,10 +544,11 @@ def run_optimization(problem_name: str, pipeline: List[str], steps: int, lr: flo
     # Build optimizer from pipeline
     optimizer = build_optimizer_from_pipeline(pipeline, params)
 
-    # Override learning rate
+    # Override learning rate (convert from log scale)
+    actual_lr = 10**lr
     if hasattr(optimizer, "param_groups"):
         for group in optimizer.param_groups:
-            group["lr"] = lr
+            group["lr"] = actual_lr
             # Update other params from kwargs
             for key, value in kwargs.items():
                 if key in group:
@@ -893,7 +894,7 @@ def create_app():
 
                 problem_select = gr.Dropdown(choices=list(PROBLEMS.keys()), value="Rosenbrock", label="Problem")
 
-                lr_slider = gr.Slider(minimum=0.0001, maximum=0.1, value=0.01, step=0.0001, label="Learning Rate")
+                lr_slider = gr.Slider(minimum=-4, maximum=-1, value=-2, step=0.1, label="Learning Rate (10^x)")
 
                 steps_slider = gr.Slider(minimum=10, maximum=500, value=200, step=10, label="Steps")
 
@@ -999,7 +1000,7 @@ def create_app():
         app.load(
             fn=lambda: (
                 create_pipeline_display(["gradient_input"]),
-                run_optimization("Rosenbrock", ["gradient_input", "adam_scale"], 200, 0.01)[0],
+                run_optimization("Rosenbrock", ["gradient_input", "adam_scale"], 200, -2)[0],
             ),
             outputs=[pipeline_display, viz_plot],
         )
