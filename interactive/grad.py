@@ -224,10 +224,8 @@ CHAINABLE_FUNCTIONS = {
 # Predefined optimizer recipes
 OPTIMIZER_RECIPES = {
     "SGD with Momentum": [{"name": "heavyball_momentum", "params": {"beta": 0.9}}],
-    "Adam": [{"name": "scale_by_adam", "params": {"betas": (0.9, 0.999), "eps": 1e-8}}],
     "AdamW": [
         {"name": "scale_by_adam", "params": {"betas": (0.9, 0.999), "eps": 1e-8}},
-        {"name": "weight_decay_to_ema", "params": {"weight_decay_to_ema": 0.01, "ema_beta": 0.999}},
     ],
     "RMSprop": [{"name": "scale_by_exp_avg_sq", "params": {"beta2": 0.999, "eps": 1e-8}}],
     "Nesterov SGD": [{"name": "nesterov_momentum", "params": {"beta": 0.9}}],
@@ -336,27 +334,31 @@ def run_optimization(
             x = torch.nn.Parameter(torch.tensor([init_x, init_y], dtype=torch.float32))
         else:
             x = torch.nn.Parameter(torch.tensor(problem_info["init"], dtype=torch.float32))
-        x = x.to(device)
+        x.data = x.data.to(device)
         params = [x]
-        trajectory = [x.detach().cpu().numpy().copy()]
+        with torch.no_grad():
+            trajectory = [x.detach().clone()]
         losses = []
 
         # Build custom optimizer
         optimizer = build_optimizer_from_pipeline(params, pipeline_data)
 
         # Run optimization
-        for i in range(steps):
-            optimizer.zero_grad()
+        def _closure():
             loss = objective_fn(x)
             loss.backward()
-            optimizer.step()
+            return loss
+
+        for i in range(steps):
+            loss = optimizer.step(_closure)
 
             with torch.no_grad():
-                trajectory.append(x.detach().copy())
+                trajectory.append(x.detach().clone())
                 losses.append(loss)
 
-        trajectory = torch.stack(trajectory, dim=0).cpu().numpy()
-        losses = torch.stack(losses).reshape(-1).cpu().numpy()
+        with torch.no_grad():
+            trajectory = torch.stack(trajectory, dim=0).cpu().numpy()
+            losses = torch.stack(losses).reshape(-1).cpu().numpy()
 
         # Generate contour plot
         trajectory = np.array(trajectory)
@@ -1261,6 +1263,9 @@ try {
             code += ')';
 
             codePreview.textContent = code;
+
+            // Dispatch a custom event to notify about pipeline changes
+            window.dispatchEvent(new CustomEvent('pipelineChanged', { detail: pipelineData }));
         }
     }
 
@@ -1427,6 +1432,11 @@ with gr.Blocks(title="HeavyBall Chainable Optimizer Builder", theme=gr.themes.Ba
 
             run_button = gr.Button("🚀 Run Optimization", variant="primary", size="lg")
 
+            # Auto-retrain status indicator
+            auto_retrain_status = gr.HTML(
+                '<div id="auto-retrain-status" style="text-align: center; padding: 8px; border-radius: 8px; background: #2a2a2a; color: #888; font-size: 12px; margin-top: 8px;">Auto-retrain: Ready</div>'
+            )
+
             gr.Markdown("""
             ### 💡 Tips
             - Drag components from the left palette
@@ -1578,6 +1588,157 @@ with gr.Blocks(title="HeavyBall Chainable Optimizer Builder", theme=gr.themes.Ba
         js=run_optimization_js,
     )
 
+    # Add JavaScript for auto-retrain functionality
+    auto_retrain_js = """
+    function setupAutoRetrain() {
+        console.log('Setting up auto-retrain...');
+
+        let retrainTimeout = null;
+        let lastPipelineState = null;
+        let isFirstRun = true;
+
+        // Function to check if pipeline has changed
+        function hasPipelineChanged() {
+            if (!window.nodeEditor) return false;
+            const currentState = JSON.stringify(window.nodeEditor.exportPipeline());
+            const changed = currentState !== lastPipelineState;
+            if (changed) {
+                lastPipelineState = currentState;
+            }
+            return changed;
+        }
+
+        // Function to update status indicator
+        function updateStatus(message, color = '#888') {
+            const statusElement = document.getElementById('auto-retrain-status');
+            if (statusElement) {
+                statusElement.textContent = message;
+                statusElement.style.color = color;
+            }
+        }
+
+        // Function to trigger retrain
+        function triggerRetrain() {
+            console.log('Auto-retrain triggered');
+            updateStatus('Auto-retrain: Running...', '#4FC3F7');
+
+            // Find the run button by looking for the button with the rocket emoji
+            const buttons = document.querySelectorAll('button');
+            let runButton = null;
+
+            for (const button of buttons) {
+                if (button.textContent.includes('🚀') && button.textContent.includes('Run Optimization')) {
+                    runButton = button;
+                    break;
+                }
+            }
+
+            if (runButton) {
+                console.log('Clicking run button...');
+                runButton.click();
+
+                // Reset status after a delay
+                setTimeout(() => {
+                    updateStatus('Auto-retrain: Ready');
+                }, 1000);
+            } else {
+                console.error('Run button not found');
+                updateStatus('Auto-retrain: Error - Run button not found', '#ff6b6b');
+            }
+        }
+
+        // Function to schedule retrain
+        function scheduleRetrain() {
+            // Skip the first run to avoid immediate retrain on load
+            if (isFirstRun) {
+                isFirstRun = false;
+                hasPipelineChanged(); // Initialize the baseline
+                return;
+            }
+
+            // Clear existing timeout
+            if (retrainTimeout) {
+                clearTimeout(retrainTimeout);
+            }
+
+            // Check if pipeline has changed
+            if (hasPipelineChanged()) {
+                console.log('Pipeline changed, scheduling retrain in 2 seconds...');
+                updateStatus('Auto-retrain: Scheduled (2s)', '#FFA726');
+
+                retrainTimeout = setTimeout(triggerRetrain, 2000);
+            }
+        }
+
+        // Monitor for changes
+        if (window.nodeEditor) {
+            // Listen for custom pipeline change events
+            window.addEventListener('pipelineChanged', (event) => {
+                console.log('Pipeline changed event received');
+                scheduleRetrain();
+            });
+
+            // Override the loadRecipe method to detect changes
+            const originalLoadRecipe = window.nodeEditor.loadRecipe;
+            window.nodeEditor.loadRecipe = function(...args) {
+                const result = originalLoadRecipe.call(this, ...args);
+                setTimeout(() => {
+                    // When a recipe is loaded, always trigger retrain
+                    // Don't update baseline first, as that would prevent change detection
+                    console.log('Recipe loaded, forcing retrain...');
+                    updateStatus('Auto-retrain: Recipe loaded, retraining...', '#4FC3F7');
+                    triggerRetrain();
+                    // Update baseline after triggering retrain
+                    setTimeout(() => {
+                        hasPipelineChanged(); // Update the baseline for future changes
+                    }, 500);
+                }, 100);
+                return result;
+            };
+
+            // Monitor canvas for node deletions (right-click or delete key)
+            const canvas = document.getElementById('canvas');
+            if (canvas) {
+                canvas.addEventListener('contextmenu', (e) => {
+                    if (e.target.closest('.node')) {
+                        setTimeout(scheduleRetrain, 100);
+                    }
+                });
+
+                canvas.addEventListener('keydown', (e) => {
+                    if (e.key === 'Delete' || e.key === 'Backspace') {
+                        setTimeout(scheduleRetrain, 100);
+                    }
+                });
+            }
+
+            // Also monitor problem selection and slider changes
+            const problemDropdown = document.querySelector('select[aria-label="Optimization Problem"]');
+            const stepsSlider = document.querySelector('input[aria-label="Number of Steps"]');
+            const initXInput = document.querySelector('input[aria-label="Initial X"]');
+            const initYInput = document.querySelector('input[aria-label="Initial Y"]');
+
+            [problemDropdown, stepsSlider, initXInput, initYInput].forEach(element => {
+                if (element) {
+                    element.addEventListener('change', () => {
+                        console.log('Parameter changed, scheduling retrain...');
+                        scheduleRetrain();
+                    });
+                }
+            });
+
+            console.log('Auto-retrain setup complete');
+
+            // Initialize the baseline state
+            hasPipelineChanged();
+            updateStatus('Auto-retrain: Enabled');
+        } else {
+            console.log('NodeEditor not found, retrying auto-retrain setup...');
+            setTimeout(setupAutoRetrain, 1000);
+        }
+    }
+    """
+
     # Add load event to ensure proper initialization
     app.load(
         fn=lambda: None,
@@ -1623,6 +1784,12 @@ with gr.Blocks(title="HeavyBall Chainable Optimizer Builder", theme=gr.themes.Ba
                     if (typeof initializeNodeEditor === 'function') {{
                         console.log('Calling initializeNodeEditor...');
                         initializeNodeEditor();
+
+                        // Set up auto-retrain after node editor is initialized
+                        setTimeout(() => {{
+                            {auto_retrain_js}
+                            setupAutoRetrain();
+                        }}, 1000);
                     }} else {{
                         console.error('initializeNodeEditor function not found');
                     }}
