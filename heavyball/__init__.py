@@ -66,7 +66,7 @@ class SGD(C.BaseOpt):
         if kwargs:
             utils.warn_once(f"Working with uncaptured keyword arguments: {kwargs}")
 
-        super().__init__(params, defaults, foreach, gradient_clipping, update_clipping, False, C.heavyball_momentum)
+        super().__init__(params, defaults, foreach, gradient_clipping, update_clipping, fns=(C.heavyball_momentum,))
 
 
 class ForeachAdamW(C.BaseOpt):
@@ -97,7 +97,7 @@ class ForeachAdamW(C.BaseOpt):
         if kwargs:
             utils.warn_once(f"Working with uncaptured keyword arguments: {kwargs}")
 
-        super().__init__(params, defaults, foreach, gradient_clipping, update_clipping, palm, C.update_by_adam)
+        super().__init__(params, defaults, foreach, gradient_clipping, update_clipping, palm, fns=(C.update_by_adam,))
 
 
 class ForeachAdamC(C.BaseOpt):
@@ -135,7 +135,7 @@ class ForeachAdamC(C.BaseOpt):
         if kwargs:
             utils.warn_once(f"Working with uncaptured keyword arguments: {kwargs}")
 
-        super().__init__(params, defaults, foreach, gradient_clipping, update_clipping, palm, C.update_by_adamc)
+        super().__init__(params, defaults, foreach, gradient_clipping, update_clipping, palm, fns=(C.update_by_adamc,))
 
 
 class ForeachRMSprop(C.BaseOpt):
@@ -179,7 +179,7 @@ class ForeachRMSprop(C.BaseOpt):
             gradient_clipping,
             update_clipping,
             palm,
-            C.scale_by_exp_avg_sq,
+            fns=(C.scale_by_exp_avg_sq,),
         )
 
 
@@ -220,8 +220,7 @@ class ForeachSFAdamW(C.ScheduleFree):
             gradient_clipping,
             update_clipping,
             palm,
-            C.scale_by_exp_avg_sq,
-            C.update_by_schedule_free,
+            fns=(C.scale_by_exp_avg_sq, C.update_by_schedule_free),
         )
 
 
@@ -263,8 +262,7 @@ class MSAMLaProp(C.MSAM):
             gradient_clipping,
             update_clipping,
             palm,
-            C.scale_by_exp_avg_sq,
-            C.update_by_msam,
+            fns=(C.scale_by_exp_avg_sq, C.update_by_msam),
         )
 
 
@@ -300,7 +298,7 @@ class ForeachADOPT(C.BaseOpt):
         if kwargs:
             utils.warn_once(f"Working with uncaptured keyword arguments: {kwargs}")
 
-        super().__init__(params, defaults, foreach, gradient_clipping, update_clipping, palm, C.update_by_adopt)
+        super().__init__(params, defaults, foreach, gradient_clipping, update_clipping, palm, fns=(C.update_by_adopt,))
 
 
 class ForeachMuon(C.BaseOpt):
@@ -339,8 +337,7 @@ class ForeachMuon(C.BaseOpt):
             gradient_clipping,
             update_clipping,
             palm,
-            C.nesterov_ema if nesterov else C.exp_avg,
-            C.orthogonalize_update,
+            fns=(C.nesterov_ema if nesterov else C.exp_avg, C.orthogonalize_update),
         )
 
 
@@ -372,7 +369,7 @@ class ForeachLaProp(C.BaseOpt):
         if kwargs:
             utils.warn_once(f"Working with uncaptured keyword arguments: {kwargs}")
 
-        super().__init__(params, defaults, foreach, gradient_clipping, update_clipping, palm, C.update_by_laprop)
+        super().__init__(params, defaults, foreach, gradient_clipping, update_clipping, palm, fns=(C.update_by_laprop,))
 
 
 class MuonLaProp(C.BaseOpt):
@@ -410,8 +407,7 @@ class MuonLaProp(C.BaseOpt):
             gradient_clipping,
             update_clipping,
             palm,
-            C.scale_by_laprop,
-            C.orthogonalize_update,
+            fns=(C.scale_by_laprop, C.orthogonalize_update),
         )
 
 
@@ -483,7 +479,7 @@ class ForeachSOAP(C.BaseOpt):
             gradient_clipping,
             update_clipping,
             palm,  #
-            C.scale_by_soap,
+            fns=(C.scale_by_soap,),
         )
 
 
@@ -522,8 +518,7 @@ class ForeachSignLaProp(C.BaseOpt):
             gradient_clipping,
             update_clipping,
             palm,
-            C.scale_by_laprop,
-            C.sign,
+            fns=(C.scale_by_laprop, C.sign),
         )
 
 
@@ -594,7 +589,7 @@ class ForeachSOLP(C.BaseOpt):
             gradient_clipping,
             update_clipping,
             palm,  #
-            functools.partial(C.scale_by_soap, inner="laprop"),
+            fns=(functools.partial(C.scale_by_soap, inner="laprop"),),
         )
 
 
@@ -646,8 +641,7 @@ class OrthoLaProp(C.BaseOpt):
             gradient_clipping,
             update_clipping,
             palm,
-            C.orthogonalize_grad_to_param,
-            C.scale_by_laprop,
+            fns=(C.orthogonalize_grad_to_param, C.scale_by_laprop),
         )
 
 
@@ -685,8 +679,7 @@ class LaPropOrtho(C.BaseOpt):
             gradient_clipping,
             update_clipping,
             palm,
-            C.scale_by_laprop,
-            C.orthogonalize_grad_to_param,
+            fns=(C.scale_by_laprop, C.orthogonalize_grad_to_param),
         )
 
 
@@ -695,13 +688,6 @@ class ForeachPSGDKron(C.BaseOpt):
     Originally from Evan Walters and Omead Pooladzandi, 2024
     Modified under Creative Commons Attribution 4.0 International
     Source available at https://github.com/evanatyourservice/kron_torch/blob/97a2b5ee8a1a4c29e4780bbf6c521e545189eff9/kron_torch/kron.py
-
-    Note on default parameters (Issue #58):
-    - Defaults have been changed in 2.0.0 values for backward compatibility
-    - For improved numerical stability, consider using:
-      - lower_bound_beta=0.9 (adds adaptive lower bound to preconditioner)
-      - dampening=2**-13 (adds small dampening for stability)
-      - precond_update_power_iterations=2 (more accurate spectral norm estimation)
     """
 
     delayed: bool = False
@@ -740,12 +726,12 @@ class ForeachPSGDKron(C.BaseOpt):
         adaptive: bool = False,
         ortho_method: Optional[str] = None,  # If None, no orthogonalization
         precond_grad_accum: bool = False,
-        lower_bound_beta: float = 0.0,  # Set to 0.0 for backward compatibility, use 0.9 for improved stability
+        lower_bound_beta: float = 0.9,  # 0.0 recovers pre-2.0.0 PSGD
         inverse_free: bool = C.use_default,
-        dampening: float = 0.0,  # Set to 0.0 for backward compatibility, use 2**-13 for improved stability
-        precond_update_power_iterations: int = 1,  # Set to 1 for backward compatibility, use 2 for better convergence
+        dampening: float = 2**-13,
+        precond_update_power_iterations: int = 2,
         # expert parameters
-        precond_init_scale=1.0,
+        precond_init_scale=None,
         precond_init_scale_scale: float = 1,
         precond_init_scale_power: Optional[float] = None,
         precond_lr: float = 0.1,
@@ -776,8 +762,10 @@ class ForeachPSGDKron(C.BaseOpt):
             gradient_clipping,
             update_clipping,
             False,  #
-            *(C.exp_avg,) * exp_avg_input,  #
-            functools.partial(C.scale_by_delayed_psgd if delayed else C.scale_by_psgd, cached=cached),
+            fns=(
+                *(C.exp_avg,) * exp_avg_input,
+                functools.partial(C.scale_by_delayed_psgd if delayed else C.scale_by_psgd, cached=cached),
+            ),
         )
 
 
@@ -844,7 +832,7 @@ class ForeachPSGDLRA(C.BaseOpt):
         update_clipping: C.str_or_fn = C.use_default,
         eps: float = 1e-8,  #
         precond_grad_accum: bool = False,  # expert parameters
-        precond_init_scale=1.0,
+        precond_init_scale=None,
         precond_init_scale_scale: float = 1,
         precond_init_scale_power: Optional[float] = None,
         precond_lr: float = 0.1,
@@ -881,8 +869,7 @@ class ForeachPSGDLRA(C.BaseOpt):
             gradient_clipping,
             update_clipping,
             False,  #
-            *(C.exp_avg,) * exp_avg_input,  #
-            C.scale_by_delayed_psgd_lra if delayed else C.scale_by_psgd_lra,
+            fns=(*(C.exp_avg,) * exp_avg_input, C.scale_by_delayed_psgd_lra if delayed else C.scale_by_psgd_lra),
         )
 
 
