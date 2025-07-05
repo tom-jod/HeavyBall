@@ -23,8 +23,7 @@ COLORS = {
     "negative": "#f44336",  # Red
     "text": "#212121",
     "text_light": "#757575",
-    "border": "#e0e0e0",
-    # Component categories
+    "border": "#e0e0e0",  # Component categories
     "gradient": "#9c27b0",  # Purple - Gradient input
     "momentum": "#2196f3",  # Blue - Momentum transforms
     "scaling": "#ff5722",  # Deep Orange - Scaling transforms
@@ -96,16 +95,18 @@ class Function2D(Problem):
 class MLPProblem(Problem):
     """Train a small MLP to predict |x|"""
 
+    def _data(self, n_samples: int = 128, seed: int = 42) -> Tuple[torch.Tensor, torch.Tensor]:
+        raise NotImplementedError
+
     def __init__(self, hidden_size=4, n_samples=128):
-        # Create model
-        self.model = nn.Sequential(nn.Linear(1, hidden_size), nn.ReLU(), nn.Linear(hidden_size, 1))
-
-        # Generate training data
-        torch.manual_seed(42)
-        self.x_data = torch.rand(n_samples, 1) * 4 - 2  # [-2, 2]
-        self.y_data = torch.abs(self.x_data)
-
-        # Count parameters
+        self.model = nn.Sequential(
+            nn.Linear(1, hidden_size),
+            nn.ReLU(),
+            nn.Linear(hidden_size, hidden_size),
+            nn.ReLU(),
+            nn.Linear(hidden_size, 1),
+        )
+        self.x_data, self.y_data = self._data(n_samples)
         self._dim = sum(p.numel() for p in self.model.parameters())
 
     @property
@@ -123,11 +124,26 @@ class MLPProblem(Problem):
         return self._flatten_params()
 
     def loss(self, x: torch.Tensor) -> torch.Tensor:
-        # Set model parameters from flat vector
-        self._unflatten_params(x)
+        # Instead of modifying model parameters, we'll use functional approach
+        # Split x into weight and bias tensors
+        idx = 0
+        params = []
+        for p in self.model.parameters():
+            numel = p.numel()
+            param = x[idx : idx + numel].view(p.shape)
+            params.append(param)
+            idx += numel
 
-        # Forward pass
-        pred = self.model(self.x_data)
+        # Manually compute forward pass using the parameters from x
+        # For a 2-layer MLP: Linear -> ReLU -> Linear
+        w1, b1, w2, b2, w3, b3 = params
+
+        h = torch.nn.functional.linear(self.x_data, w1, b1)
+        h = torch.nn.functional.relu(h)
+        pred = torch.nn.functional.linear(h, w2, b2)
+        h = torch.nn.functional.relu(h)
+        pred = torch.nn.functional.linear(h, w3, b3)
+
         return nn.functional.mse_loss(pred, self.y_data)
 
     def _flatten_params(self) -> np.ndarray:
@@ -135,13 +151,30 @@ class MLPProblem(Problem):
         return torch.cat([p.data.view(-1) for p in self.model.parameters()]).numpy()
 
     def _unflatten_params(self, x: torch.Tensor):
-        """Set model parameters from flat vector"""
+        """Set model parameters from flat vector (used for evaluation, not training)"""
         idx = 0
         for p in self.model.parameters():
             numel = p.numel()
-            # Detach to avoid gradient tracking issues, but keep original requires_grad
-            p.data = x[idx : idx + numel].view(p.shape).detach()
+            p.data.copy_(x[idx : idx + numel].view(p.shape))
             idx += numel
+
+
+class AbsMLP(MLPProblem):
+    def _data(self, n_samples: int = 128, seed: int = 42):
+        x = torch.rand((n_samples, 1)) * 4 - 2
+        return x, x.abs()
+
+
+class SineMLP(MLPProblem):
+    def _data(self, n_samples: int = 128, seed: int = 42):
+        x = torch.rand((n_samples, 1)) * 4 - 2
+        return x, x.sin()
+
+
+class ExpMLP(MLPProblem):
+    def _data(self, n_samples: int = 128, seed: int = 42):
+        x = torch.rand((n_samples, 1)) * 4 - 2
+        return x, x.exp()
 
 
 class QuadraticBowl(Problem):
@@ -191,8 +224,7 @@ class StyblinskiTang(Problem):
 
 
 # Test functions
-PROBLEMS = {
-    # 2D Problems
+PROBLEMS = {  # 2D Problems
     "Simple Bowl (2D)": Function2D(
         func=lambda x: (x[0] - 1) ** 2 + (x[1] - 2) ** 2,
         bounds=[(-3, 5), (-2, 6)],
@@ -224,9 +256,10 @@ PROBLEMS = {
         bounds=[(-4.5, 4.5), (-4.5, 4.5)],
         init=[1.0, 1.0],
         optimal=[3.0, 0.5],
-    ),
-    # High-dimensional Problems
-    "MLP |x| (13D)": MLPProblem(hidden_size=10, n_samples=100),
+    ),  # High-dimensional Problems
+    "MLP abs(x) (13D)": AbsMLP(hidden_size=4, n_samples=128),
+    "MLP sin(x) (13D)": SineMLP(hidden_size=4, n_samples=128),
+    "MLP exp(x) (13D)": ExpMLP(hidden_size=4, n_samples=128),
     "Quadratic Bowl (10D)": QuadraticBowl(dim=10),
     "Styblinski-Tang (4D)": StyblinskiTang(dim=4),
     "Styblinski-Tang (8D)": StyblinskiTang(dim=8),
@@ -736,6 +769,7 @@ def run_optimization(problem_name: str, pipeline: List[str], steps: int, **kwarg
             return loss
 
         loss = optimizer.step(closure)
+        optimizer.zero_grad()
         losses.append(loss.item())
 
     trajectory = np.array(trajectory)
@@ -973,7 +1007,7 @@ def create_2d_visualization(problem_name, trajectory, losses, gradients, pipelin
 
 def create_highdim_visualization(problem_name, trajectory, losses, gradients, pipeline):
     """Create visualization for high-dimensional problems using PCA"""
-    # problem = PROBLEMS[problem_name]
+    problem = PROBLEMS[problem_name]
 
     # Create subplots
     fig = make_subplots(
@@ -982,7 +1016,7 @@ def create_highdim_visualization(problem_name, trajectory, losses, gradients, pi
         subplot_titles=("PCA Trajectory Projection", "Pipeline Architecture", "Loss Curve", "Learning Dynamics"),
         column_widths=[0.6, 0.4],
         row_heights=[0.6, 0.4],
-        specs=[[{"type": "scatter"}, {"type": "scatter"}], [{"type": "scatter"}, {"type": "scatter"}]],
+        specs=[[{"type": "contour"}, {"type": "scatter"}], [{"type": "scatter"}, {"type": "scatter"}]],
     )
 
     # 1. PCA projection of trajectory
@@ -992,7 +1026,65 @@ def create_highdim_visualization(problem_name, trajectory, losses, gradients, pi
         pca = PCA(n_components=min(2, trajectory_array.shape[1]))
         trajectory_2d = pca.fit_transform(trajectory_array)
 
-        # Create trajectory plot
+        # Create loss landscape in PCA space
+        # Determine bounds based on trajectory
+        margin = 0.2
+        x_min, x_max = trajectory_2d[:, 0].min(), trajectory_2d[:, 0].max()
+        x_range = x_max - x_min
+        x_min -= margin * x_range
+        x_max += margin * x_range
+
+        if trajectory_2d.shape[1] > 1:
+            y_min, y_max = trajectory_2d[:, 1].min(), trajectory_2d[:, 1].max()
+            y_range = y_max - y_min
+            y_min -= margin * y_range
+            y_max += margin * y_range
+        else:
+            y_min, y_max = -1, 1
+
+        # Create grid in PCA space
+        n_points = 50
+        x_grid = np.linspace(x_min, x_max, n_points)
+        y_grid = np.linspace(y_min, y_max, n_points)
+        X_grid, Y_grid = np.meshgrid(x_grid, y_grid)
+
+        # Compute losses on grid
+        Z_grid = np.zeros_like(X_grid)
+        mean_trajectory = pca.mean_
+
+        for i in range(n_points):
+            for j in range(n_points):
+                # Map 2D point back to high-dimensional space
+                pca_coords = np.array([X_grid[i, j], Y_grid[i, j]])
+                if trajectory_2d.shape[1] == 1:
+                    pca_coords = pca_coords[:1]  # Use only first coordinate
+
+                # Reconstruct high-dimensional point
+                high_dim_point = mean_trajectory + pca_coords @ pca.components_[: len(pca_coords)]
+
+                # Evaluate loss
+                x_tensor = torch.tensor(high_dim_point, dtype=torch.float32)
+                Z_grid[i, j] = problem.loss(x_tensor).item()
+
+        # Add contour plot
+        fig.add_trace(
+            go.Contour(
+                x=x_grid,
+                y=y_grid,
+                z=Z_grid,
+                colorscale=[[0, "#e3f2fd"], [0.5, "#2196f3"], [1, "#0d47a1"]],
+                showscale=False,
+                contours=dict(
+                    start=Z_grid.min(),
+                    end=Z_grid.max(),
+                    size=(Z_grid.max() - Z_grid.min()) / 15,
+                ),
+            ),
+            row=1,
+            col=1,
+        )
+
+        # Add trajectory on top of contour
         colors = np.linspace(0, 1, len(trajectory_2d))
 
         for i in range(1, len(trajectory_2d)):
