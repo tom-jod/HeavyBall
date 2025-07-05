@@ -1,11 +1,14 @@
 import functools
-from typing import Any, Dict, List, Tuple
+from abc import ABC, abstractmethod
+from typing import Any, Dict, List, Optional, Tuple
 
 import gradio as gr
 import numpy as np
 import plotly.graph_objects as go
 import torch
+import torch.nn as nn
 from plotly.subplots import make_subplots
+from sklearn.decomposition import PCA
 
 import heavyball.chainable as C
 import heavyball.utils
@@ -30,32 +33,203 @@ COLORS = {
     "update": "#4caf50",  # Green - Update rules
 }
 
+
+# Problem base class
+class Problem(ABC):
+    """Base class for optimization problems"""
+
+    @property
+    @abstractmethod
+    def dim(self) -> int:
+        """Dimension of the parameter space"""
+        pass
+
+    @abstractmethod
+    def init(self) -> np.ndarray:
+        """Initial parameters"""
+        pass
+
+    @abstractmethod
+    def loss(self, x: torch.Tensor) -> torch.Tensor:
+        """Compute loss given parameters"""
+        pass
+
+    def bounds(self) -> Optional[List[Tuple[float, float]]]:
+        """Parameter bounds for visualization (None if unbounded)"""
+        return None
+
+    def optimum(self) -> Optional[np.ndarray]:
+        """Known optimal point if available"""
+        return None
+
+
+class Function2D(Problem):
+    """Wrapper for 2D test functions"""
+
+    def __init__(self, func, bounds, init, optimal=None):
+        self.func = func
+        self._bounds = bounds
+        self._init = init
+        self._optimal = optimal
+
+    @property
+    def dim(self) -> int:
+        return 2
+
+    def init(self) -> np.ndarray:
+        return np.array(self._init)
+
+    def loss(self, x: torch.Tensor) -> torch.Tensor:
+        if x.dim() == 1:
+            return self.func(x)
+        else:
+            # Handle batch of parameters
+            return self.func(x[0])
+
+    def bounds(self):
+        return self._bounds
+
+    def optimum(self):
+        return np.array(self._optimal) if self._optimal else None
+
+
+class MLPProblem(Problem):
+    """Train a small MLP to predict |x|"""
+
+    def __init__(self, hidden_size=4, n_samples=128):
+        # Create model
+        self.model = nn.Sequential(nn.Linear(1, hidden_size), nn.ReLU(), nn.Linear(hidden_size, 1))
+
+        # Generate training data
+        torch.manual_seed(42)
+        self.x_data = torch.rand(n_samples, 1) * 4 - 2  # [-2, 2]
+        self.y_data = torch.abs(self.x_data)
+
+        # Count parameters
+        self._dim = sum(p.numel() for p in self.model.parameters())
+
+    @property
+    def dim(self) -> int:
+        return self._dim
+
+    def init(self) -> np.ndarray:
+        # Initialize model and return flattened parameters
+        torch.manual_seed(42)
+        for p in self.model.parameters():
+            if len(p.shape) >= 2:
+                nn.init.xavier_uniform_(p)
+            else:
+                nn.init.zeros_(p)
+        return self._flatten_params()
+
+    def loss(self, x: torch.Tensor) -> torch.Tensor:
+        # Set model parameters from flat vector
+        self._unflatten_params(x)
+
+        # Forward pass
+        pred = self.model(self.x_data)
+        return nn.functional.mse_loss(pred, self.y_data)
+
+    def _flatten_params(self) -> np.ndarray:
+        """Flatten model parameters to vector"""
+        return torch.cat([p.data.view(-1) for p in self.model.parameters()]).numpy()
+
+    def _unflatten_params(self, x: torch.Tensor):
+        """Set model parameters from flat vector"""
+        idx = 0
+        for p in self.model.parameters():
+            numel = p.numel()
+            # Detach to avoid gradient tracking issues, but keep original requires_grad
+            p.data = x[idx : idx + numel].view(p.shape).detach()
+            idx += numel
+
+
+class QuadraticBowl(Problem):
+    """N-dimensional quadratic bowl"""
+
+    def __init__(self, dim=10):
+        self._dim = dim
+        self.center = np.random.randn(dim) * 2
+
+    @property
+    def dim(self) -> int:
+        return self._dim
+
+    def init(self) -> np.ndarray:
+        return np.random.randn(self._dim) * 3
+
+    def loss(self, x: torch.Tensor) -> torch.Tensor:
+        center = torch.tensor(self.center, dtype=x.dtype, device=x.device)
+        return torch.sum((x - center) ** 2)
+
+    def optimum(self):
+        return self.center
+
+
+class StyblinskiTang(Problem):
+    """Styblinski-Tang function (separable, multimodal)"""
+
+    def __init__(self, dim=4):
+        self._dim = dim
+
+    @property
+    def dim(self) -> int:
+        return self._dim
+
+    def init(self) -> np.ndarray:
+        return np.random.uniform(-5, 5, self._dim)
+
+    def loss(self, x: torch.Tensor) -> torch.Tensor:
+        return 0.5 * torch.sum(x**4 - 16 * x**2 + 5 * x)
+
+    def bounds(self):
+        return [(-5, 5)] * self._dim
+
+    def optimum(self):
+        # Global minimum at x_i = -2.903534 for all i
+        return np.full(self._dim, -2.903534)
+
+
 # Test functions
 PROBLEMS = {
-    "Simple Bowl": {
-        "func": lambda x: (x[0] - 1) ** 2 + (x[1] - 2) ** 2,
-        "bounds": [(-3, 5), (-2, 6)],
-        "init": [-1.0, 0.0],
-        "optimal": [1.0, 2.0],
-    },
-    "Ravine": {
-        "func": lambda x: (x[0] - 1) ** 2 + (x[1] - 2) ** 100,
-        "bounds": [(-3, 5), (-2, 6)],
-        "init": [-1.0, 1.0],
-        "optimal": [1.0, 2.0],
-    },
-    "Rosenbrock": {
-        "func": lambda x: (1 - x[0]) ** 2 + 100 * (x[1] - x[0] ** 2) ** 2,
-        "bounds": [(-2, 2), (-1, 3)],
-        "init": [-1.0, 1.0],
-        "optimal": [1.0, 1.0],
-    },
-    "Himmelblau": {
-        "func": lambda x: (x[0] ** 2 + x[1] - 11) ** 2 + (x[0] + x[1] ** 2 - 7) ** 2,
-        "bounds": [(-5, 5), (-5, 5)],
-        "init": [0.0, 0.0],
-        "optimal": [3.0, 2.0],
-    },
+    # 2D Problems
+    "Simple Bowl (2D)": Function2D(
+        func=lambda x: (x[0] - 1) ** 2 + (x[1] - 2) ** 2,
+        bounds=[(-3, 5), (-2, 6)],
+        init=[-1.0, 0.0],
+        optimal=[1.0, 2.0],
+    ),
+    "Ravine (2D)": Function2D(
+        func=lambda x: (x[0] - 1) ** 2 + (x[1] - 2) ** 100,
+        bounds=[(-3, 5), (-2, 6)],
+        init=[-1.0, 1.0],
+        optimal=[1.0, 2.0],
+    ),
+    "Rosenbrock (2D)": Function2D(
+        func=lambda x: (1 - x[0]) ** 2 + 100 * (x[1] - x[0] ** 2) ** 2,
+        bounds=[(-2, 2), (-1, 3)],
+        init=[-1.0, 1.0],
+        optimal=[1.0, 1.0],
+    ),
+    "Himmelblau (2D)": Function2D(
+        func=lambda x: (x[0] ** 2 + x[1] - 11) ** 2 + (x[0] + x[1] ** 2 - 7) ** 2,
+        bounds=[(-5, 5), (-5, 5)],
+        init=[0.0, 0.0],
+        optimal=[3.0, 2.0],
+    ),
+    "Beale (2D)": Function2D(
+        func=lambda x: (1.5 - x[0] + x[0] * x[1]) ** 2
+        + (2.25 - x[0] + x[0] * x[1] ** 2) ** 2
+        + (2.625 - x[0] + x[0] * x[1] ** 3) ** 2,
+        bounds=[(-4.5, 4.5), (-4.5, 4.5)],
+        init=[1.0, 1.0],
+        optimal=[3.0, 0.5],
+    ),
+    # High-dimensional Problems
+    "MLP |x| (13D)": MLPProblem(hidden_size=10, n_samples=100),
+    "Quadratic Bowl (10D)": QuadraticBowl(dim=10),
+    "Styblinski-Tang (4D)": StyblinskiTang(dim=4),
+    "Styblinski-Tang (8D)": StyblinskiTang(dim=8),
 }
 
 # Chainable optimizer components
@@ -492,7 +666,7 @@ def create_pipeline_display(pipeline):
     """
 
 
-def build_optimizer_from_pipeline(pipeline: List[str], params):
+def build_optimizer_from_pipeline(pipeline: List[str], params, kwargs):
     """Build optimizer from pipeline of component IDs"""
     fns = []
     opt_params = {
@@ -500,6 +674,7 @@ def build_optimizer_from_pipeline(pipeline: List[str], params):
         "step": 1,  # Required for many functions
         "caution": False,
         "weight_decay": 0.0,
+        **kwargs,
     }
 
     for comp_id in pipeline:
@@ -531,28 +706,18 @@ def build_optimizer_from_pipeline(pipeline: List[str], params):
     return C.BaseOpt(params, opt_params, fns=fns)
 
 
-def run_optimization(problem_name: str, pipeline: List[str], steps: int, lr: float, **kwargs) -> Tuple[Any, Dict]:
+def run_optimization(problem_name: str, pipeline: List[str], steps: int, **kwargs) -> Tuple[Any, Dict]:
     """Run optimization with the custom pipeline"""
     problem = PROBLEMS[problem_name]
-    func = problem["func"]
-    init = problem["init"]
+    kwargs["lr"] = 10 ** kwargs.get("lr", -2)
 
-    # Initialize
+    # Initialize parameters
+    init = problem.init()
     x = torch.nn.Parameter(torch.tensor(init, dtype=torch.float32))
     params = [x]
 
     # Build optimizer from pipeline
-    optimizer = build_optimizer_from_pipeline(pipeline, params)
-
-    # Override learning rate (convert from log scale)
-    actual_lr = 10**lr
-    if hasattr(optimizer, "param_groups"):
-        for group in optimizer.param_groups:
-            group["lr"] = actual_lr
-            # Update other params from kwargs
-            for key, value in kwargs.items():
-                if key in group:
-                    group[key] = value
+    optimizer = build_optimizer_from_pipeline(pipeline, params, kwargs)
 
     # Run optimization
     trajectory = []
@@ -564,7 +729,7 @@ def run_optimization(problem_name: str, pipeline: List[str], steps: int, lr: flo
 
         def closure():
             optimizer.zero_grad()
-            loss = func(x)
+            loss = problem.loss(x)
             loss.backward()
             if x.grad is not None:
                 gradients.append(x.grad.detach().numpy().copy())
@@ -600,8 +765,16 @@ def find_convergence(losses, threshold=1e-6):
 def create_visualization(problem_name, trajectory, losses, gradients, pipeline):
     """Create integrated visualization"""
     problem = PROBLEMS[problem_name]
-    func = problem["func"]
-    bounds = problem["bounds"]
+
+    if problem.dim == 2:
+        return create_2d_visualization(problem_name, trajectory, losses, gradients, pipeline)
+    return create_highdim_visualization(problem_name, trajectory, losses, gradients, pipeline)
+
+
+def create_2d_visualization(problem_name, trajectory, losses, gradients, pipeline):
+    """Create visualization for 2D problems"""
+    problem = PROBLEMS[problem_name]
+    bounds = problem.bounds()
 
     # Create subplots
     fig = make_subplots(
@@ -621,7 +794,8 @@ def create_visualization(problem_name, trajectory, losses, gradients, pipeline):
 
     for i in range(X.shape[0]):
         for j in range(X.shape[1]):
-            Z[i, j] = func([X[i, j], Y[i, j]])
+            point = torch.tensor([X[i, j], Y[i, j]], dtype=torch.float32)
+            Z[i, j] = problem.loss(point).item()
 
     # Contour plot
     fig.add_trace(
@@ -797,6 +971,200 @@ def create_visualization(problem_name, trajectory, losses, gradients, pipeline):
     return fig
 
 
+def create_highdim_visualization(problem_name, trajectory, losses, gradients, pipeline):
+    """Create visualization for high-dimensional problems using PCA"""
+    # problem = PROBLEMS[problem_name]
+
+    # Create subplots
+    fig = make_subplots(
+        rows=2,
+        cols=2,
+        subplot_titles=("PCA Trajectory Projection", "Pipeline Architecture", "Loss Curve", "Learning Dynamics"),
+        column_widths=[0.6, 0.4],
+        row_heights=[0.6, 0.4],
+        specs=[[{"type": "scatter"}, {"type": "scatter"}], [{"type": "scatter"}, {"type": "scatter"}]],
+    )
+
+    # 1. PCA projection of trajectory
+    if len(trajectory) > 2:
+        # Fit PCA on trajectory
+        trajectory_array = np.array(trajectory)
+        pca = PCA(n_components=min(2, trajectory_array.shape[1]))
+        trajectory_2d = pca.fit_transform(trajectory_array)
+
+        # Create trajectory plot
+        colors = np.linspace(0, 1, len(trajectory_2d))
+
+        for i in range(1, len(trajectory_2d)):
+            fig.add_trace(
+                go.Scatter(
+                    x=[trajectory_2d[i - 1, 0], trajectory_2d[i, 0]],
+                    y=[trajectory_2d[i - 1, 1] if trajectory_2d.shape[1] > 1 else [0, 0]],
+                    mode="lines",
+                    line=dict(color=f"rgba(255, {int(111 * (1 - colors[i]))}, 0, {0.3 + 0.7 * colors[i]})", width=3),
+                    showlegend=False,
+                    hoverinfo="skip",
+                ),
+                row=1,
+                col=1,
+            )
+
+        # Start and end points
+        fig.add_trace(
+            go.Scatter(
+                x=[trajectory_2d[0, 0]],
+                y=[trajectory_2d[0, 1] if trajectory_2d.shape[1] > 1 else 0],
+                mode="markers+text",
+                marker=dict(size=12, color="#4caf50", line=dict(color="white", width=2)),
+                text=["Start"],
+                textposition="top center",
+                showlegend=False,
+            ),
+            row=1,
+            col=1,
+        )
+
+        fig.add_trace(
+            go.Scatter(
+                x=[trajectory_2d[-1, 0]],
+                y=[trajectory_2d[-1, 1] if trajectory_2d.shape[1] > 1 else 0],
+                mode="markers+text",
+                marker=dict(size=12, color="#ff6f00", line=dict(color="white", width=2)),
+                text=["End"],
+                textposition="top center",
+                showlegend=False,
+            ),
+            row=1,
+            col=1,
+        )
+
+        # Add explained variance text
+        if trajectory_2d.shape[1] > 1:
+            explained_var = pca.explained_variance_ratio_
+            fig.add_annotation(
+                x=0.5,
+                y=1.1,
+                xref="x domain",
+                yref="y domain",
+                text=f"Explained variance: PC1={explained_var[0]:.1%}, PC2={explained_var[1]:.1%}",
+                showarrow=False,
+                row=1,
+                col=1,
+            )
+
+    # 2. Pipeline visualization (same as 2D)
+    block_x = []
+    block_y = []
+    block_text = []
+    block_colors = []
+
+    for i, comp_id in enumerate(pipeline):
+        block_x.append(i / (len(pipeline) - 1) if len(pipeline) > 1 else 0.5)
+        block_y.append(0.5)
+
+        comp_info, comp_color = get_component_info(comp_id)
+        block_text.append(comp_info["icon"] if comp_info else "?")
+        block_colors.append(comp_color)
+
+    fig.add_trace(
+        go.Scatter(
+            x=block_x,
+            y=block_y,
+            mode="markers+text",
+            marker=dict(size=40, color=block_colors, line=dict(color="white", width=2)),
+            text=block_text,
+            textposition="middle center",
+            showlegend=False,
+            hoverinfo="skip",
+        ),
+        row=1,
+        col=2,
+    )
+
+    # Add arrows between blocks
+    for i in range(len(pipeline) - 1):
+        fig.add_annotation(
+            x=block_x[i + 1],
+            y=0.5,
+            ax=block_x[i],
+            ay=0.5,
+            xref="x2",
+            yref="y2",
+            axref="x2",
+            ayref="y2",
+            showarrow=True,
+            arrowhead=2,
+            arrowsize=1,
+            arrowwidth=2,
+            arrowcolor="#ff6f00",
+            row=1,
+            col=2,
+        )
+
+    # 3. Loss curve
+    fig.add_trace(
+        go.Scatter(
+            x=list(range(len(losses))),
+            y=losses,
+            mode="lines",
+            line=dict(color="#ff6f00", width=3),
+            fill="tozeroy",
+            fillcolor="rgba(255, 111, 0, 0.1)",
+            showlegend=False,
+        ),
+        row=2,
+        col=1,
+    )
+
+    # 4. Learning dynamics (gradient norm)
+    if gradients:
+        grad_norms = [np.linalg.norm(g) for g in gradients]
+        fig.add_trace(
+            go.Scatter(
+                x=list(range(len(grad_norms))),
+                y=grad_norms,
+                mode="lines",
+                line=dict(color="#2196f3", width=2),
+                fill="tozeroy",
+                fillcolor="rgba(33, 150, 243, 0.1)",
+                showlegend=False,
+            ),
+            row=2,
+            col=2,
+        )
+
+    # Update layout
+    fig.update_layout(
+        height=700,
+        showlegend=False,
+        paper_bgcolor="white",
+        plot_bgcolor="white",
+        margin=dict(l=40, r=40, t=60, b=40),
+    )
+
+    # Update axes
+    fig.update_xaxes(showgrid=True, gridcolor="#f0f0f0")
+    fig.update_yaxes(showgrid=True, gridcolor="#f0f0f0")
+
+    # PCA plot
+    fig.update_xaxes(title_text="First Principal Component", row=1, col=1)
+    fig.update_yaxes(title_text="Second Principal Component", row=1, col=1)
+
+    # Pipeline plot
+    fig.update_xaxes(showticklabels=False, showgrid=False, row=1, col=2)
+    fig.update_yaxes(showticklabels=False, showgrid=False, range=[0, 1], row=1, col=2)
+
+    # Loss plot
+    fig.update_xaxes(title_text="Iteration", row=2, col=1)
+    fig.update_yaxes(title_text="Loss", type="log", row=2, col=1)
+
+    # Gradient plot
+    fig.update_xaxes(title_text="Iteration", row=2, col=2)
+    fig.update_yaxes(title_text="Gradient Norm", row=2, col=2)
+
+    return fig
+
+
 def create_app():
     with gr.Blocks(theme=gr.themes.Base()) as app:
         # Custom CSS
@@ -892,7 +1260,7 @@ def create_app():
             with gr.Column(scale=1):
                 gr.Markdown("### ⚙️ Parameters")
 
-                problem_select = gr.Dropdown(choices=list(PROBLEMS.keys()), value="Rosenbrock", label="Problem")
+                problem_select = gr.Dropdown(choices=list(PROBLEMS.keys()), value="Rosenbrock (2D)", label="Problem")
 
                 lr_slider = gr.Slider(minimum=-4, maximum=-1, value=-2, step=0.1, label="Learning Rate (10^x)")
 
@@ -952,7 +1320,7 @@ def create_app():
 
             # Run optimization
             fig, metrics = run_optimization(
-                problem, pipeline, steps, lr, beta=beta, betas=(beta, beta2), beta2=beta2, eps=eps
+                problem, pipeline, steps, lr=lr, beta=beta, betas=(beta, beta2), beta2=beta2, eps=eps
             )
 
             return fig, f"{metrics['final_loss']:.2e}", str(metrics["steps_to_converge"])
@@ -1000,7 +1368,7 @@ def create_app():
         app.load(
             fn=lambda: (
                 create_pipeline_display(["gradient_input"]),
-                run_optimization("Rosenbrock", ["gradient_input", "adam_scale"], 200, -2)[0],
+                run_optimization("Rosenbrock (2D)", ["gradient_input", "adam_scale"], 200, lr=-2)[0],
             ),
             outputs=[pipeline_display, viz_plot],
         )
