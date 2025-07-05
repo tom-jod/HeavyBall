@@ -268,6 +268,10 @@ def weight_decay_to_init(group, update, grad, param, init):
     return update
 
 
+def identity(state, group, update, grad, param):
+    return update
+
+
 @zero_guard("exp_avg")
 @no_state
 def weight_decay_to_ema(group, update, grad, param, exp_avg):
