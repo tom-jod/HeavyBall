@@ -9,6 +9,7 @@ import os
 import time
 from pathlib import Path
 import typer
+import datetime
 
 app = typer.Typer()
 
@@ -36,8 +37,8 @@ def run_single_benchmark(script_path, optimizer, steps, trials, seed, output_dir
             cmd,
             capture_output=True,
             text=True,
-            timeout=3600,  # 1 hour timeout
-            env={**os.environ, "CUDA_VISIBLE_DEVICES": "0"}  # Ensure single GPU
+            timeout=12*3600,  # 12 hour timeout
+            env={**os.environ, "CUDA_VISIBLE_DEVICES": "2"}  # Ensure single GPU
         )
         
         # Save the full output
@@ -89,6 +90,7 @@ def parse_benchmark_output(stdout, stderr):
         "best_loss": None,
         "loss_trajectory": [],
         "test_accuracies": [],
+        "grad_variances": [],
         "config_str": "",
         "mean_cond": None,
         "std_err_cond": None,
@@ -133,6 +135,15 @@ def parse_benchmark_output(stdout, stderr):
                 try:
                     import ast
                     result["test_accuracies"] = ast.literal_eval(acc_match.group(1))
+                except:
+                    pass
+
+            # Extract gradient variances
+            acc_match = re.search(r"grad_variances: (\[.*?\])", line)
+            if acc_match:
+                try:
+                    import ast
+                    result["grad_variances"] = ast.literal_eval(acc_match.group(1))
                 except:
                     pass
             
@@ -183,7 +194,8 @@ def aggregate_and_plot(results, benchmark_name, output_dir):
     
     # Save summary to CSV
     summary_df = pd.DataFrame(summary_stats)
-    summary_df.to_csv(f"{output_dir}/{benchmark_name}_summary.csv", index=False)
+    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    summary_df.to_csv(f"{output_dir}/{benchmark_name}_summary_{timestamp}.csv", index=False)
     
     # Plot loss trajectories
     plt.figure(figsize=(12, 8))
@@ -221,6 +233,43 @@ def aggregate_and_plot(results, benchmark_name, output_dir):
     plt.savefig(f"{output_dir}/{benchmark_name}_loss_curves.png", dpi=300, bbox_inches='tight')
     plt.close()
     
+    # Plot gradient variances
+    plt.figure(figsize=(12, 8))
+    
+    for optimizer, group in optimizer_groups:
+        # Get all loss trajectories for this optimizer
+        trajectories = [traj for traj in group['grad_variances'] if traj]
+        
+        if not trajectories:
+            continue
+        
+        # Find minimum length
+        min_length = min(len(traj) for traj in trajectories)
+        
+        # Truncate all trajectories
+        truncated = [traj[:min_length] for traj in trajectories]
+        
+        if truncated:
+            # Calculate statistics
+            mean_traj = np.mean(truncated, axis=0)
+            std_traj = np.std(truncated, axis=0)
+            se_traj = std_traj / np.sqrt(len(truncated))
+            
+            # Plot
+            x = np.arange(min_length)
+            plt.plot(x, mean_traj, label=f"{optimizer} (n={len(truncated)})", linewidth=2)
+            plt.fill_between(x, mean_traj - se_traj, mean_traj + se_traj, alpha=0.3)
+    
+    plt.xlabel('Iteration')
+    plt.ylabel('Loss')
+    plt.title(f'{benchmark_name} - Gradient Variances')
+    plt.legend()
+    plt.grid(True, alpha=0.3)
+    plt.yscale('log')  # Often helpful for loss curves
+    plt.savefig(f"{output_dir}/{benchmark_name}_grad_variances_{timestamp}.png", dpi=300, bbox_inches='tight')
+    plt.close()
+
+
     # Plot test accuracies if available
     plt.figure(figsize=(12, 8))
     
@@ -257,8 +306,9 @@ def aggregate_and_plot(results, benchmark_name, output_dir):
     plt.close()
     
     # Save detailed results
-    df.to_csv(f"{output_dir}/{benchmark_name}_detailed_results.csv", index=False)
-
+    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    df.to_csv(f"{output_dir}/{benchmark_name}_detailed_results_{timestamp}.csv", index=False)
+    
 @app.command()
 def main(
     benchmark: str = typer.Argument(..., help="Path to benchmark script"),
@@ -307,7 +357,7 @@ def main(
             )
             
             all_results.append(result)
-            
+            print(result)
             # Print immediate feedback
             if result['success']:
                 print(f"  ✓ Success - Loss: {result.get('best_loss', 'N/A')}")

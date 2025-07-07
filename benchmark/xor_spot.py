@@ -91,7 +91,7 @@ def main(
             model,
             data,
             torch.nn.functional.binary_cross_entropy_with_logits,
-            loss_win_condition(win_condition_multiplier * 1e-2),
+            loss_win_condition(win_condition_multiplier * 0),#1e-2
             steps,
             o,
             d,

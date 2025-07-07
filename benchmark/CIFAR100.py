@@ -153,7 +153,8 @@ def main(
         trials=trials,
         group=391,
         estimate_condition_number = False,
-        test_loader=testloader
+        test_loader=None,
+        track_variance=True
     )
 
 

@@ -15,7 +15,11 @@ from heavyball.utils import set_torch
 
 app = typer.Typer(pretty_exceptions_enable=False)
 set_torch()
+import torch._dynamo
+torch._dynamo.config.suppress_errors = True
+app = typer.Typer()
 
+torch._dynamo.config.disable = True
 
 class WideBasicBlock(nn.Module):
     def __init__(self, in_planes, planes, dropout_rate, stride=1):
@@ -153,6 +157,7 @@ def main(
         failure_threshold=10,
         base_lr=1e-3,
         trials=trials,
+        estimate_condition_number = True
     )
 
 

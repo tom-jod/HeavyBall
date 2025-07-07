@@ -281,6 +281,7 @@ class Objective:
         weight_decay,
         warmup_trials,
         test_loader,
+        track_variance,
         ema_index: int = 0,
         **kwargs,
     ):
@@ -324,10 +325,11 @@ class Objective:
         self.use_cudnn = True
         self.set_precond_init_scale = False
         self.end_time = int(os.environ.get("HEAVYBALL_BENCHMARK_TIMEOUT", 3600 * 4)) + time.time() # was 3600 * 4
-        self._last_loss = None
+        self._last_loss = float('inf')
         self.best_losses = []
         self.current_losses = []
         self.test_loader = test_loader
+        self.track_variance = track_variance
 
     def win_condition(self, loss=None):
         if loss is not None:
@@ -365,21 +367,27 @@ class Objective:
         o = get_optim(self.opt, self.m.parameters(), **params, weight_decay=self.weight_decay, **self.kwargs)
         torch_hist = torch.empty(self.group, dtype=torch.float64, device="cuda")
         validator = self.validator.new()
-
-       
+        self.test_accuracies = []
+        self.grad_variances = []
         # Create a list to track losses for this run
         step_losses = []
         prev_model_params = None
         # iterate through each epoch
         for i in range(self.steps // self.group):
             # estimate variance half way through
-            #if i==int(self.steps//(self.group*2)):
-            #    estimate_minibatch_variance_detailed(self.m, self.data, n_samples=5, loss_fn=self.loss_fn)
+          #  if i==int(self.steps//(self.group*2)) or i==0 or i==int(self.steps//(self.group*4)) or i==int(3*self.steps//(self.group*4)):
+           #     estimate_minibatch_variance_detailed(self.m, self.data, n_samples=10, loss_fn=self.loss_fn)
             if not hasattr(self, 'test_accuracies'):
                 self.test_accuracies = []
             if self.test_loader != None:
                 test_accuracy = evaluate_model(self.m, self.test_loader)
                 self.test_accuracies.append(test_accuracy)
+    
+            if self.track_variance:
+                # track variance at each eighth of the way through training
+                if i % int(self.steps // (self.group*8)) == 0:
+                    grad_variance = estimate_minibatch_variance_detailed(self.m, self.data, n_samples=10, loss_fn=self.loss_fn)
+                    self.grad_variances.append(grad_variance["gradient_variance"])
             
             if hasattr(o, "train"):
                 o.train()
@@ -483,15 +491,11 @@ class Objective:
                     step_losses.append(loss_value)
                     self.current_losses.append(loss_value)
                     
-                # Check early stopping conditions immediately after adding to loss trajectories
-                if not np.isfinite(loss_value) or self.win_condition(loss_value):
-                    # Get current memory usage before returning
-                    self.current_memory_usage = get_gpu_memory_usage()
-                    return validator.ema_states.min().item(), self.m, loss_value, step_losses
+                
     
         # Get current memory usage before returning
         self.current_memory_usage = get_gpu_memory_usage()
-        return validator.ema_states.min().item(), self.m, torch_hist[-1].item(), step_losses
+        return validator.ema_states.min().item(), self.m, torch_hist[-1].item(), step_losses, self.test_accuracies, self.grad_variances
                 
         #    with torch.no_grad():
          #       for loss in torch_hist:
@@ -507,17 +511,17 @@ class Objective:
     
     def objective(self, params):
         self.attempt += 1
-        target, model, loss, step_losses = self._inner(params)
+        target, model, loss, step_losses, test_accuracies, grad_variances = self._inner(params)
 
         if self.best_loss is None or loss < self.best_loss or not np.isfinite(self.best_loss):
             self.best_loss = loss
             self.best_at = self.attempt
             self.avg = np.log(np.array(params))
-            self.best_losses = self.current_losses.copy() 
-            self.test_accuracies = self.test_accuracies.copy()
+            self.best_losses = step_losses.copy() 
+            self.test_accuracies = test_accuracies.copy()
+            self.grad_variances = grad_variances.copy()
             self.memory_usage = getattr(self, 'current_memory_usage', 0)/ (1024**2)
 
-            
         #if self.best_at * 100 < self.attempt and self.attempt - self.best_at > self.warmup_trials:  # no improvements
         #    raise Stop
         if time.time() > self.end_time:  # timeout
@@ -599,7 +603,8 @@ def trial(
     warmup_trial_pct: int = 0.2,
     random_trials: int = 10,
     estimate_condition_number: bool = False,
-    test_loader=None
+    test_loader=None,
+    track_variance=False,
 ):
     condition_numbers = [0]
     
@@ -678,6 +683,7 @@ def trial(
         weight_decay,
         max(trials * warmup_trial_pct, 1 + random_trials),
         test_loader,
+        track_variance,
         **kwargs,
     )
     
@@ -695,9 +701,9 @@ def trial(
         sampler = AutoSampler(
             seed=0x123125,
             search_space={
-                "lr": optuna.distributions.FloatDistribution(1e-7, 100, log=True),
-                "1mbeta1": optuna.distributions.FloatDistribution(1e-5, 1, log=True),
-                "1mbeta2": optuna.distributions.FloatDistribution(1e-7, 1, log=True),
+                "lr": optuna.distributions.FloatDistribution(1e-5, 1e-1, log=True),#1e-7, 100
+                "1mbeta1": optuna.distributions.FloatDistribution(1e-5, 0.1, log=True),#to 1
+                "1mbeta2": optuna.distributions.FloatDistribution(1e-7, 0.1, log=True),#to 1
                 "1mshampoo_beta": optuna.distributions.FloatDistribution(1e-5, 1, log=True),
             },
         )
@@ -706,10 +712,10 @@ def trial(
         
         def _optuna_objective(trial):
             set_seed(0x12312)
-            lr = trial.suggest_float("lr", 1e-7, 100, log=True)
-            one_minus_beta1 = trial.suggest_float("1mbeta1", 1e-5, 1, log=True)
-            one_minus_beta2 = trial.suggest_float("1mbeta2", 1e-7, 1, log=True)
-            one_minus_shampoo_beta = trial.suggest_float("1mshampoo_beta", 1e-5, 1, log=True)
+            lr = trial.suggest_float("lr", 1e-5, 1e-1, log=True)
+            one_minus_beta1 = trial.suggest_float("1mbeta1", 1e-5, 0.1, log=True)
+            one_minus_beta2 = trial.suggest_float("1mbeta2", 1e-7, 0.1, log=True)
+            one_minus_shampoo_beta = trial.suggest_float("1mshampoo_beta", 1e-5, 0.1, log=True)
             try:
                 out = obj.objective((lr, one_minus_beta1, one_minus_beta2, one_minus_shampoo_beta))
             except Stop:
@@ -750,10 +756,11 @@ def trial(
     
     mean_cond = np.mean(condition_numbers)
     std_err_cond = np.std(condition_numbers) / np.sqrt(len(condition_numbers))
+
     print(
         f"Took: {end_time - start_time} | Attempt: {obj.attempt} | "
         f"{opt.__name__}(lr={winning_params['lr']:.5f}, betas=({1 - winning_params['1mbeta1']:.3f}, {1 - winning_params['1mbeta2']:.4f}), "
-        f"shampoo_beta={1 - winning_params['1mshampoo_beta']:.3f}) | Best Loss: {obj.best_loss} | loss_trajectory: {obj.best_losses} | test_accuracies: {obj.test_accuracies} | mean_cond: {mean_cond} | std_err_cond: {std_err_cond}| memory_usage: {obj.memory_usage} MB"
+        f"shampoo_beta={1 - winning_params['1mshampoo_beta']:.3f}) | Best Loss: {obj.best_loss} | loss_trajectory: {obj.best_losses} | test_accuracies: {obj.test_accuracies} | grad_variances: {obj.grad_variances} | mean_cond: {mean_cond} | std_err_cond: {std_err_cond}| memory_usage: {obj.memory_usage} MB"
     )
     loss_trajectory = obj.best_losses
     
@@ -877,7 +884,7 @@ def estimate_minibatch_variance_detailed(model, data_fn, n_samples=100, loss_fn=
                 for cls in unique_classes:
                     mask = (y == cls)
                     if mask.sum() > 0:
-                        cls_loss = loss_fn(output[mask], y[mask], reduction='mean')
+                        cls_loss = loss_fn(output[mask], y[mask])
                         per_class_losses.append(cls_loss.item())
             
             gradient_samples.append(flat_grad.detach().cpu().numpy())
@@ -916,16 +923,16 @@ def estimate_minibatch_variance_detailed(model, data_fn, n_samples=100, loss_fn=
     
     gradient_direction_variance = np.var(cosine_similarities)
     
-    print(f"Enhanced minibatch variance metrics:")
-    print(f"  Total gradient variance: {total_grad_variance:.2e}")
-    print(f"  Gradient norm variance: {grad_norm_variance:.2e}")
-    print(f"  Loss variance: {loss_variance:.4f}")
-    print(f"  Accuracy variance: {accuracy_variance:.4f}")
-    print(f"  Per-class loss variance: {per_class_loss_variance:.4f}")
-    print(f"  Gradient direction variance: {gradient_direction_variance:.4f}")
+    #print(f"Enhanced minibatch variance metrics:")
+    #print(f"  Total gradient variance: {total_grad_variance:.2e}")
+    #print(f"  Gradient norm variance: {grad_norm_variance:.2e}")
+    #print(f"  Loss variance: {loss_variance:.4f}")
+    #print(f"  Accuracy variance: {accuracy_variance:.4f}")
+    #print(f"  Per-class loss variance: {per_class_loss_variance:.4f}")
+    #print(f"  Gradient direction variance: {gradient_direction_variance:.4f}")
     
     return {
-        "gradient_variance": total_grad_variance,
+        "gradient_variance": float(total_grad_variance),
         "gradient_norm_variance": grad_norm_variance,
         "loss_variance": loss_variance,
         "accuracy_variance": accuracy_variance,

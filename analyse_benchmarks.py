@@ -63,7 +63,14 @@ nightmare_benchmark_data = {
 
 real_world_benchmark_data = {
     'MNIST_MLP': {'condition_number': 20832.22364579695, 'condition_std_err': 8621.244263969105, 'n_params': 118282}, # n_probes=20, n_samples=200
+    'OGBM': {'condition_number': 7934.623616239815  , 'condition_std_err': 1784.3401800042263, 'n_params': 3555200}, # n_probes=20, n_samples=10
+    'Transolver': {'condition_number': 109867.31456507105 , 'condition_std_err':  30140.78024317031, 'n_params': 3776457}, # n_probes=20, n_samples=10
+    'CIFAR10': {'condition_number': 3004, 'condition_std_err': 1244, 'n_params': 11700000}, # n_probes=20, n_samples=10
+    'CIFAR100': {'condition_number': 3004, 'condition_std_err': 1244, 'n_params': 4080000}, # n_probes=20, n_samples=10
+
 }
+
+
 
 def create_combined_dataframe(trivial_data, nightmare_data):
     """Convert both benchmark datasets to combined DataFrame with error bars"""

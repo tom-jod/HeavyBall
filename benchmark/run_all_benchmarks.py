@@ -20,6 +20,7 @@ app = typer.Typer()
 torch._dynamo.config.disable = True
 
 benchmarks = [
+    "MNIST.py",
     "beale.py",
     "rosenbrock.py",
     "rastrigin.py",
@@ -312,14 +313,26 @@ def worker(task_queue, result_queue, worker_index, difficulties: list, timeout: 
     torch.cuda.empty_cache()
 
     difficulties = [d for d in _difficulty_order if d in difficulties]
-
+    
     while True:
+        logging.debug(f"Worker {worker_index} starting new task iteration")
         try:
+            # Get task with detailed error handling
+            task = None
             try:
-                script, o, steps, dtype, trials, seed = task_queue.get(timeout=0.1)
+                logging.debug(f"Worker {worker_index} attempting to get task")
+                start_time = time.time()
+                task = task_queue.get(timeout=0.1)
+                logging.debug(f"Worker {worker_index} got task in {time.time() - start_time:.3f}s")
+                script, o, steps, dtype, trials, seed = task
+                logging.info(f"Worker {worker_index} received task: {script}, {o}")
             except Empty:
+                logging.info(f"Worker {worker_index} found empty task queue, terminating")
                 result_queue.put(None)
                 return
+            except Exception as e:
+                logging.error(f"Worker {worker_index} error getting task: {type(e).__name__}: {e}")
+                raise
 
             inner_difficulties = difficulties.copy()
             for _ in range(len(difficulties)):
@@ -417,6 +430,7 @@ def main(
 
     total_tasks = 0
     for script, o, i in itertools.product(filtered_benchmarks, opt, range(seeds)):
+        
         task_queue.put((script, o, steps, dtype, trials, i))
         total_tasks += len(difficulties)
 
@@ -425,6 +439,7 @@ def main(
 
     processes = []
     workers = min(parallelism, total_tasks)
+    
     for idx in range(workers):
         p = multiprocessing.Process(
             target=worker, args=(task_queue, result_queue, idx, difficulties, timeout), daemon=False

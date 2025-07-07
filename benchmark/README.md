@@ -45,6 +45,6 @@ python3 -m benchmark.run_all_benchmarks --opt ForeachSOAP --opt LaProp --opt Ada
 | Scale Invariant          | Tests scale-invariant optimization                 | Scale Invariance & Robustness       | 512       | ✓ | ✗ | All | Increases range of values that parameters can take
 | Sparse Gradient          | Tests sparse update handling                       | Sparse Gradients & Embeddings       | 65,536    | ✓ | ✗ | All | Fewer parameters get gradients
 | Wide Linear              | Tests upper triangular matrix learning             | Discover sparse/structured solutions|16-268,435,456| ✓ | ✓ | All | Larger model
-| XOR Digit (RNN)          | Tests RNN weak gradient learning using LSTM (RNN)  | Weak Gradients & Memory             | 8,641     | ✓ | ✓ | All | None
-| XOR Sequence (RNN)       | Tests RNN state compression (~AE, LLM)             | Compression & Sequential            | 1,201     | ✓ | ✓ | All | None 
-| XOR Spot (RNN)           | Tests RNN multiplicative effects (~RL)             | Multiplicative & Memory             | 8,769     | ✓ | ✓ | All | None
+| XOR Digit (RNN)          | Tests RNN weak gradient learning using LSTM (RNN)  | Weak Gradients & Memory             | 8,641     | ✓ | ✓ | All | Length of character chain
+| XOR Sequence (RNN)       | Tests RNN state compression (~AE, LLM)             | Compression & Sequential            | 1,201     | ✓ | ✓ | All | Length of character chain
+| XOR Spot (RNN)           | Tests RNN multiplicative effects (~RL)             | Multiplicative & Memory             | 8,769     | ✓ | ✓ | All | Length of character chain

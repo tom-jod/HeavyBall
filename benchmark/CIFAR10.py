@@ -118,17 +118,14 @@ def main(
     )
     testloader = DataLoader(testset, batch_size=batch, shuffle=False, num_workers=2, pin_memory=True)
     
-    # Create data iterator that matches the expected format
-    train_iter = iter(trainloader)
-    
+    def create_data_generator():
+        while True:  # Infinite generator
+            for inputs, targets in trainloader:
+                yield inputs.cuda(), targets.cuda()
+
+    data_gen = create_data_generator()
     def data():
-        nonlocal train_iter
-        try:
-            inputs, targets = next(train_iter)
-        except StopIteration:
-            train_iter = iter(trainloader)
-            inputs, targets = next(train_iter)
-        return inputs.cuda(), targets.cuda()
+        return next(data_gen)
    
     trial(
         model,
@@ -149,7 +146,8 @@ def main(
         group=391,
         trials=trials,
         estimate_condition_number = False,
-        test_loader=testloader
+        test_loader=None,
+        track_variance=True
     )
 
 

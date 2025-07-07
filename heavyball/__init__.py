@@ -7,6 +7,112 @@ import torch.optim
 from . import chainable as C
 from . import utils
 
+class MARSWrapper(torch.optim.Optimizer):
+    def __init__(self, params, wrapped_optimizer: utils.StatefulOptimizer, mars_gamma: float = 0.025):
+        if not isinstance(wrapped_optimizer, utils.StatefulOptimizer):
+            raise ValueError(f"{wrapped_optimizer.__class__.__name__} is not a StatefulOptimizer")
+        super().__init__(params, {"mars_gamma": mars_gamma})
+        self.wrapped_optimizer = wrapped_optimizer
+        self.prev_params = None
+        self.first_step = True
+        
+        # Add prev_grads and mars_gamma to wrapped optimizer's param groups
+        for group in self.wrapped_optimizer.param_groups:
+            group["prev_grads"] = []
+            group["mars_gamma"] = mars_gamma
+
+    @torch.no_grad()
+    def step(self, closure=None):
+        if closure is None:
+            raise ValueError("MARS requires closure")
+        
+        # First pass: current batch on current model
+        with torch.enable_grad():
+            loss = closure()
+        
+        # Second pass: current batch on previous model (if not first step)
+        if not self.first_step:
+            self._compute_and_store_prev_grads(closure)
+        else:
+            # First step: no previous model, so prev_grads remain empty
+            self.first_step = False
+        
+        # Store current parameters for next iteration
+        self._store_current_params()
+        
+        # Let wrapped optimizer do its update using current grads + stored prev_grads
+        final_loss = self.wrapped_optimizer.step(closure)
+            
+        return final_loss
+
+    def _compute_and_store_prev_grads(self, closure):
+        """Compute gradients of current batch on previous model parameters"""
+        if self.prev_params is None:
+            return
+        
+        # Save current parameters and gradients
+        current_params = []
+        current_grads = []
+        for group in self.param_groups:
+            current_params.append([p.data.clone() for p in group["params"]])
+            current_grads.append([p.grad.clone() if p.grad is not None else None 
+                                for p in group["params"]])
+        
+        # Debug: Check parameter values before restoration
+        param_sum_before = sum(torch.sum(p.data) for group in self.param_groups for p in group["params"])
+        
+        
+        try:
+            # Restore previous parameters
+            param_idx = 0
+            for group in self.param_groups:
+                for p in group["params"]:
+                    if param_idx < len(self.prev_params):
+                        p.data.copy_(self.prev_params[param_idx])
+                    param_idx += 1
+            
+            # Debug: Check parameter values after restoration
+            param_sum_after_restore = sum(torch.sum(p.data) for group in self.param_groups for p in group["params"])
+            
+            
+            # Compute gradients on previous model with current batch
+            self.wrapped_optimizer.zero_grad()
+            with torch.enable_grad():
+                prev_loss = closure()
+                
+            
+            # Store prev_grads in wrapped optimizer's param groups
+            for group, wrapped_group in zip(self.param_groups, self.wrapped_optimizer.param_groups):
+                prev_grads = []
+                for p in group["params"]:
+                    if p.grad is not None:
+                        prev_grads.append(p.grad.clone())
+                wrapped_group["prev_grads"] = prev_grads
+                
+            
+        finally:
+            # Restore current parameters and gradients
+            param_idx = 0
+            for group_params, group_grads, group in zip(current_params, current_grads, self.param_groups):
+                for p, current_param_data, current_grad in zip(group["params"], group_params, group_grads):
+                    p.data.copy_(current_param_data)
+                    p.grad = current_grad
+                    param_idx += 1
+            
+            # Debug: Check parameter values after final restoration
+            param_sum_final = sum(torch.sum(p.data) for group in self.param_groups for p in group["params"])
+            
+
+    def _store_current_params(self):
+        """Store current parameters for next iteration"""
+        self.prev_params = []
+        for group in self.param_groups:
+            for p in group["params"]:
+                self.prev_params.append(p.data.clone().detach())
+
+    def zero_grad(self, set_to_none: bool = True):
+        self.wrapped_optimizer.zero_grad(set_to_none)
+
 
 class SAMWrapper(torch.optim.Optimizer):
     def __init__(self, params, wrapped_optimizer: utils.StatefulOptimizer, ball: float = 0.1):
@@ -1219,8 +1325,66 @@ class ForeachNewtonPSGDLRA(ForeachPSGDLRA):
 
 class NewtonHybrid2PSGDLRA(ForeachNewtonPSGDLRA):
     hvp_interval = 2
+    
+def create_mars_wrapped_optimizer(base_optimizer_class, mars_gamma=0.025):
+    """Factory function to create MARS-wrapped versions of optimizers"""
+    
+    class MARSWrappedOptimizer:
+        def __init__(self, params, mars_gamma=mars_gamma, **kwargs):
+            params = list(params)
+            base_optimizer = base_optimizer_class(params, **kwargs)
+            self.optimizer = MARSWrapper(params, base_optimizer, mars_gamma=mars_gamma)
+            
+            # Store initial parameter checksums
+            self.param_checksums = []
+            for p in params:
+                self.param_checksums.append(torch.sum(p).item())
+            
+        def step(self, closure=None):
+            # Check if parameters were reset since last step
+            current_checksums = []
+            for group in self.optimizer.param_groups:
+                for p in group["params"]:
+                    current_checksums.append(torch.sum(p).item())
+            
+            if hasattr(self, 'last_checksums'):
+                if current_checksums == self.param_checksums:
+                    print("WARNING: Parameters were reset to initial values!")
+            
+            result = self.optimizer.step(closure)
+            
+            # Store checksums after update
+            self.last_checksums = []
+            for group in self.optimizer.param_groups:
+                for p in group["params"]:
+                    self.last_checksums.append(torch.sum(p).item())
+            
+            return result
+            
+        def zero_grad(self, set_to_none: bool = True):
+            return self.optimizer.zero_grad(set_to_none)
+        
+        def state_dict(self):
+            return self.optimizer.state_dict()
+        
+        def load_state_dict(self, state_dict):
+            return self.optimizer.load_state_dict(state_dict)
+        
+        @property
+        def param_groups(self):
+            return self.optimizer.param_groups
+        
+        @param_groups.setter
+        def param_groups(self, value):
+            self.optimizer.param_groups = value
+    
+    return MARSWrappedOptimizer
+
+# Create the specific optimizer
 
 
+# Then create the specific optimizer
+MARSWrappedAdamW = create_mars_wrapped_optimizer(ForeachAdamW)
 PalmForEachSoap = PaLMForeachSOAP
 PaLMSOAP = PaLMForeachSOAP
 PaLMSFAdamW = PaLMForeachSFAdamW
@@ -1308,4 +1472,5 @@ __all__ = [
     "ForeachSTORM_plus",
     "ForeachSGD",
     "ForeachSPlus",
+    "MARSWrappedAdamW",
 ]
