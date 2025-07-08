@@ -218,7 +218,7 @@ def main(
         model,
         data,
         loss_fn,
-        loss_win_condition(win_condition_multiplier * 2.0),  # Reasonable loss target for char-level modeling
+        loss_win_condition(win_condition_multiplier * 0.0),  # Reasonable loss target for char-level modeling
         steps,
         opt[0],
         dtype[0],
@@ -232,8 +232,8 @@ def main(
         group=steps_per_epoch,  # set to epoch size
         base_lr=1e-3,
         trials=trials,
-        estimate_condition_number=False,
-        test_loader=test_loader,
+        estimate_condition_number=True,
+        test_loader=None,
     )
 
 if __name__ == "__main__":

@@ -478,7 +478,7 @@ def get_orthogonal_matrix_QR(GG: List[Tensor], Q: List[Tensor], exp_avg: Optiona
     :param Q: List of current eigenbases (updated in-place to Q_new).
     :param exp_avg: Exponential moving average in the old eigenspace (updated in-place if provided).
     """
-    if exp_avg.dim() == 0:  # preconditioning doesn't make sense here
+    if exp_avg is not None and exp_avg.dim() == 0:
         Q.clear()
         return
 
@@ -542,44 +542,70 @@ def get_orthogonal_matrix(mat, max_eps: float = 1e-3, min_eps: float = 1e-30):
         if m is None:
             final.append(None)
             continue
-
+        
+        # Early NaN/Inf detection
+        if torch.isnan(m.data).any() or torch.isinf(m.data).any():
+            print(f"Warning: Input matrix contains NaN/Inf, using identity matrix")
+            identity = torch.eye(m.shape[0], device=m.device, dtype=m.dtype)
+            final.append(identity)
+            continue
+        
         m = promote(m.data)
-
-        device, dtype = m.device, m.dtype
+        original_device, original_dtype = m.device, m.dtype
+        
         eps = min_eps
-        while True:
+        success = False
+        
+        while not success:
             try:
-                    # Check for NaN/inf BEFORE any operations
+                # Additional safety check after promote
                 if torch.isnan(m).any():
                     m = torch.where(torch.isnan(m), torch.randn_like(m) * 1e-8, m)
-        
                 if torch.isinf(m).any():
                     m = torch.where(torch.isinf(m), torch.sign(m) * 1e8, m)
-
+                
                 eye = torch.eye(m.shape[0], device=m.device, dtype=m.dtype)
-                _eigval, eigvec = torch.linalg.eigh(m + eps * eye)
-                eigvec = eigvec.to(device=device, dtype=dtype)
-                break
+                matrix_to_decompose = m + eps * eye
+                
+                # Final check before decomposition
+                if torch.isnan(matrix_to_decompose).any() or torch.isinf(matrix_to_decompose).any():
+                    raise RuntimeError("Matrix still contains NaN/Inf after cleaning")
+                
+                _eigval, eigvec = torch.linalg.eigh(matrix_to_decompose)
+                eigvec = eigvec.to(device=original_device, dtype=original_dtype)
+                success = True
+                
             except torch.OutOfMemoryError:
                 if m.device.type == "cpu":
-                    raise
+                    print("Out of memory on CPU, using identity matrix")
+                    eigvec = torch.eye(m.shape[0], device=original_device, dtype=original_dtype)
+                    success = True
                 else:
                     m = m.cpu()
-            except RuntimeError:  # failed to compute eigenvalues
-                if m.dtype != torch.double:
+                    
+            except (RuntimeError, torch._C._LinAlgError) as e:
+                if "NaN" in str(e) or "illegal memory access" in str(e):
+                    print(f"Linear algebra error: {e}, using identity matrix")
+                    eigvec = torch.eye(m.shape[0], device=original_device, dtype=original_dtype)
+                    success = True
+                elif m.dtype != torch.double:
                     m = m.double()
                 elif eps < max_eps:
                     eps = eps ** (2 / 3)
                 else:
-                    raise
-            clean()
-
-        eigvec = eigvec.to(device=m.device, dtype=m.dtype)
+                    print(f"All recovery attempts failed: {e}, using identity matrix")
+                    eigvec = torch.eye(m.shape[0], device=original_device, dtype=original_dtype)
+                    success = True
+                    
+            if success:
+                clean()
+        
+        # Ensure correct device/dtype and flip for descending eigenvalue order
+        eigvec = eigvec.to(device=original_device, dtype=original_dtype)
         eigvec = torch.flip(eigvec, [1])
         final.append(eigvec)
-
+    
     return final
-
 
 @decorator_knowngood
 def _compilable_stochastic_lerp_(x: List[Tensor], y: List[Tensor], a: Union[float, int, Tensor]):
@@ -763,6 +789,13 @@ def update_preconditioner(grad, Q, GG, exp_avg, max_precond_dim, precondition_1d
     if update_precond:
         get_orthogonal_matrix_QR(GG, Q, exp_avg)
 
+def update_preconditioner_CASPR(grad, Q, GG, exp_avg, max_precond_dim, precondition_1d, beta, update_precond):
+    """
+    Updates the preconditioner matrices and the eigenbases (L, R, Q_L, Q_R in the paper).
+    """
+    update_ggt(grad, GG, max_precond_dim, precondition_1d, beta)
+    if update_precond:
+        get_orthogonal_matrix_QR(GG, Q, exp_avg)
 
 def init_preconditioner(grad, state, max_precond_dim, precondition_1d):
     """
@@ -1170,8 +1203,9 @@ class StatefulOptimizer(torch.optim.Optimizer):
         return self._handle_closure(closure)
     
 
-    def _handle_prev_closure(self, prev_closure):
-        """Handle previous model closure and store gradients separately"""
+    """ def _handle_prev_closure(self, prev_closure):
+        """#Handle previous model closure and store gradients separately
+    """
         if prev_closure is None:
             return None
         
@@ -1216,7 +1250,31 @@ class StatefulOptimizer(torch.optim.Optimizer):
                     p.grad = None
         
         return prev_loss
-
+    """
+    def _handle_prev_closure(self, prev_closure):
+        """Handle previous model closure and store gradients separately"""
+        # Clear gradients for previous model computation
+        self.zero_grad()  
+        
+        # Compute previous model loss and gradients
+        with torch.enable_grad():
+            prev_loss = prev_closure()  # This calls loss.backward() and fills p.grad
+        
+        # Store previous gradients in param_groups
+        for group in self.param_groups:
+            if 'prev_grads' not in group:
+                group['prev_grads'] = []
+            if 'prev_loss' not in group:
+                group['prev_loss'] = prev_loss.item() if prev_loss is not None else None
+            
+            group['prev_grads'].clear()
+            for p in group['params']:
+                if p.grad is not None:
+                    group['prev_grads'].append(p.grad.clone())  # Store prev gradient
+                else:
+                    group['prev_grads'].append(torch.zeros_like(p.data))
+        return prev_loss
+    
 
     def step(self, closure: Optional[Callable] = None):
         if self.precond_schedule is None:
@@ -1623,12 +1681,11 @@ def _fused_compilable_MARSAdamW_(
 ):
    
     u32, g32, prev_g32 = [list(map(promote, x)) for x in [update, grad, prev_grads]]
-    print(f"Prev:{prev_grads}")
-    print(f"Curr:{grad}")
-    print(f"lr:{lr}")
+ 
     if prev_g32 and len(prev_g32) == len(u32):
         u32_corrected = torch._foreach_sub(u32, prev_g32)
     else:
+        print("No Mars correction applied as tensor sizes didn't match")
         u32_corrected = u32
    
     gradient_correction = torch._foreach_mul(u32_corrected, scaled_gamma)

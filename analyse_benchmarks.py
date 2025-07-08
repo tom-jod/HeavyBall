@@ -66,8 +66,10 @@ real_world_benchmark_data = {
     'OGBM': {'condition_number': 7934.623616239815  , 'condition_std_err': 1784.3401800042263, 'n_params': 3555200}, # n_probes=20, n_samples=10
     'Transolver': {'condition_number': 109867.31456507105 , 'condition_std_err':  30140.78024317031, 'n_params': 3776457}, # n_probes=20, n_samples=10
     'CIFAR10': {'condition_number': 3004, 'condition_std_err': 1244, 'n_params': 11700000}, # n_probes=20, n_samples=10
-    'CIFAR100': {'condition_number': 3004, 'condition_std_err': 1244, 'n_params': 4080000}, # n_probes=20, n_samples=10
-
+    'CIFAR100': {'condition_number': 3004, 'condition_std_err': 1244, 'n_params': 11700000}, # n_probes=20, n_samples=10
+    'Tolstoi_RNN': {'condition_number': 4106.9, 'condition_std_err': 767.7, 'n_params': 284416}, # n_probes=20, n_samples=100
+    'PINN': {'condition_number': 16239, 'condition_std_err': 3709, 'n_params': 82201}, # n_probes=20, n_samples=100
+    'NeRF': {'condition_number': 887, 'condition_std_err': 90, 'n_params': 353284}, # n_probes=20, n_samples=100
 }
 
 
@@ -182,7 +184,7 @@ def plot_condition_vs_params(df, save_path=None):
     
     # Add benchmark names as annotations for classic optimization problems - styled like "beale.py"
     classic_problems = ['saddle_point', 'beale', 'rosenbrock', 'rastrigin']
-    real_world_benchmarks = ['MNIST_MLP']
+    real_world_benchmarks = ['MNIST_MLP', 'PINN']
     for _, row in df.iterrows():
         if any(classic in row['benchmark'] for classic in classic_problems):
             # Format name like "beale.py" - lowercase with .py extension
@@ -202,7 +204,7 @@ def plot_condition_vs_params(df, save_path=None):
                        fontsize=9, alpha=0.8, fontweight='bold',
                        bbox=dict(boxstyle='round,pad=0.3', facecolor='white', alpha=0.7))
         # Also annotate extreme cases - styled like "beale.py"
-        elif row['condition_number'] > 1000000 or row['n_params'] > 1000000:
+        elif row['condition_number'] > 1000000 or row['n_params'] > 100000:
             formatted_name = f"{row['benchmark'].replace('_', '')}.py"
             ax.annotate(formatted_name, 
                        (row['log_params'], row['log_condition']),

@@ -122,9 +122,9 @@ def main(
         group=938, # set to epoch size
         base_lr=1e-3,
         trials=trials,
-        estimate_condition_number = False,
+        estimate_condition_number = True,
         test_loader=None,
-        track_variance=True
+        track_variance=False
     )
 
 

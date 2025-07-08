@@ -8,7 +8,13 @@ from torch.optim.lr_scheduler import OneCycleLR
 import matplotlib.pyplot as plt
 import torch
 from torch import Tensor
-
+from torch.optim.lr_scheduler import (
+    CosineAnnealingLR,
+    OneCycleLR,
+    ExponentialLR,
+    StepLR
+)
+from torch.optim import SGD
 from . import utils
 
 use_default = utils.use_default
@@ -1020,27 +1026,71 @@ def set_indices(fns: Iterable[callable], retain: bool = True, offset: int = 0):
 
 class ChainOpt(utils.StatefulOptimizer):
     promote: bool = False
-
+    
     def __init__(self, params, defaults, foreach: bool, *fns):
         defaults = {k: v for k, v in defaults.items() if v is not use_default}
         super().__init__(params, defaults, foreach)
         self.fns = fns
-        self.gamma_schedule = CosineSandwichSchedule(1000, 0.025)
-        self.ema_update = []
-        # We use a dummy optimizer because OneCycleLR operates on an optimizer
-        # This parameter won't be trained — we're only using the scheduler output
-        param = torch.nn.Parameter(torch.zeros(1))
-        optimizer = SGD([param], lr=1e-3)
-        total_steps = 100000
-        self.list_of_gammas = []
-        self.scheduler = OneCycleLR(
-            optimizer,
-            max_lr=0.025,        # Actually max_gamma here 
-            total_steps=total_steps,
-            anneal_strategy='cos',  
-            div_factor=25,     
-            final_div_factor=1e9  # minimum lr = initial_lr / final_div_factor → set very small = 0
-        )
+        
+        # Learning rate scheduler will be initialized when first needed
+        self.lr_scheduler = None
+        self._scheduler_initialized = False
+    
+    def _initialize_lr_scheduler(self):
+        """Initialize LR scheduler based on the first parameter group that needs it"""
+        if self._scheduler_initialized:
+            return
+            
+        # Find the first group that has lr_schedule enabled
+        schedule_group = None
+        for group in self.param_groups:
+            if group.get("lr_schedule", False):
+                schedule_group = group
+                break
+        
+        if schedule_group is None:
+            self._scheduler_initialized = True
+            return
+        
+        # Get scheduler configuration from the group
+        scheduler_type = schedule_group.get("scheduler_type", "cosine")
+        total_steps = schedule_group.get("total_steps", 100000)
+        
+        # Create a dummy optimizer for the scheduler
+        dummy_param = torch.nn.Parameter(torch.zeros(1))
+        dummy_optimizer = SGD([dummy_param], lr=schedule_group["lr"])
+        
+        # Create the appropriate scheduler
+        if scheduler_type == "cosine":
+            self.lr_scheduler = CosineAnnealingLR(
+                dummy_optimizer,
+                T_max=total_steps,
+                eta_min=schedule_group.get("min_lr", 0.0)
+            )
+        elif scheduler_type == "onecycle":
+            self.lr_scheduler = OneCycleLR(
+                dummy_optimizer,
+                max_lr=schedule_group.get("max_lr", schedule_group["lr"] * 10),
+                total_steps=total_steps,
+                anneal_strategy=schedule_group.get("anneal_strategy", "cos"),
+                div_factor=schedule_group.get("div_factor", 25),
+                final_div_factor=schedule_group.get("final_div_factor", 1e4)
+            )
+        elif scheduler_type == "exponential":
+            self.lr_scheduler = ExponentialLR(
+                dummy_optimizer,
+                gamma=schedule_group.get("gamma", 0.95)
+            )
+        elif scheduler_type == "step":
+            self.lr_scheduler = StepLR(
+                dummy_optimizer,
+                step_size=schedule_group.get("step_size", 30000),
+                gamma=schedule_group.get("gamma", 0.1)
+            )
+        else:
+            raise ValueError(f"Unsupported scheduler type: {scheduler_type}")
+        
+        self._scheduler_initialized = True
 
     @property
     def fns(self):
@@ -1057,6 +1107,7 @@ class ChainOpt(utils.StatefulOptimizer):
     def _step(self, group):
         if "base_lr" not in group:
             group["base_lr"] = group["lr"]
+            
         if "prev_lr" in group and group["prev_lr"] != group["lr"]:
             utils.warn_once(
                 f"Learning rate changed between steps. This is an experimental feature and "
@@ -1066,23 +1117,23 @@ class ChainOpt(utils.StatefulOptimizer):
         
         caution = group["caution"]
         use_ema = group.get("use_ema", False)
-        # Extract previous gradients from group
         prev_grads = group.get("prev_grads", [])
         prev_loss = group.get("prev_loss", None)
+        group["prev_grads"] = prev_grads
         
-        group["prev_grads"] = prev_grads 
-            
-        vals = list(self.split_p_and_g_in_group(group, should_promote=self.promote, beta1=utils.get_beta1(group), use_ema=use_ema)) # updates gradient to include mars correction and creates compute efficient views of parameters
-
+        vals = list(self.split_p_and_g_in_group(
+            group, should_promote=self.promote, 
+            beta1=utils.get_beta1(group), use_ema=use_ema
+        ))
+        
         if not vals:
             return
+            
         p, g = zip(*vals)
-
+        
+        # Get and update step count
         for param in p:
             state = self.state_(param)
-        
-            if "update_by_adam_exp_avg_0" in state:
-                self.ema_update = state["update_by_adam_exp_avg_0"]
             if "step" in state:
                 step = state["step"]
             elif self.compile_step:
@@ -1090,25 +1141,39 @@ class ChainOpt(utils.StatefulOptimizer):
             else:
                 step = 0
             break
-
+        
+        # Increment step
         group["step"] = state["step"] = step = step + 1
-        group["prev_lr"] = group["lr"] = group["base_lr"] * step / max(step, group["warmup_steps"] + 1)
-
+        
+        # Handle learning rate scheduling
+        current_lr = group["base_lr"]
+        
+        # Apply warmup if specified
+        warmup_steps = group.get("warmup_steps", 0)
+        if warmup_steps > 0 and step <= warmup_steps:
+            warmup_factor = step / warmup_steps
+            current_lr = group["base_lr"] * warmup_factor
+       
+        # Apply LR schedule if enabled
+        if group.get("lr_schedule", False):
+            self._initialize_lr_scheduler()
+            if self.lr_scheduler is not None:
+                self.lr_scheduler.step()
+                current_lr = self.lr_scheduler.get_last_lr()[0]
+        
+        group["lr"] = current_lr
+        group["prev_lr"] = current_lr
+        print(group["lr"])
+        # Apply optimization step
         if not group["foreach"] or len(p) == 1:
             for param, grad in zip(p, g):
                 chain(self.state_, group, [grad], [param], *self.fns)
         else:
             chain(self.state_, group, g, p, *self.fns)
-                
-        if group.get("mars_schedule", False):
-            #gamma = self.gamma_schedule.get_gamma(group["step"])
-            self.scheduler.step()  # Move to next step in the cycle
-            gamma = self.scheduler.get_last_lr()[0]  # Extract scheduled LR
-            group["mars_gamma"] = gamma
-            
+        
         group["caution"] = caution
-        group["lr"] = group["prev_lr"]
         group["step"] = None
+
 
 class CosineSandwichSchedule:
     def __init__(self, total_steps, gamma, warmup_ratio=0.125, hold_ratio=0.5):

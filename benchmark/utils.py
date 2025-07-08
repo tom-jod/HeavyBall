@@ -280,6 +280,7 @@ class Objective:
         win_condition,
         weight_decay,
         warmup_trials,
+        estimate_condition_number,
         test_loader,
         track_variance,
         ema_index: int = 0,
@@ -328,6 +329,7 @@ class Objective:
         self._last_loss = float('inf')
         self.best_losses = []
         self.current_losses = []
+        self.estimate_condition_number = estimate_condition_number
         self.test_loader = test_loader
         self.track_variance = track_variance
 
@@ -369,19 +371,22 @@ class Objective:
         validator = self.validator.new()
         self.test_accuracies = []
         self.grad_variances = []
-        # Create a list to track losses for this run
+        self.condition_numbers = []
         step_losses = []
         prev_model_params = None
         # iterate through each epoch
         for i in range(self.steps // self.group):
-            # estimate variance half way through
-          #  if i==int(self.steps//(self.group*2)) or i==0 or i==int(self.steps//(self.group*4)) or i==int(3*self.steps//(self.group*4)):
-           #     estimate_minibatch_variance_detailed(self.m, self.data, n_samples=10, loss_fn=self.loss_fn)
+           
             if not hasattr(self, 'test_accuracies'):
                 self.test_accuracies = []
             if self.test_loader != None:
                 test_accuracy = evaluate_model(self.m, self.test_loader)
                 self.test_accuracies.append(test_accuracy)
+
+            if self.estimate_condition_number: 
+                with torch.backends.cudnn.flags(enabled=False):
+                    if i % int(self.steps // (self.group*5)) == 0:
+                        self.condition_numbers.append(estimate_condition_number_hvp(self.m, self.data, n_probes=20, n_samples=50, loss_fn=self.loss_fn))
     
             if self.track_variance:
                 # track variance at each eighth of the way through training
@@ -422,16 +427,7 @@ class Objective:
                 else:
                     inp, tgt = self.data()
 
-                # Store previous model state
-                if not hasattr(self, '_prev_model_state'):
-                    self._prev_model_state = None
-
-                # Save current model state for next iteration
-                self._prev_model_state = {
-                    name: param.clone().detach() 
-                    for name, param in self.m.named_parameters()
-                }
-       
+                
                 def _closure():
                     loss = self.m() if inp is None else self.m(inp)
                     if self.loss_fn is not None:
@@ -495,7 +491,7 @@ class Objective:
     
         # Get current memory usage before returning
         self.current_memory_usage = get_gpu_memory_usage()
-        return validator.ema_states.min().item(), self.m, torch_hist[-1].item(), step_losses, self.test_accuracies, self.grad_variances
+        return validator.ema_states.min().item(), self.m, torch_hist[-1].item(), step_losses, self.test_accuracies, self.grad_variances, self.condition_numbers
                 
         #    with torch.no_grad():
          #       for loss in torch_hist:
@@ -511,7 +507,7 @@ class Objective:
     
     def objective(self, params):
         self.attempt += 1
-        target, model, loss, step_losses, test_accuracies, grad_variances = self._inner(params)
+        target, model, loss, step_losses, test_accuracies, grad_variances, condition_numbers = self._inner(params)
 
         if self.best_loss is None or loss < self.best_loss or not np.isfinite(self.best_loss):
             self.best_loss = loss
@@ -520,6 +516,7 @@ class Objective:
             self.best_losses = step_losses.copy() 
             self.test_accuracies = test_accuracies.copy()
             self.grad_variances = grad_variances.copy()
+            self.condition_numbers = condition_numbers.copy()
             self.memory_usage = getattr(self, 'current_memory_usage', 0)/ (1024**2)
 
         #if self.best_at * 100 < self.attempt and self.attempt - self.best_at > self.warmup_trials:  # no improvements
@@ -606,19 +603,15 @@ def trial(
     test_loader=None,
     track_variance=False,
 ):
+    """
     condition_numbers = [0]
-    
     if estimate_condition_number:
         with torch.backends.cudnn.flags(enabled=False):
             condition_numbers = []
             for i in range(5):
-                condition_numbers.append( estimate_condition_number_hvp(model, data, n_probes=2, n_samples=10, loss_fn=loss_fn))
+                condition_numbers.append(estimate_condition_number_hvp(model, data, n_probes=20, n_samples=10, loss_fn=loss_fn))
             #condition_number = estimate_condition_number_hvp(model, data, n_probes=20, n_samples=2000)
-            
-
-
-
-
+    """
 
 
     group = min(group, steps)
@@ -682,6 +675,7 @@ def trial(
         _win_condition,
         weight_decay,
         max(trials * warmup_trial_pct, 1 + random_trials),
+        estimate_condition_number,
         test_loader,
         track_variance,
         **kwargs,
@@ -753,9 +747,9 @@ def trial(
         print("Successfully found the minimum.")
     else:
         winning_params = {"lr": base_lr, "1mbeta1": 0.9, "1mbeta2": 0.999, "1mshampoo_beta": 0.999}
-    
-    mean_cond = np.mean(condition_numbers)
-    std_err_cond = np.std(condition_numbers) / np.sqrt(len(condition_numbers))
+    print(obj.condition_numbers)
+    mean_cond = np.mean(obj.condition_numbers)
+    std_err_cond = np.std(obj.condition_numbers) / np.sqrt(len(obj.condition_numbers))
 
     print(
         f"Took: {end_time - start_time} | Attempt: {obj.attempt} | "
@@ -790,7 +784,7 @@ def get_gpu_memory_usage():
     torch.cuda.synchronize()
     return torch.cuda.max_memory_allocated()
 
-def estimate_condition_number_hvp(model, data_fn, n_probes=20, n_samples=5, loss_fn=torch.nn.functional.binary_cross_entropy_with_logits):
+def estimate_condition_number_hvp(model, data_fn, n_probes=20, n_samples=50, loss_fn=torch.nn.functional.binary_cross_entropy_with_logits):
     """Estimate condition number using Hessian-vector products"""
     
     def compute_hvp(loss, params, v):
