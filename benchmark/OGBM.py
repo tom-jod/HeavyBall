@@ -282,7 +282,7 @@ class OGBGDataset:
         )
         
         # Convert to list for easier access (limit for demo)
-        self.examples = list(self.dataset.take(1000))
+        self.examples = list(self.dataset)#.take(1000)
         print(f"Loaded {len(self.examples)} examples")
         self.data_dir = Path(data_dir)
         self.data_dir.mkdir(parents=True, exist_ok=True)
@@ -307,7 +307,7 @@ class OGBGDataset:
         )
         
         # Convert to list for easier access (limit for demo)
-        self.examples = list(self.dataset.take(1000))
+        self.examples = list(self.dataset)
         print(f"Loaded {len(self.examples)} examples")
     
     def __len__(self):
@@ -546,8 +546,11 @@ def main(
         base_lr=1e-3,
         trials=trials,
         estimate_condition_number=False,
-        test_loader=test_loader
+        test_loader=None,
+        track_variance=True,
     )
 
 if __name__ == "__main__":
     app()
+
+# steps per epoch: int(350343/32)

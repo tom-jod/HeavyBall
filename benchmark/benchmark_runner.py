@@ -37,7 +37,7 @@ def run_single_benchmark(script_path, optimizer, steps, trials, seed, output_dir
             cmd,
             capture_output=True,
             text=True,
-            timeout=12*3600,  # 12 hour timeout
+            timeout=24*3600,  # 24 hour timeout
             env={**os.environ, "CUDA_VISIBLE_DEVICES": "2"}  # Ensure single GPU
         )
         
@@ -212,7 +212,7 @@ def aggregate_and_plot(results, benchmark_name, output_dir):
         
         # Truncate all trajectories
         truncated = [traj[:min_length] for traj in trajectories]
-        
+        mean_runtime = group["runtime"]
         if truncated:
             # Calculate statistics
             mean_traj = np.mean(truncated, axis=0)
@@ -221,8 +221,8 @@ def aggregate_and_plot(results, benchmark_name, output_dir):
             
             # Plot
             x = np.arange(min_length)
-            plt.plot(x, mean_traj, label=f"{optimizer} (n={len(truncated)})", linewidth=2)
-            plt.fill_between(x, mean_traj - se_traj, mean_traj + se_traj, alpha=0.3)
+            plt.plot(x, mean_traj, label=f"{optimizer} (n={mean_runtime})", linewidth=1)
+            plt.fill_between(x, mean_traj - se_traj, mean_traj + se_traj, alpha=0.2)
     
     plt.xlabel('Iteration')
     plt.ylabel('Loss')
@@ -369,7 +369,6 @@ def main(
     aggregate_and_plot(all_results, benchmark_name, output_dir)
     
     print(f"\nResults saved to: {output_dir}")
-    print(f"Summary: {output_dir}/{benchmark_name}_summary.csv")
     print(f"Plots: {output_dir}/{benchmark_name}_*.png")
 
 if __name__ == "__main__":

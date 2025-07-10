@@ -171,7 +171,7 @@ def main(
         num_layers=2, 
         seq_length=seq_length
     ).cuda()
-    
+    print(len(train_dataset))
     # Create data loaders
     train_loader = DataLoader(
         train_dataset,
@@ -212,7 +212,7 @@ def main(
         return F.cross_entropy(output, target)
     
     # Calculate steps per epoch for group parameter
-    steps_per_epoch = len(train_loader)
+    steps_per_epoch = len(train_loader/batch)
     
     trial(
         model,
@@ -229,11 +229,11 @@ def main(
         seq_length,  # sequence parameter
         vocab_size,    # vocab size parameter
         failure_threshold=10,
-        group=steps_per_epoch,  # set to epoch size
         base_lr=1e-3,
         trials=trials,
-        estimate_condition_number=True,
+        estimate_condition_number = True,
         test_loader=None,
+        track_variance=False
     )
 
 if __name__ == "__main__":

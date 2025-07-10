@@ -151,7 +151,6 @@ def main(
         failure_threshold=10,
         base_lr=1e-3,
         trials=trials,
-        group=391,
         estimate_condition_number = False,
         test_loader=None,
         track_variance=True
@@ -160,3 +159,5 @@ def main(
 
 if __name__ == "__main__":
     app()
+
+# steps per epoch int(50000/128)

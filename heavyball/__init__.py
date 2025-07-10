@@ -318,7 +318,7 @@ class ForeachAdamW_lr_schedule(C.BaseOpt):
         lr=0.0025,
         lr_schedule=True,
         scheduler_type="onecycle",
-        total_steps=100,
+        total_steps=93750,
         betas=(0.9, 0.99),
         eps=1e-8,
         weight_decay=0,
@@ -921,6 +921,115 @@ class ForeachSignLaProp(C.BaseOpt):
         )
 
 
+class ForeachCOSMOS(C.BaseOpt):
+    """
+    ForeachCOSMOS (Combination of SOAP and Muon)
+
+    Sources:
+        https://github.com/lliu606/COSMOS/blob/main/COSMOS.py
+        https://arxiv.org/html/2502.17410v1
+    """
+
+    use_precond_schedule: bool = False
+
+    def __init__(
+        self,
+        params,
+        lr: float = 3e-3,
+        betas=(0.9, 0.95),
+        shampoo_beta: float = 0.1,  # use shampoo_beta as gamma in cosmos
+        eps: float = 1e-8,
+        weight_decay: float = 0.01,
+        precondition_frequency: int = 2,
+        max_precond_dim: int = 2048,  #
+        merge_dims: bool = True,
+        precondition_1d: bool = False,
+        normalize_grads: bool = False,
+        correct_bias: bool = True,
+        warmup_steps: int = 0,
+        split: bool = False,
+        foreach: bool = True,
+        mars: bool = False,
+        caution: bool = False,
+        mars_gamma: float = 0.0025,
+        palm: bool = C.use_default,
+        precond_scheduler=(1 / 3, 9),
+        beta2_scale: float = 0.8,
+        use_precond_schedule: bool = C.use_default,
+        gradient_clipping: C.str_or_fn = C.use_default,
+        update_clipping: C.str_or_fn = C.use_default,
+        storage_dtype: str = "float32",
+        stochastic_schedule: bool = False,
+        precond_grad_accum: bool = False,
+        **kwargs,
+    ):
+        use_precond_schedule = C.default(use_precond_schedule, self.use_precond_schedule)
+
+        defaults = locals()
+        defaults.pop("self")
+        params = defaults.pop("params")
+        defaults.update(defaults.pop("kwargs"))
+
+        if kwargs:
+            utils.warn_once(f"Working with uncaptured keyword arguments: {kwargs}")
+
+        if use_precond_schedule:
+            del defaults["precondition_frequency"]
+            self.precond_schedule = utils.get_soap_precond_schedule(defaults.pop("precond_scheduler"))
+        else:
+            del defaults["precond_scheduler"]
+            self.precond_schedule = 1 / defaults.pop("precondition_frequency")
+        super().__init__(
+            params,
+            defaults,
+            foreach,
+            gradient_clipping,
+            update_clipping,
+            palm,  #
+            C.scale_by_cosmos,
+        )
+
+
+class ForeachSignLaProp(C.BaseOpt):
+    def __init__(
+        self,
+        params,
+        lr=0.0025,
+        betas=(0.9, 0.99),
+        eps=1e-8,
+        weight_decay=0,
+        warmup_steps=0,
+        foreach: bool = True,
+        storage_dtype: str = "float32",
+        mars: bool = False,
+        caution: bool = False,
+        mars_gamma: float = 0.0025,
+        gradient_clipping: C.str_or_fn = C.use_default,
+        update_clipping: C.str_or_fn = C.use_default,
+        palm: bool = C.use_default,
+        beta2_scale: float = 0.8,
+        **kwargs,
+    ):
+        defaults = locals()
+        defaults.pop("self")
+        params = defaults.pop("params")
+        defaults.update(defaults.pop("kwargs"))
+
+        if kwargs:
+            utils.warn_once(f"Working with uncaptured keyword arguments: {kwargs}")
+
+        super().__init__(
+            params,
+            defaults,
+            foreach,
+            gradient_clipping,
+            update_clipping,
+            palm,
+            C.scale_by_laprop,
+            C.sign,
+        )
+
+
 class ForeachSOLP(C.BaseOpt):
     """
     ForeachSOLP
@@ -1452,6 +1561,7 @@ MARSAdamWScheduled = ForeachMARSAdamWScheduled
 SGD = ForeachSGD
 SPlus = ForeachSPlus
 AdamW_lr_schedule = ForeachAdamW_lr_schedule
+COSMOS = ForeachCOSMOS
 
 __all__ = [
     "Muon",
@@ -1508,6 +1618,7 @@ __all__ = [
     "ForeachSTORM_plus",
     "ForeachSGD",
     "ForeachSPlus",
-    "MARSWrappedAdamW",
-    "AdamW_lr_schedule",
+    "ForeachMARSWrappedAdamW",
+    "ForeachAdamW_lr_schedule",
+    "ForeachCOSMOS"
 ]

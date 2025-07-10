@@ -126,7 +126,7 @@ def main(
     data_gen = create_data_generator()
     def data():
         return next(data_gen)
-   
+    print(len(trainset))
     trial(
         model,
         data,
@@ -143,7 +143,6 @@ def main(
         3,   # channels parameter (RGB)
         failure_threshold=10,
         base_lr=1e-3,
-        group=391,
         trials=trials,
         estimate_condition_number = False,
         test_loader=None,
@@ -153,3 +152,5 @@ def main(
 
 if __name__ == "__main__":
     app()
+
+# steps per epoch int(50000/128)

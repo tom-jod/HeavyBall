@@ -743,6 +743,28 @@ def update_ggt(grad, GG, max_precond_dim, precondition_1d, beta):
         stochastic_lerp_(m, outer_product, 1 - beta)
 
 
+@decorator
+def update_ggt_no_momentum(grad, max_precond_dim, precondition_1d, beta):
+    """ 
+    Simplified by @francois-rozet in commit 704ccc4bab52429f945df421647ec82c54cdd65f
+    Re-commited due to faulty merge
+    """
+    if grad.dim() == 1 and (not precondition_1d or grad.shape[0] > max_precond_dim):
+        return
+
+    ggt_list = []
+
+    for idx in range(grad.dim()):
+        b = einsum_base[idx]
+        g0 = einsum_base[: grad.dim()]
+        g1 = g0.replace(b, b.upper())
+
+        outer_product = compiled_einsum(f"{g0},{g1}->{b + b.upper()}", grad, grad)
+        ggt_list.append(outer_product)
+
+    return ggt_list
+
+
 def tree_apply(fn):
     def _fn(*args):
         return tree_map(fn, *args)
@@ -789,6 +811,14 @@ def update_preconditioner(grad, Q, GG, exp_avg, max_precond_dim, precondition_1d
     if update_precond:
         get_orthogonal_matrix_QR(GG, Q, exp_avg)
 
+def update_preconditioner_cosmos(grad, U, S, exp_avg, max_precond_dim, precondition_1d, beta2, update_precond):
+    """
+    Updates the preconditioner matrices and the eigenbases (L, R, Q_L, Q_R in the paper).
+    """
+    GG = update_ggt_no_momentum(grad, max_precond_dim, precondition_1d, beta2)
+    if update_precond:
+        cosmos_update_basis(grad, GG, U, S, beta2)
+
 def update_preconditioner_CASPR(grad, Q, GG, exp_avg, max_precond_dim, precondition_1d, beta, update_precond):
     """
     Updates the preconditioner matrices and the eigenbases (L, R, Q_L, Q_R in the paper).
@@ -796,6 +826,7 @@ def update_preconditioner_CASPR(grad, Q, GG, exp_avg, max_precond_dim, precondit
     update_ggt(grad, GG, max_precond_dim, precondition_1d, beta)
     if update_precond:
         get_orthogonal_matrix_QR(GG, Q, exp_avg)
+
 
 def init_preconditioner(grad, state, max_precond_dim, precondition_1d):
     """
@@ -814,6 +845,90 @@ def init_preconditioner(grad, state, max_precond_dim, precondition_1d):
 
     update_ggt(grad, state["GG"], max_precond_dim, precondition_1d, 0)
     state["Q"] = get_orthogonal_matrix(state["GG"])
+
+    
+def init_preconditioner_cosmos(grad, state, max_precond_dim, precondition_1d):
+    """
+    Initializes the preconditioner matrices for COSMOS optimizer.
+    Following the same pattern as init_preconditioner but for COSMOS.
+    """
+    # Initialize storage for preconditioner matrices
+    state["U"] = []  # Orthogonal matrices U_t
+    state["S"] = []  # Diagonal matrices S_t
+    
+    # Use the same logic as init_preconditioner
+    if grad.numel() > 1 and (grad.ndim > 1 or precondition_1d):
+        for sh in grad.shape:
+            if sh > max_precond_dim or sh == 1:
+                # Skip preconditioning for dimensions that are too large or size 1
+                state["U"].append(None)
+                state["S"].append(None)
+            else:
+                # Initialize U_t as identity matrix (same size as the dimension)
+                state["U"].append(torch.eye(sh, device=grad.device, dtype=grad.dtype))
+                # Initialize S_t as identity matrix  
+                state["S"].append(torch.eye(sh, device=grad.device, dtype=grad.dtype))
+    else:
+        # For 1D gradients or when not preconditioning
+        state["U"].append(None)
+        state["S"].append(None)
+
+
+def cosmos_update_basis(g, GG, U, S, beta2):
+    """
+    Optimized version of the basis update using custom built functions from get_orthogonal_matrix_QR
+    """
+    for g, m, u_old, s_old in zip(g, GG, U, S):
+        if m is None:
+            continue
+            
+        g_promoted = promote(g)    
+        u_old_promoted = promote(u_old)
+        s_old_promoted = promote(s_old)
+        m_promoted = promote(m)
+        
+        # Debug: Check shapes and types
+        print(f"u_old_promoted shape: {u_old_promoted.shape}")
+        print(f"s_old_promoted shape: {s_old_promoted.shape}")
+        print(f"m_promoted shape: {m_promoted.shape}")
+        
+        # M_t = β2 U_{t-1} S_{t-1} + (1 - β2) GGT @ U_{t-1}
+        scaled_s = torch.matmul(u_old_promoted, s_old_promoted)
+        
+        # Compute m_promoted @ u_old_promoted
+        m_u_product = torch.matmul(m_promoted, u_old_promoted)
+        
+        # M = beta2 * scaled_s + (1 - beta2) * (m_promoted @ u_old_promoted)
+        M = stochastic_lerp_(scaled_s, m_u_product, 1-beta2)
+        
+        # Debug: Check if M is None
+        if M is None:
+            print("ERROR: M is None after stochastic_lerp_")
+            print(f"scaled_s: {scaled_s}")
+            print(f"m_u_product: {m_u_product}")
+            print(f"1-beta2: {1-beta2}")
+            continue
+        
+        # Compute eigenvalue estimates
+        est_eig = compiled_einsum("ij,ij->j", u_old_promoted, m_u_product)
+        sort_idx = torch.argsort(est_eig, descending=True)
+        
+        # Apply sorting and use inplace orthogonalization
+        M_sorted = M[:, sort_idx]
+        u_new = inplace_orthogonal_(M_sorted, precise_zeroth_power_mode)
+        
+        # rotate s into the full rank space
+        s_rotated = torch.matmul(torch.matmul(u_old, s_old), u_old.T)
+        s_t = stochastic_lerp_(s_rotated, m_promoted, 1-beta2)
+        
+        # rotate back into updated low rank space
+        s_new = torch.matmul(torch.matmul(u_new.T, s_t), u_new)
+        
+        # Update U,S,V in-place using copy_stochastic_
+        copy_stochastic_(u_old, u_new)
+        copy_stochastic_(s_old, s_new)
+        
+    return U, S
 
 
 @decorator
@@ -1427,6 +1542,247 @@ def adam_(
     exp_avg, exp_avg_sq, grad = map(list_guard, (exp_avg, exp_avg_sq, grad))
     beta1, beta2, step, eps = scalar_guard(beta1, beta2, step, eps, exp_avg[0])
     _compilable_adam_(exp_avg, exp_avg_sq, grad, beta1, beta2, step, eps)
+    return grad
+
+
+def matmul_tensor_lists(tensor_list_a, tensor_list_b):
+    """
+    Calculate matrix multiplication between two lists of tensors.
+    Handles nested lists by flattening them first.
+    """
+    # Flatten any nested lists
+    list_a = flatten_tensor_lists(tensor_list_a)
+    list_b = flatten_tensor_lists(tensor_list_b)
+    
+    if len(list_a) != len(list_b):
+        raise ValueError(f"Lists must have same length: {len(list_a)} != {len(list_b)}")
+    
+    result_list = []
+    for i, (A, B) in enumerate(zip(list_a, list_b)):
+        if A is None or B is None:
+            result_list.append(None)
+            continue
+        
+        # Use torch.matmul for standard matrix multiplication
+        result = torch.matmul(A, B)
+        result_list.append(result)
+    
+    return result_list
+
+
+def flatten_tensor_lists(tensor_list):
+    """Flatten nested lists of tensors"""
+    result = []
+    for item in tensor_list:
+        if isinstance(item, list):
+            # If it's a list, take the first tensor (or handle as needed)
+            if len(item) > 0 and item[0] is not None and isinstance(item[0], torch.Tensor):
+                result.append(item[0])
+            else:
+                result.append(None)
+        elif isinstance(item, torch.Tensor):
+            result.append(item)
+        else:
+            result.append(None)
+    return result
+
+def matmul_tensor_lists_batched(tensor_list_a, tensor_list_b, grad_shape, einsum_base="abcdefghijklmnopqrstuvwxyz", compiled_einsum=None):
+    """
+    Calculate matrix multiplication between two lists of tensors using einsum,
+    following the pattern from update_ggt_no_momentum for handling gradients.
+    
+    Args:
+        tensor_list_a: List of tensors (left matrices)
+        tensor_list_b: List of tensors (right matrices)  
+        grad_shape: Shape of the gradient tensor (used for dimension indexing)
+        einsum_base: String of characters to use for einsum indices
+        compiled_einsum: Compiled einsum function (optional, falls back to torch.einsum)
+    
+    Returns:
+        List of matrix products A_i @ B_i
+    """
+    if compiled_einsum is None:
+        compiled_einsum = torch.einsum
+    
+    if len(tensor_list_a) != len(tensor_list_b):
+        raise ValueError(f"Lists must have same length: {len(tensor_list_a)} != {len(tensor_list_b)}")
+    
+    result_list = []
+    
+    for idx in range(len(grad_shape)):
+        A = tensor_list_a[idx] if idx < len(tensor_list_a) else None
+        B = tensor_list_b[idx] if idx < len(tensor_list_b) else None
+        
+        if A is None or B is None:
+            result_list.append(None)
+            continue
+        
+        # Use the same indexing pattern as update_ggt_no_momentum
+        i_char = einsum_base[idx]
+        j_char = einsum_base[idx].upper()  # Use uppercase for the contracted dimension
+        k_char = einsum_base[(idx + len(grad_shape)) % len(einsum_base)]
+        
+        # For A @ B: A[i,j] * B[j,k] -> C[i,k]
+        einsum_expr = f"{i_char}{j_char},{j_char}{k_char}->{i_char}{k_char}"
+        result = compiled_einsum(einsum_expr, A, B)
+        result_list.append(result)
+    
+    return result_list
+
+
+# Specialized functions for common COSMOS operations
+def matmul_U_S(U_list, S_list, compiled_einsum=None):
+    """Calculate U @ S for COSMOS algorithm (line 6: U_t^T * ... * U_t)"""
+    return matmul_tensor_lists(U_list, S_list, compiled_einsum=compiled_einsum)
+
+
+def matmul_A_UT(A_list, U_list):
+    """Calculate A @ U^T for COSMOS algorithm"""
+    result_list = []
+    for A, U in zip(A_list, U_list):
+        if A is None or U is None:
+            result_list.append(None)
+            continue
+        
+        # A @ U^T: multiply A by transpose of U
+        result = torch.matmul(A, U.T)
+        result_list.append(result)
+    
+    return result_list
+
+
+def matmul_UT_A(U_list, A_list):
+    """Calculate U^T @ A for COSMOS algorithm"""
+    result_list = []
+    for U, A in zip(U_list, A_list):
+        if U is None or A is None:
+            result_list.append(None)
+            continue
+        
+        # U^T @ A: transpose U then multiply
+        result = torch.matmul(U.T, A)
+        result_list.append(result)
+    
+    return result_list
+
+
+@decorator_knowngood
+def _compilable_cosmos_(
+    exp_avg: List[Tensor],
+    exp_avg_sq: List[Tensor],
+    grad: List[Tensor],
+    U: List[Tensor],
+    S: List[Tensor],
+    beta1: float,
+    beta2: float,
+    gamma: float,
+    step: int,
+    eps: float = 1e-8,
+    compiled_einsum=None,
+):
+    if compiled_einsum is None:
+        compiled_einsum = torch.einsum
+      # Debug: Print types and shapes
+    
+    beta1 = beta_debias(beta1, step)
+    beta2 = beta_debias(beta2, step)
+    
+    g32 = list(map(promote, grad))
+    
+    U32 = []
+    for u in U:
+        if isinstance(u, list):
+            if len(u) > 0 and u[0] is not None:
+                U32.append(promote(u[0]))  # Take first tensor from each list
+            else:
+                U32.append(None)
+        else:
+            U32.append(promote(u))
+    
+    S32 = list(map(promote, S))
+    print(f"g32 type: {type(g32)}, length: {len(g32)}")
+    print(f"U32 type: {type(U32)}, length: {len(U32)}")
+    if len(g32) > 0:
+        print(f"g32[0] type: {type(g32[0])}, shape: {g32[0].shape if hasattr(g32[0], 'shape') else 'no shape'}")
+    if len(U32) > 0:
+        print(f"U32[0] type: {type(U32[0])}, shape: {U32[0].shape if hasattr(U32[0], 'shape') else 'no shape'}")
+ 
+    # Replace: gu = g32 @ U32
+    gu = matmul_tensor_lists(g32, U32)
+    
+    exp_avg32 = _lerp(exp_avg, g32, beta1)
+    denom = _compilable_exp_avg_sq_(exp_avg_sq, gu, beta2, eps, [None])
+    
+    # Replace: mu = exp_avg32 @ U32
+    mu = matmul_tensor_lists(exp_avg32, U32)
+    
+    u32 = torch._foreach_div(exp_avg32, denom)
+    
+    # Replace: A_t = u32 @ U32.T
+    A_t = matmul_A_UT(u32, U32)
+    
+    # Replace: mu @ U32.T
+    mu_U_T = matmul_A_UT(mu, U32)
+    complementary_space = torch._foreach_sub(exp_avg32, mu_U_T)
+    
+    # Handle the norm calculation for each tensor in the list
+    norms = []
+    for tensor in complementary_space:
+        if tensor is not None:
+            norm = torch.linalg.norm(tensor, ord='fro')
+            norms.append(norm)
+        else:
+            norms.append(None)
+    
+    # Normalize each tensor by its norm
+    complementary_space_n = []
+    for tensor, norm in zip(complementary_space, norms):
+        if tensor is not None and norm is not None:
+            complementary_space_n.append(tensor / norm)
+        else:
+            complementary_space_n.append(None)
+    
+    # Apply orthogonalization and compute B_t
+    B_t = []
+    for tensor in complementary_space_n:
+        if tensor is not None:
+            ortho_tensor = inplace_orthogonal_(tensor)
+            b_val = torch.linalg.norm(ortho_tensor, ord='fro')
+            B_t.append(b_val)
+        else:
+            B_t.append(None)
+    
+    # Compute √m for each tensor and scale B_t
+    sqrt_m_scaled_B = []
+    for i, (b_val, tensor) in enumerate(zip(B_t, g32)):
+        if b_val is not None and tensor is not None:
+            sqrt_m = math.sqrt(tensor.shape[0])
+            scaled_b = b_val * sqrt_m * gamma  # Fixed the multiplication
+            sqrt_m_scaled_B.append(scaled_b)
+        else:
+            sqrt_m_scaled_B.append(None)
+    
+    # Final update: G_t = A_t + γ * B_t * √m
+    G_t = torch._foreach_add(A_t, sqrt_m_scaled_B)
+    copy_stochastic_list_(grad, G_t)
+
+
+def cosmos_(
+    exp_avg: List[Tensor],
+    exp_avg_sq: List[Tensor],
+    grad: List[Tensor],
+    U: List[Tensor],
+    S: List[Tensor],
+    beta1: float,
+    beta2: float,
+    gamma: float,
+    step: int,
+    eps: float = 1e-8,
+    compiled_einsum=None,
+):
+    exp_avg, exp_avg_sq, grad, U, S = map(list_guard, (exp_avg, exp_avg_sq, grad, U, S))
+    beta1, beta2, gamma, step, eps = scalar_guard(beta1, beta2, gamma, step, eps, exp_avg[0])
+    _compilable_cosmos_(exp_avg, exp_avg_sq, grad, U, S, beta1, beta2, gamma, step, eps, compiled_einsum)
     return grad
 
 

@@ -103,7 +103,7 @@ def main(
     # Custom loss function that matches the expected signature
     def loss_fn(output, target):
         return F.nll_loss(output, target)
-    
+    print(len(train_dataset))
     trial(
         model,
         data,
@@ -119,14 +119,15 @@ def main(
         128,  # sequence parameter (not really applicable for MNIST, but required)
         1,    # some other parameter
         failure_threshold=10,
-        group=938, # set to epoch size
         base_lr=1e-3,
         trials=trials,
-        estimate_condition_number = True,
+        estimate_condition_number = False,
         test_loader=None,
-        track_variance=False
+        track_variance=True
     )
 
 
 if __name__ == "__main__":
     app()
+
+# steps per epoch: int(60000/64)

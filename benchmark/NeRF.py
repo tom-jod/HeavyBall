@@ -177,12 +177,11 @@ def main(
         128,
         1,
         failure_threshold=10,
-        group=1,
         base_lr=5e-4,  # Good learning rate for NeRF
         trials=trials,
-        estimate_condition_number=True,
+        estimate_condition_number=False,
         test_loader=None,
-        track_variance=False
+        track_variance=True
     )
 
 if __name__ == "__main__":

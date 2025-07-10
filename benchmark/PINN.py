@@ -130,10 +130,9 @@ def main(
         128,
         1,
         failure_threshold=10,
-        group=max(1, steps // 8),  # Ensure group is at least 1
         base_lr=1e-4,  # Lower learning rate for stability
         trials=trials,
-        estimate_condition_number=True,
+        estimate_condition_number=False,
         test_loader=None,
         track_variance=True
     )

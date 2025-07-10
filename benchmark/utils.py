@@ -349,7 +349,7 @@ class Objective:
         return getattr(opt, 'requires_prev_model', False)
     
     def _inner(self, params):
-        self.current_losses = []
+        
         input_kwargs = locals()
         input_kwargs.pop("self")
         params = {
@@ -372,7 +372,7 @@ class Objective:
         self.test_accuracies = []
         self.grad_variances = []
         self.condition_numbers = []
-        step_losses = []
+        self.current_losses = []
         prev_model_params = None
         # iterate through each epoch
         for i in range(self.steps // self.group):
@@ -484,14 +484,11 @@ class Objective:
                 if j==0:
                     # Add loss to step_losses and current_losses (once per epoch: outer loop)
                     loss_value = loss.item()
-                    step_losses.append(loss_value)
                     self.current_losses.append(loss_value)
                     
-                
-    
         # Get current memory usage before returning
         self.current_memory_usage = get_gpu_memory_usage()
-        return validator.ema_states.min().item(), self.m, torch_hist[-1].item(), step_losses, self.test_accuracies, self.grad_variances, self.condition_numbers
+        return validator.ema_states.min().item(), self.m, torch_hist[-1].item(), self.current_losses, self.test_accuracies, self.grad_variances, self.condition_numbers
                 
         #    with torch.no_grad():
          #       for loss in torch_hist:
@@ -594,7 +591,7 @@ def trial(
     depth,
     trials=10,
     failure_threshold=3,
-    group=256,# set to epoch size (in steps) 
+    group=1000,
     base_lr: float = 1e-3,
     return_best: bool = False,
     warmup_trial_pct: int = 0.2,
@@ -698,7 +695,7 @@ def trial(
                 "lr": optuna.distributions.FloatDistribution(1e-5, 1e-1, log=True),#1e-7, 100
                 "1mbeta1": optuna.distributions.FloatDistribution(1e-5, 0.1, log=True),#to 1
                 "1mbeta2": optuna.distributions.FloatDistribution(1e-7, 0.1, log=True),#to 1
-                "1mshampoo_beta": optuna.distributions.FloatDistribution(1e-5, 1, log=True),
+                "weight_decay": optuna.distributions.FloatDistribution(1e-6, 1e-1, log=True), 
             },
         )
         study = optuna.create_study(direction="minimize", sampler=sampler)
@@ -709,9 +706,9 @@ def trial(
             lr = trial.suggest_float("lr", 1e-5, 1e-1, log=True)
             one_minus_beta1 = trial.suggest_float("1mbeta1", 1e-5, 0.1, log=True)
             one_minus_beta2 = trial.suggest_float("1mbeta2", 1e-7, 0.1, log=True)
-            one_minus_shampoo_beta = trial.suggest_float("1mshampoo_beta", 1e-5, 0.1, log=True)
+            weight_decay = trial.suggest_float("weight_decay", 1e-6, 1e-1, log=True)
             try:
-                out = obj.objective((lr, one_minus_beta1, one_minus_beta2, one_minus_shampoo_beta))
+                out = obj.objective((lr, one_minus_beta1, one_minus_beta2, weight_decay))
             except Stop:
                 out = float('inf')
                 raise WinConditionMet
@@ -721,7 +718,7 @@ def trial(
                     "lr": lr,
                     "1mbeta1": one_minus_beta1,
                     "1mbeta2": one_minus_beta2,
-                    "1mshampoo_beta": one_minus_shampoo_beta,
+                    "weight_decay": weight_decay,
                 })
                 
                 # Save the loss trajectory to the global variable before raising the exception

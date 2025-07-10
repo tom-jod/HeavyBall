@@ -549,6 +549,11 @@ def _init_soap(state, group, update, grad, param, inner: str = ""):
     utils.init_preconditioner(grad, state, group["max_precond_dim"], group["precondition_1d"])
 
 
+
+def _init_cosmos(state, group, update, grad, param, inner: str = ""):
+    utils.init_preconditioner_cosmos(grad, state, group["max_precond_dim"], group["precondition_1d"])
+
+
 def _init_psgd_kron(state, group, update, grad, param, cached: bool = False, prob: Optional[callable] = None):
     Q = utils.init_Q_exprs(
         grad,
@@ -711,6 +716,39 @@ def scale_by_soap(group, update, grad, param, exp_avg, exp_avg_sq, Q, GG, inner:
         )
     return precond
 
+_optim_fns_cosmos = {"cosmos": utils.cosmos_, "laprop": utils.laprop_, "lion": utils.LION_}
+
+@zero_guard("exp_avg", "exp_avg_sq")
+@general_guard("U", "S", init_fn=_init_cosmos)
+@no_state
+def scale_by_cosmos(group, update, grad, param, exp_avg, exp_avg_sq, U, S, inner: str = "cosmos"):
+    for up, u, s, ea in zip(update, U, S, exp_avg):
+        utils.update_preconditioner_cosmos(
+            utils.promote(up),
+            u,
+            s,
+            ea,
+            group["max_precond_dim"],
+            group["precondition_1d"],
+            utils.get_beta2(group),
+            group["is_preconditioning"],
+        )
+
+    fn = _optim_fns_cosmos[inner]
+    precond = fn(
+        exp_avg,
+        exp_avg_sq,
+        grad,
+        U, 
+        S,
+        utils.get_beta1(group),
+        utils.get_beta2(group),
+        group["shampoo_beta"], # use shampoo_beta as gamma in cosmos
+        group["step"] - 1,
+        group["eps"],
+    )
+
+    return precond
 
 def _update_psgd_precond(
     cached, Q_cache, group, param, grad, Q, velocity, running_lower_bound, prob: Optional[callable] = None
@@ -1163,7 +1201,6 @@ class ChainOpt(utils.StatefulOptimizer):
         
         group["lr"] = current_lr
         group["prev_lr"] = current_lr
-        print(group["lr"])
         # Apply optimization step
         if not group["foreach"] or len(p) == 1:
             for param, grad in zip(p, g):
