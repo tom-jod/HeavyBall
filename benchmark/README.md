@@ -26,6 +26,36 @@ For more options, see:
 python run_all_benchmarks.py --help
 ```
 
+### Running New Benchmarks
+
+The benchmark suite includes four new tasks that expand coverage to multi-objective optimization, imbalanced classification, memory constraints, and domain adaptation:
+
+- **multi_objective_pareto.py**: Tests optimizer performance on Pareto trade-offs between accuracy and efficiency.
+- **class_imbalance_rare.py**: Evaluates learning from severely imbalanced datasets, focusing on rare event detection.
+- **memory_constrained.py**: Assesses optimizer stability and efficiency under strict memory budgets.
+- **transfer_domain_shift.py**: Measures adaptation to domain shift in transfer learning scenarios.
+
+To run any of these new benchmarks individually, use:
+
+```bash
+python multi_objective_pareto.py [options]
+python class_imbalance_rare.py [options]
+python memory_constrained.py [options]
+python transfer_domain_shift.py [options]
+```
+
+Each script supports configuration via command-line arguments or preset configs (see `--help` for details). Results and metrics are reported in the same format as other benchmarks.
+
+**Example:**
+```bash
+python class_imbalance_rare.py --opt Adam --epochs 100
+```
+
+For troubleshooting or more advanced usage, consult the help for each script:
+```bash
+python <benchmark_script>.py --help
+```
+
 ### Core Philosophy and Design Principles
 
 Based on the analysis of [`benchmark_template.py`](benchmark_template.py), [`optimizer_template.py`](optimizer_template.py), and [`utils.py`](utils.py), the core framework is a modular and extensible system designed for benchmarking `torch` optimizers. It is composed of three primary components:
@@ -54,41 +84,45 @@ A benchmark is structured as a class, as defined in [`benchmark_template.py`](be
 
 ### Existing Benchmarks
 
-| File | Category | Description |
-|---|---|---|
-| [`adversarial_gradient.py`](adversarial_gradient.py) | Noise Robustness | Tests optimizer's robustness to an oscillating adversarial component added to the gradient, simulating adversarial noise. |
-| [`batch_size_scaling.py`](batch_size_scaling.py) | Noise Robustness | Tests how optimizers handle noise at different scales, which are modulated by a simulated, randomly changing batch size. |
-| [`beale.py`](beale.py) | General/Classic | Implements the Beale function, a classic optimization benchmark with sharp valleys, to test general performance. Also includes visualization. |
-| [`char_rnn.py`](char_rnn.py) | Sequence & Memory (RNN/LSTM) | A character-level language model using an LSTM on text data, testing performance on a sequence task requiring memory. |
-| [`constrained_optimization.py`](constrained_optimization.py) | Landscape Traversal | A simple quadratic objective with a penalty-based constraint, creating a sharp ridge in the loss landscape for the optimizer to navigate. |
-| [`discontinuous_gradient.py`](discontinuous_gradient.py) | Gradient Characteristics | Tests optimizer robustness to non-smooth landscapes by using an objective function with a discontinuous gradient at the origin. |
-| [`dynamic_landscape.py`](dynamic_landscape.py) | Dynamic Environments | Tests an optimizer's ability to track a continuously shifting target in a non-stationary loss landscape. |
-| [`exploding_gradient.py`](exploding_gradient.py) | Gradient Characteristics | Tests an optimizer's numerical stability and handling of extreme gradient values by using an exponential function that causes gradients to grow rapidly. |
-| [`gradient_delay.py`](gradient_delay.py) | Gradient Characteristics | Tests an optimizer's ability to handle asynchronous or delayed updates by using gradients from previous steps. |
-| [`gradient_noise_scale.py`](gradient_noise_scale.py) | Noise Robustness | Tests an optimizer's ability to handle dynamically changing noise levels, where the noise scale anneals over time. |
-| [`grokking.py`](grokking.py) | Landscape Traversal | Tests for 'grokking' by training a model on a modular arithmetic task, examining if the optimizer can find a generalizable solution after a long period of memorization. |
-| [`layer_wise_scale.py`](layer_wise_scale.py) | Multi-Scale & Conditioning | Tests an optimizer's ability to handle parameters with vastly different gradient scales by scaling the loss contribution of different layers. |
-| [`minimax.py`](minimax.py) | Landscape Traversal | Implements a minimax objective function which creates a saddle point, testing the optimizer's ability to escape such points. |
-| [`momentum_utilization.py`](momentum_utilization.py) | Landscape Traversal | Tests the effective use of momentum by creating an oscillating loss landscape with many local minima. |
-| [`noisy_matmul.py`](noisy_matmul.py) | Gradient Characteristics | Tests optimizer stability in deep networks by performing a sequence of matrix multiplications, which can lead to exploding or vanishing gradients. |
-| [`parameter_scale.py`](parameter_scale.py) | Multi-Scale & Conditioning | Tests an optimizer's ability to handle parameters initialized at widely different scales, creating a poorly conditioned problem. |
-| [`plateau_navigation.py`](plateau_navigation.py) | Landscape Traversal | Tests an optimizer's ability to navigate a loss landscape with a large, flat plateau region surrounded by a steep cliff. |
-| [`powers_varying_target.py`](powers_varying_target.py) | Multi-Scale & Conditioning | Creates a complex, poorly conditioned landscape by raising parameters to different powers against a non-zero, varying target. |
-| [`powers.py`](powers.py) | Multi-Scale & Conditioning | Creates a poorly conditioned problem by raising parameters to various powers, resulting in gradients of different magnitudes. |
-| [`quadratic_varying_scale.py`](quadratic_varying_scale.py) | Multi-Scale & Conditioning | Tests handling of ill-conditioned problems by creating a quadratic objective where each parameter's gradient has a different scale. |
-| [`quadratic_varying_target.py`](quadratic_varying_target.py) | General/Classic | A simple quadratic bowl (sphere) benchmark where the minimum is at a non-zero target vector. |
-| [`rastrigin.py`](rastrigin.py) | General/Classic | Implements the Rastrigin function, a classic highly multi-modal benchmark for testing global optimization capabilities. |
-| [`rosenbrock.py`](rosenbrock.py) | General/Classic | Implements the Rosenbrock function, a classic benchmark known for its narrow, banana-shaped valley that is difficult to navigate. |
-| [`saddle_point.py`](saddle_point.py) | Landscape Traversal | Tests an optimizer's ability to escape a classic saddle point (x^2 - y^2) and visualizes the optimization paths. |
-| [`scale_invariant.py`](scale_invariant.py) | Multi-Scale & Conditioning | Tests an optimizer's handling of parameters at different scales by using a logarithmic objective on parameters initialized across many orders of magnitude. |
-| [`sparse_gradient.py`](sparse_gradient.py) | Gradient Characteristics | Tests an optimizer's performance when gradients are sparse, which is simulated by randomly masking parameter updates. |
-| [`wide_linear.py`](wide_linear.py) | Multi-Scale & Conditioning | Tests optimizer performance on a model with a very wide linear layer, which can present conditioning challenges. |
-| [`xor_digit_rnn.py`](xor_digit_rnn.py) | Sequence & Memory (RNN/LSTM) | Tests an RNN's ability to solve the parity task (XOR sum) on a sequence of bits, requiring it to maintain a memory state. |
-| [`xor_digit.py`](xor_digit.py) | Sequence & Memory (RNN/LSTM) | Tests an LSTM's ability to solve the parity task (XOR sum) on a sequence of bits, a classic test of sequence memory. |
-| [`xor_sequence_rnn.py`](xor_sequence_rnn.py) | Sequence & Memory (RNN/LSTM) | A sequence-to-sequence task where an RNN must learn to compute the element-wise XOR of two input sequences. |
-| [`xor_sequence.py`](xor_sequence.py) | Sequence & Memory (RNN/LSTM) | A sequence-to-sequence task where an LSTM must learn to compute the element-wise XOR of two input sequences. |
-| [`xor_spot_rnn.py`](xor_spot_rnn.py) | Sequence & Memory (RNN/LSTM) | Tests an RNN's ability to learn a pointwise forget mechanism by predicting the XOR of two values at randomly marked spots in a sequence. |
-| [`xor_spot.py`](xor_spot.py) | Sequence & Memory (RNN/LSTM) | Tests an LSTM's ability to learn a pointwise forget mechanism by predicting the XOR of two values at randomly marked spots in a sequence. |
+| File | Category | Description | Metrics |
+|---|---|---|---|
+| [`adversarial_gradient.py`](adversarial_gradient.py) | Noise Robustness | Tests optimizer's robustness to an oscillating adversarial component added to the gradient, simulating adversarial noise. | Loss threshold, convergence |
+| [`batch_size_scaling.py`](batch_size_scaling.py) | Noise Robustness | Tests how optimizers handle noise at different scales, which are modulated by a simulated, randomly changing batch size. | Loss threshold, convergence |
+| [`beale.py`](beale.py) | General/Classic | Implements the Beale function, a classic optimization benchmark with sharp valleys, to test general performance. Also includes visualization. | Loss threshold, convergence |
+| [`char_rnn.py`](char_rnn.py) | Sequence & Memory (RNN/LSTM) | A character-level language model using an LSTM on text data, testing performance on a sequence task requiring memory. | Sequence accuracy, loss threshold |
+| [`constrained_optimization.py`](constrained_optimization.py) | Landscape Traversal | A simple quadratic objective with a penalty-based constraint, creating a sharp ridge in the loss landscape for the optimizer to navigate. | Loss threshold, constraint satisfaction |
+| [`discontinuous_gradient.py`](discontinuous_gradient.py) | Gradient Characteristics | Tests optimizer robustness to non-smooth landscapes by using an objective function with a discontinuous gradient at the origin. | Loss threshold, convergence |
+| [`dynamic_landscape.py`](dynamic_landscape.py) | Dynamic Environments | Tests an optimizer's ability to track a continuously shifting target in a non-stationary loss landscape. | Tracking error, loss threshold |
+| [`exploding_gradient.py`](exploding_gradient.py) | Gradient Characteristics | Tests an optimizer's numerical stability and handling of extreme gradient values by using an exponential function that causes gradients to grow rapidly. | Loss threshold, numerical stability |
+| [`gradient_delay.py`](gradient_delay.py) | Gradient Characteristics | Tests an optimizer's ability to handle asynchronous or delayed updates by using gradients from previous steps. | Loss threshold, convergence |
+| [`gradient_noise_scale.py`](gradient_noise_scale.py) | Noise Robustness | Tests an optimizer's ability to handle dynamically changing noise levels, where the noise scale anneals over time. | Loss threshold, convergence |
+| [`grokking.py`](grokking.py) | Landscape Traversal | Tests for 'grokking' by training a model on a modular arithmetic task, examining if the optimizer can find a generalizable solution after a long period of memorization. | Generalization accuracy, loss threshold |
+| [`layer_wise_scale.py`](layer_wise_scale.py) | Multi-Scale & Conditioning | Tests an optimizer's ability to handle parameters with vastly different gradient scales by scaling the loss contribution of different layers. | Loss threshold, convergence |
+| [`minimax.py`](minimax.py) | Landscape Traversal | Implements a minimax objective function which creates a saddle point, testing the optimizer's ability to escape such points. | Loss threshold, saddle escape |
+| [`momentum_utilization.py`](momentum_utilization.py) | Landscape Traversal | Tests the effective use of momentum by creating an oscillating loss landscape with many local minima. | Loss threshold, convergence |
+| [`noisy_matmul.py`](noisy_matmul.py) | Gradient Characteristics | Tests optimizer stability in deep networks by performing a sequence of matrix multiplications, which can lead to exploding or vanishing gradients. | Loss threshold, numerical stability |
+| [`parameter_scale.py`](parameter_scale.py) | Multi-Scale & Conditioning | Tests an optimizer's ability to handle parameters initialized at widely different scales, creating a poorly conditioned problem. | Loss threshold, convergence |
+| [`plateau_navigation.py`](plateau_navigation.py) | Landscape Traversal | Tests an optimizer's ability to navigate a loss landscape with a large, flat plateau region surrounded by a steep cliff. | Loss threshold, plateau escape |
+| [`powers_varying_target.py`](powers_varying_target.py) | Multi-Scale & Conditioning | Creates a complex, poorly conditioned landscape by raising parameters to different powers against a non-zero, varying target. | Loss threshold, convergence |
+| [`powers.py`](powers.py) | Multi-Scale & Conditioning | Creates a poorly conditioned problem by raising parameters to various powers, resulting in gradients of different magnitudes. | Loss threshold, convergence |
+| [`quadratic_varying_scale.py`](quadratic_varying_scale.py) | Multi-Scale & Conditioning | Tests handling of ill-conditioned problems by creating a quadratic objective where each parameter's gradient has a different scale. | Loss threshold, convergence |
+| [`quadratic_varying_target.py`](quadratic_varying_target.py) | General/Classic | A simple quadratic bowl (sphere) benchmark where the minimum is at a non-zero target vector. | Loss threshold, convergence |
+| [`rastrigin.py`](rastrigin.py) | General/Classic | Implements the Rastrigin function, a classic highly multi-modal benchmark for testing global optimization capabilities. | Loss threshold, global optimum |
+| [`rosenbrock.py`](rosenbrock.py) | General/Classic | Implements the Rosenbrock function, a classic benchmark known for its narrow, banana-shaped valley that is difficult to navigate. | Loss threshold, convergence |
+| [`saddle_point.py`](saddle_point.py) | Landscape Traversal | Tests an optimizer's ability to escape a classic saddle point (x^2 - y^2) and visualizes the optimization paths. | Loss threshold, saddle escape |
+| [`scale_invariant.py`](scale_invariant.py) | Multi-Scale & Conditioning | Tests an optimizer's handling of parameters at different scales by using a logarithmic objective on parameters initialized across many orders of magnitude. | Loss threshold, convergence |
+| [`sparse_gradient.py`](sparse_gradient.py) | Gradient Characteristics | Tests an optimizer's performance when gradients are sparse, which is simulated by randomly masking parameter updates. | Loss threshold, convergence |
+| [`wide_linear.py`](wide_linear.py) | Multi-Scale & Conditioning | Tests optimizer performance on a model with a very wide linear layer, which can present conditioning challenges. | Loss threshold, convergence |
+| [`xor_digit_rnn.py`](xor_digit_rnn.py) | Sequence & Memory (RNN/LSTM) | Tests an RNN's ability to solve the parity task (XOR sum) on a sequence of bits, requiring it to maintain a memory state. | Sequence accuracy, loss threshold |
+| [`xor_digit.py`](xor_digit.py) | Sequence & Memory (RNN/LSTM) | Tests an LSTM's ability to solve the parity task (XOR sum) on a sequence of bits, a classic test of sequence memory. | Sequence accuracy, loss threshold |
+| [`xor_sequence_rnn.py`](xor_sequence_rnn.py) | Sequence & Memory (RNN/LSTM) | A sequence-to-sequence task where an RNN must learn to compute the element-wise XOR of two input sequences. | Sequence accuracy, loss threshold |
+| [`xor_sequence.py`](xor_sequence.py) | Sequence & Memory (RNN/LSTM) | A sequence-to-sequence task where an LSTM must learn to compute the element-wise XOR of two input sequences. | Sequence accuracy, loss threshold |
+| [`xor_spot_rnn.py`](xor_spot_rnn.py) | Sequence & Memory (RNN/LSTM) | Tests an RNN's ability to learn a pointwise forget mechanism by predicting the XOR of two values at randomly marked spots in a sequence. | Sequence accuracy, loss threshold |
+| [`xor_spot.py`](xor_spot.py) | Sequence & Memory (RNN/LSTM) | Tests an LSTM's ability to learn a pointwise forget mechanism by predicting the XOR of two values at randomly marked spots in a sequence. | Sequence accuracy, loss threshold |
+| [`multi_objective_pareto.py`](multi_objective_pareto.py) | Multi-Objective Optimization | Evaluates an optimizer's ability to balance competing objectives—model accuracy and computational efficiency—by finding solutions on or near the Pareto frontier. This benchmark simulates real-world trade-offs in engineering design and resource allocation, requiring optimizers to navigate conflicting goals. | Accuracy loss, efficiency loss, Pareto feasibility |
+| [`class_imbalance_rare.py`](class_imbalance_rare.py) | Imbalanced Classification | Challenges optimizers to learn from highly imbalanced datasets, focusing on rare event detection and minority class performance. This benchmark reflects scenarios such as fraud detection, medical diagnosis, and anomaly detection, where sensitivity to rare events is critical. | F1 score, recall, precision (minority class) |
+| [`memory_constrained.py`](memory_constrained.py) | Memory-Constrained Optimization | Assesses optimizer performance under strict memory limitations, simulating training of large models on edge devices or consumer hardware. The benchmark tests memory efficiency techniques and the ability to maintain convergence and stability within resource constraints. | Loss threshold, peak memory usage, memory efficiency |
+| [`transfer_domain_shift.py`](transfer_domain_shift.py) | Transfer Domain Shift Robustness | Measures an optimizer's robustness to domain shift by requiring adaptation of a pre-trained model to a new domain with systematic distribution differences. This benchmark simulates transfer learning and cross-domain generalization challenges common in real-world deployments. | Target accuracy, domain gap, feature MMD |
 
 ### Contributing
 

@@ -56,14 +56,14 @@ def main(
     config: Optional[str] = None,
 ):
     length = configs.get(config, {}).get("length", length)
-    dtype = [getattr(torch, d) for d in dtype]
+    dtype = getattr(torch, dtype[0])
     torch.manual_seed(0x1239121)
     model = Model(size, depth).cuda()
 
     def data():
-        inp = torch.randn((batch, length, 1), device="cuda", dtype=dtype[0])
+        inp = torch.randn((batch, length, 1), device="cuda", dtype=dtype)
         inp = inp > 0
-        return inp.to(dtype[0]), (inp.sum(1) % 2).to(dtype[0])
+        return inp.to(dtype), (inp.sum(1) % 2).to(dtype)
 
     trial(
         model,
@@ -72,15 +72,8 @@ def main(
         loss_win_condition(win_condition_multiplier * 1e-3),
         steps,
         opt[0],
-        dtype[0],
-        size,
-        batch,
         weight_decay,
-        method[0],
-        length,
-        depth,
         failure_threshold=10,
-        base_lr=1e-6,
         trials=trials,
     )
 

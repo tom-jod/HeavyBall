@@ -6,7 +6,7 @@ from torch._dynamo import config
 import heavyball
 import heavyball.utils
 from benchmark.utils import get_optim
-from heavyball.utils import ScheduleFree, clean, set_torch
+from heavyball.utils import clean, set_torch
 
 config.cache_size_limit = 128
 
@@ -16,7 +16,7 @@ config.cache_size_limit = 128
 def test_mars(opt, size, depth: int, iterations: int = 16384, outer_iterations: int = 1):
     set_torch()
     opt = getattr(heavyball, opt)
-    if ScheduleFree in opt.__mro__:
+    if "SF" in opt.__name__ or "ScheduleFree" in opt.__name__:
         raise pytest.skip("Skipping ScheduleFree")
 
     peaks = []

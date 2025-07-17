@@ -8,7 +8,6 @@ continuously shift over time. This tests the optimizer's ability to:
 3. Handle continuous parameter updates
 """
 
-import itertools
 import math
 from typing import List, Optional
 
@@ -59,34 +58,19 @@ def main(
 ):
     """Run dynamic landscape benchmark with specified parameters."""
     frequency = configs.get(config, {}).get("frequency", 0.1)
-    dtype = [getattr(torch, d) for d in dtype]
 
-    for args in itertools.product(method, dtype, [dim], opt, [weight_decay]):
-        m, d, dim, o, wd = args
+    model = ShiftingSphere(dim, frequency)
 
-        model = ShiftingSphere(dim, frequency)
-
-        def data():
-            return None, None
-
-        # Win condition: average squared error should be small (parameters close to target)
-        trial(
-            model,
-            data,
-            None,
-            loss_win_condition(0.01 * win_condition_multiplier),
-            steps,
-            [o],
-            [d],
-            1,
-            1,
-            wd,
-            m,
-            1,
-            1,
-            base_lr=0.1,
-            trials=trials,
-        )
+    trial(
+        model,
+        None,
+        None,
+        loss_win_condition(0.01 * win_condition_multiplier),
+        steps,
+        opt[0],
+        weight_decay,
+        trials=trials,
+    )
 
 
 if __name__ == "__main__":

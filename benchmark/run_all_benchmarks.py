@@ -72,8 +72,6 @@ def run_benchmark(script, opt, steps, dtype, trials, seed, difficulty):
             "win_condition_multiplier": 1.0,
             "config": difficulty,
         }
-        if "saddle" not in script:
-            arguments["method"] = ["qr"]
         # Run the main function
         module.main(**arguments)
     except SkipConfig:
@@ -284,10 +282,33 @@ def main(
         "layer_wise_scale.py",
         "parameter_scale.py",
         "gradient_delay.py",
-        "gradient_noise_scale.py",
         "adversarial_gradient.py",
         "dynamic_landscape.py",
-        "constrained_optimization.py",
+        "multi_objective_pareto.py",
+        "class_imbalance_rare.py",
+        "memory_constrained.py",
+        "transfer_domain_shift.py",
+        "plasticity_summod.py",
+        "plasticity_weighted_summod.py",
+        "generalization_summod.py",
+        "generalization_weighted_summod.py",
+        "sparse_parameters.py",
+        "quadratic_flip.py",
+        "quadratic_outliers.py",
+        "quadratic_sparse.py",
+        "quadratic_quantized_gradient.py",
+        "absolute_varying_scale.py",
+        "quadratic_quantization_aware_training.py",
+        "vanishing_gradient.py",
+        "ill_conditioned.py",
+        "ill_conditioned_mismatched.py",
+        "gradient_noise_scale_instantaneous_brown.py",
+        "gradient_noise_scale_temporal_brown.py",
+        "gradient_noise_scale_white.py",
+        "gradient_noise_scale_heavy_tailed.py",
+        "constrained_optimization_relu.py",
+        "constrained_optimization_log.py",
+        "non_markovian.py",
     ]
 
     if mars:

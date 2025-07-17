@@ -52,29 +52,17 @@ def main(
     config: Optional[str] = None,
 ):
     max_batch = configs.get(config, {}).get("max_batch", 256)
-    dtype = [getattr(torch, d) for d in dtype]
-    model = Model(max_batch).cuda().double()
+    model = Model(max_batch).cuda()
 
-    def data():
-        return None, None
-
-    # Use a more lenient win condition since we have inherent noise
     trial(
         model,
-        data,
+        None,
         None,
         param_norm_win_condition(win_condition_multiplier * 1e-8, 0),
         steps,
         opt[0],
-        dtype[0],
-        1,
-        1,
         weight_decay,
-        method[0],
-        1,
-        1,
         failure_threshold=5,
-        base_lr=1e-3,
         trials=trials,
     )
 

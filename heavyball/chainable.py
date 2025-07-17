@@ -2,6 +2,7 @@ import copy
 import functools
 import math
 import random
+from collections.abc import Iterable as _Iterable
 from typing import Iterable, List, Literal, Optional, Union
 
 import torch
@@ -85,6 +86,22 @@ class FunctionTransform:
         return f"{self.__class__.__name__}({self.fn}, transform_idx={self.transform_idx})"
 
 
+class Branch:
+    def __init__(self, branches: List[List[callable]], merge_fn: callable):
+        self.branches = branches
+        self.merge_fn = merge_fn
+
+    def __call__(self, state, group, update, grad, param):
+        outputs = []
+        for branch in self.branches:
+            branch_update = [torch.clone(u, memory_format=torch.preserve_format) for u in update]
+            branch_update, skip_update = _inner_chain(state, group, branch_update, grad, param, *branch)
+            if skip_update:
+                raise ValueError("Branches should not skip updates")
+            outputs.append(branch_update)
+        return self.merge_fn(outputs)
+
+
 def _zero_guard(state, key, ref, dtype):
     return _guard_in_state(state, key, lambda: torch.zeros_like(ref, dtype=dtype, memory_format=torch.preserve_format))
 
@@ -117,7 +134,7 @@ class PrecondGradAccumGuard(FunctionTransform):
         utils.stochastic_add_(state, new)
 
     def _reset(self, state):
-        if self.steps_taken != 0:
+        if self.steps_taken == 0:
             self.steps_taken = 0
             utils.zero_(state)
 
@@ -214,23 +231,6 @@ class NoStateNoForeach(FunctionTransform):
         return updates
 
 
-class SqueezeGrad(FunctionTransform):
-    def __call__(self, state, group, update, grad, param, *args, **kwargs):
-        original_shapes = [u.shape for u in update]
-        update = [u.squeeze() if u.numel() > 1 else u.view(-1) for u in update]
-        grad = [x.view_as(u) for x, u in zip(grad, update)]
-        param = [x.view_as(u) for x, u in zip(param, update)]
-        args = list(args)
-        for i, a in enumerate(args):
-            if isinstance(a, (list, tuple)) and isinstance(a[0], Tensor):
-                args[i] = [x.view_as(u) for x, u in zip(a, update)]
-        for k, a in kwargs.items():
-            if isinstance(a, (list, tuple)) and isinstance(a[0], Tensor):
-                kwargs[k] = [x.view_as(u) for x, u in zip(a, update)]
-        out = self.fn(state, group, update, grad, param, *args, **kwargs)
-        return [o.view(s) for o, s in zip(out, original_shapes)]
-
-
 def zero_guard(*names):
     return functools.partial(ZeroGuard, names=names)
 
@@ -265,6 +265,10 @@ def exp_avg(group, update, grad, param, exp_avg):
 @no_state
 def weight_decay_to_init(group, update, grad, param, init):
     utils.stochastic_lerp_(param, init, group["weight_decay_to_ema"] * group["lr"])
+    return update
+
+
+def identity(state, group, update, grad, param):
     return update
 
 
@@ -756,7 +760,6 @@ def _update_lra(
     )
 
 
-@SqueezeGrad
 @PrecondGradAccumGuard
 @general_guard("U", "V", "d", init_fn=_init_psgd_lra, skip_first=False)
 @no_state
@@ -765,7 +768,6 @@ def scale_by_psgd_lra(group, update, grad, param, update_to_precond, U, V, d):
     return utils.extract_from_flat_update(param, utils.lra_precond(u, v, d, utils.flatten(update)))
 
 
-@SqueezeGrad
 @PrecondGradAccumGuard
 @general_guard("U", "V", "d", init_fn=_init_psgd_lra, skip_first=False)
 @no_state
@@ -775,7 +777,6 @@ def update_by_psgd_lra(group, update, grad, param, update_to_precond, U, V, d):
     raise SkipUpdate from None
 
 
-@SqueezeGrad
 @PrecondGradAccumGuard
 @general_guard("U", "V", "d", init_fn=_init_psgd_lra, skip_first=False)
 @no_state
@@ -784,7 +785,6 @@ def scale_by_delayed_psgd_lra(group, update, grad, param, update_to_precond, U, 
     return utils.extract_from_flat_update(param, utils.lra_precond(u, v, d, utils.flatten(update)))
 
 
-@SqueezeGrad
 @PrecondGradAccumGuard
 @general_guard("U", "V", "d", init_fn=_init_psgd_lra, skip_first=False)
 @no_state
@@ -794,7 +794,6 @@ def update_by_delayed_psgd_lra(group, update, grad, param, update_to_precond, U,
     raise SkipUpdate from None
 
 
-@SqueezeGrad
 @PrecondGradAccumGuard
 @general_guard("Q", "Q_cache", "velocity", "running_lower_bound", init_fn=_init_psgd_kron, skip_first=False)
 @no_state_no_foreach
@@ -815,7 +814,6 @@ def scale_by_psgd(
     return _cached_psgd_precond_grad(group, update, Q, Q_cache, grad)
 
 
-@SqueezeGrad
 @PrecondGradAccumGuard
 @general_guard("Q", "Q_cache", "velocity", "running_lower_bound", init_fn=_init_psgd_kron, skip_first=False)
 @no_state_no_foreach
@@ -840,7 +838,6 @@ def scale_by_delayed_psgd(
     return new if precond is None else precond
 
 
-@SqueezeGrad
 @PrecondGradAccumGuard
 @general_guard("Q", "Q_cache", "velocity", "running_lower_bound", init_fn=_init_psgd_kron, skip_first=False)
 @no_state_no_foreach
@@ -873,7 +870,6 @@ def global_clip(group, update, grad, param, clip_fn: Optional[callable] = None):
     return clip_fn(update)
 
 
-@SqueezeGrad
 @PrecondGradAccumGuard
 @general_guard("Q", "Q_cache", "velocity", "running_lower_bound", init_fn=_init_psgd_kron, skip_first=False)
 @no_state_no_foreach
@@ -929,55 +925,50 @@ def chain(state: Union[callable, dict], group, grad, param, *fns):
         utils.update_param_(param, update, group["lr"], group["weight_decay"], caution=group["caution"], grad=grad)
 
 
-def create_branch(branches: List[List[callable]], merge_fn: callable):
-    def _branch(state, group, update, grad, param):
-        outputs = []
-        for branch in branches:
-            branch_update = [torch.clone(u, memory_format=torch.preserve_format) for u in update]
-            branch_update, skip_update = _inner_chain(state, group, branch_update, grad, param, *branch)
-            if skip_update:
-                raise ValueError("Branches should not skip updates")
-            outputs.append(branch_update)
-        return merge_fn(outputs)
-
-    return _branch
-
-
 def set_indices(fns: Iterable[callable], retain: bool = True, offset: int = 0):
+    if retain and offset:
+        raise ValueError("offset cannot be retained")
+
+    def _walk(obj):
+        stack = [obj]
+        while stack:
+            cur = stack.pop()
+            if isinstance(cur, FunctionTransform):
+                yield cur
+                stack.append(cur.fn)
+            elif isinstance(cur, functools.partial):
+                stack.append(cur.func)
+            elif isinstance(cur, Branch):
+                for branch in cur.branches:
+                    stack.extend(branch)
+            elif isinstance(cur, _Iterable) and not isinstance(cur, (str, bytes, bytearray)):
+                stack.extend(cur)
+
     if retain:
-        if offset:
-            raise ValueError("offset cannot be retained")
+        offset = max((ft.transform_idx for ft in _walk(fns) if ft.transform_idx is not None), default=-1) + 1
 
-        offset = -1
-        for fn in fns:
-            while isinstance(fn, (FunctionTransform, functools.partial)):
-                if isinstance(fn, functools.partial):
-                    fn = fn.func
-                    continue
-                if fn.transform_idx is not None:
-                    offset = max(offset, fn.transform_idx)
-                fn = fn.fn
-        offset += 1  # if we found nothing, this will be 0. if we found something, we START at N+1
+    new_fns = [copy.deepcopy(fn) for fn in fns]
+    for ft in _walk(new_fns):
+        if not retain or ft.transform_idx is None:
+            ft.transform_idx, offset = offset, offset + 1
 
-    fns = [copy.deepcopy(fn) for fn in fns]
-    for fn in fns:
-        while isinstance(fn, (FunctionTransform, functools.partial)):
-            if isinstance(fn, functools.partial):
-                fn = fn.func
-                continue
-            if not retain or fn.transform_idx is None:
-                fn.transform_idx = offset
-                offset += 1
-            fn = fn.fn
-    return fns
+    return new_fns
 
 
 class ChainOpt(utils.StatefulOptimizer):
     promote: bool = False
+    global_defaults = {
+        "caution": False,
+        "lr": 1,
+        "warmup_steps": 0,
+        "weight_decay": 0,
+        "eps": 1e-8,
+    }
 
     def __init__(self, params, defaults, foreach: bool, *fns):
-        defaults = {k: v for k, v in defaults.items() if v is not use_default}
-        super().__init__(params, defaults, foreach)
+        base = self.global_defaults.copy()
+        base.update({k: v for k, v in defaults.items() if v is not use_default})
+        super().__init__(params, base, foreach)
         self.fns = fns
 
     @property
@@ -1096,7 +1087,7 @@ class BaseOpt(ChainOpt):
 
     update_clipping: str_or_fn = None
     The function to use for clipping the outgoing updates before applying them, after all other transformations.
-    This will turn off fused updates.
+    This will turn off
     This is syntactic sugar, equivalent to manually passing the function as the last element of the optimizer chain.
 
     """
@@ -1110,11 +1101,11 @@ class BaseOpt(ChainOpt):
         self,
         params,
         defaults,
-        foreach: bool,
-        gradient_clipping: str_or_fn,
-        update_clipping: str_or_fn,
+        foreach: bool = True,
+        gradient_clipping: str_or_fn = None,
+        update_clipping: str_or_fn = None,
         palm: bool = use_default,
-        *fns,
+        fns: Iterable[callable] = (),
         compile_step: bool = use_default,
         promote: bool = use_default,
     ):

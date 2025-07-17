@@ -61,24 +61,14 @@ def main(
         model = Model(coords)
     model.double()
 
-    def data():
-        return None, None
-
     model = trial(
         model,
-        data,
+        None,
         None,
         loss_win_condition(win_condition_multiplier * 1e-8 * (not show_image)),
         steps,
         opt[0],
-        dtype[0],
-        1,
-        1,
         weight_decay,
-        method[0],
-        1,
-        1,
-        base_lr=1e-4,
         trials=trials,
         return_best=show_image,
     )

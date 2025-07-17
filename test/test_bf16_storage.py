@@ -6,7 +6,7 @@ from torch._dynamo import config
 import heavyball
 import heavyball.utils
 from benchmark.utils import get_optim
-from heavyball.utils import PSGDBase, clean, set_torch
+from heavyball.utils import clean, set_torch
 
 config.cache_size_limit = 128
 
@@ -21,7 +21,7 @@ def test_foreach(opt, size, depth: int, iterations: int = 128, outer_iterations:
 
     opt = getattr(heavyball, opt)
 
-    if PSGDBase in opt.__mro__:
+    if "PSGD" in opt.__name__:
         raise pytest.skip("PSGD is not supported")
 
     peaks = []
