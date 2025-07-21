@@ -2302,86 +2302,88 @@ def inverse_free_psgd_update_precond(
     )
     return G
 
+@decorator_knowngood
+def _clip(x, norm, clip_at, eps=1e-8):
+    clip_at = max(clip_at, eps)
+    x32 = promote(x)
+    norm = norm.clamp(min=clip_at)   # (x / y.clamp(min=eps)).clamp(max=1) == x / y.clamp(min=max(x, eps))
+    norm = clip_at / norm
+    x32 = x * norm
+    copy_stochastic_(x, x32)
+
 
 @decorator_knowngood
-def _compilable_l2_clip_(x, clip_at):
-    ref = x
-    x = list(map(promote, x))
-    norm = torch._foreach_norm(x)
-    torch._foreach_add_(norm, 1e-6)
-    torch._foreach_reciprocal_(norm)
-    torch._foreach_mul_(norm, clip_at)
-    torch._foreach_maximum_(norm, 1.0)
-    out = torch._foreach_mul(x, norm)
-    return stochastic_round_list_(ref, out)
+def _compilable_l2_clip_(xs, clip_at, eps=1e-8):
+    for x in xs:
+        _clip(x, promote(x).norm(), clip_at, eps)
 
 
 def l2_normalization_(x, clip_at: float = 1e-8):
     x = list_guard(x)
-    return _compilable_l2_clip_(x, clip_at)
+    _compilable_l2_clip_(x, clip_at)
+    return x
 
 
 def l2_clip_(x, clip_at: float = 1.0):
     x = list_guard(x)
-    return _compilable_l2_clip_(x, clip_at)
+    _compilable_l2_clip_(x, clip_at)
+    return x
 
 
 @decorator_knowngood
-def _compilable_rmsnorm_clip_(x, clip_at):
-    x = list(map(promote, x))
-    norm = torch._foreach_norm(x)
-    norm = [n.div_(x_.numel() ** 0.5) for n, x_ in zip(norm, x)]
-    torch._foreach_add_(norm, 1e-6)
-    torch._foreach_reciprocal_(norm)
-    torch._foreach_mul_(norm, clip_at)
-    torch._foreach_maximum_(norm, 1.0)
-    return torch._foreach_mul(x, norm)
+def _compilable_rmsnorm_clip_(x, clip_at, eps=1e-8):
+    clip_at = max(clip_at, eps)
+    for x in xs:
+        _clip(x, promote(x).square().mean().sqrt(), clip_at, eps)
 
 
 def rmsnorm_clip_(x, clip_at: float = 1.0):
     x = list_guard(x)
-    return _compilable_rmsnorm_clip_(x, clip_at)
+    _compilable_rmsnorm_clip_(x, clip_at)
+    return x
 
 
 @decorator_knowngood
-def _compilable_global_rmsnorm_clip_(x, clip_at):
+def _compilable_global_rmsnorm_clip_(x, clip_at, eps=1e-8):
     norm = 0
     items = 0
+    clip_at = max(clip_at, eps)
+    numel = sum([i.numel() for i in x])
     for i in x:
-        norm += promote(i.square().sum())
-        items += i.numel()
-    norm = (norm / items) ** 0.5
-    scalar = (clip_at / (norm + 1e-6)).clamp(max=1.0)
+        norm += promote(i).square().sum() / numel
+    norm = norm**0.5
+    scalar = clip_at / norm.clamp(min=max(eps, clip_at))
     stochastic_multiply_(x, scalar)
-    return x
 
 
 def global_rmsnorm_clip(x, clip_at: float = 1.0):
     x = list_guard(x)
     clip_at = scalar_guard(clip_at, x[0])
-    return _compilable_global_rmsnorm_clip_(x, clip_at)
+    _compilable_global_rmsnorm_clip_(x, clip_at)
+    return x
 
 
 @decorator_knowngood
 def _compilable_global_l2norm_clip_(x, clip_at):
     norm = 0
     for i in x:
-        norm += promote(i.square().sum())
+        norm += promote(i).square().sum()
     norm = norm**0.5
-    scalar = (clip_at / (norm + 1e-6)).clamp(max=1.0)
+    scalar = clip_at / norm.clamp(min=max(eps, clip_at))
     stochastic_multiply_(x, scalar)
-    return x
 
 
 def global_l2norm_clip(x, clip_at: float = 1.0):
     x = list_guard(x)
     clip_at = scalar_guard(clip_at, x[0])
-    return _compilable_global_l2norm_clip_(x, clip_at)
+    _compilable_global_l2norm_clip_(x, clip_at)
+    return x
 
 
 def rmsnorm_normalize_(x, clip_at: float = 1e-6):
     x = list_guard(x)
-    return _compilable_rmsnorm_clip_(x, clip_at)
+    _compilable_rmsnorm_clip_(x, clip_at)
+    return x
 
 
 @decorator_knowngood
