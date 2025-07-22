@@ -211,8 +211,6 @@ def main(
         target = target.view(-1)  # (batch_size * seq_length,)
         return F.cross_entropy(output, target)
     
-    # Calculate steps per epoch for group parameter
-    steps_per_epoch = len(train_loader/batch)
     
     trial(
         model,
@@ -231,9 +229,9 @@ def main(
         failure_threshold=10,
         base_lr=1e-3,
         trials=trials,
-        estimate_condition_number = True,
-        test_loader=None,
-        track_variance=False
+        estimate_condition_number = False,
+        test_loader=test_loader,
+        track_variance=True
     )
 
 if __name__ == "__main__":

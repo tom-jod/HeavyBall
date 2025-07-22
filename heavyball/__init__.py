@@ -190,7 +190,7 @@ class ForeachSGD(C.BaseOpt):
         warmup_steps=0,
         foreach: bool = True,
         storage_dtype: str = "float32",
-        mars: bool = True,
+        mars: bool = False,
         caution: bool = False,
         mars_gamma: float = 0.0025,
         gradient_clipping: C.str_or_fn = C.use_default,
@@ -318,7 +318,7 @@ class ForeachAdamW_lr_schedule(C.BaseOpt):
         lr=0.0025,
         lr_schedule=True,
         scheduler_type="onecycle",
-        total_steps=93750,
+        total_steps=100000,
         betas=(0.9, 0.99),
         eps=1e-8,
         weight_decay=0,
@@ -1524,8 +1524,47 @@ def create_mars_wrapped_optimizer(base_optimizer_class, mars_gamma=0.025):
     
     return MARSWrappedOptimizer
 
-# Create the specific optimizer
-
+class ForeachDistributedShampoo(C.BaseOpt):
+    def __init__(
+        self,
+        params,
+        lr=0.001,
+        betas=(0.9, 0.999),
+        eps=1e-12,
+        weight_decay=0,
+        max_preconditioner_dim=1024,
+        precondition_frequency=20,
+        start_preconditioning_step=101,
+        use_merge_dims=True,
+        merge_small_dims_threshold=4096,
+        preconditioner_type="all",  # "all", "input", "output" 
+        skip_preconditioning_rank_lt=1,
+        skip_preconditioning_dim_size_gt=0,  # 0 = no limit
+        grafting_type="adam",  # "adam", "rmsprop", "sgd", "none"
+        foreach: bool = True,
+        storage_dtype: str = "float32",
+        gradient_clipping: C.str_or_fn = C.use_default,
+        update_clipping: C.str_or_fn = C.use_default,
+        palm: bool = C.use_default,
+        mars: bool = False,
+        caution: bool = False,
+        **kwargs,
+    ):
+        defaults = locals()
+        defaults.pop("self")
+        params = defaults.pop("params")
+        defaults.update(defaults.pop("kwargs"))
+        
+        super().__init__(
+            params, 
+            defaults, 
+            foreach, 
+            gradient_clipping,
+            update_clipping,
+            palm,
+            C.update_by_tensor_shampoo
+        )
+        
 
 # Then create the specific optimizer
 MARSWrappedAdamW = create_mars_wrapped_optimizer(ForeachAdamW)
@@ -1562,7 +1601,7 @@ SGD = ForeachSGD
 SPlus = ForeachSPlus
 AdamW_lr_schedule = ForeachAdamW_lr_schedule
 COSMOS = ForeachCOSMOS
-
+DistributedShampoo = ForeachDistributedShampoo
 __all__ = [
     "Muon",
     "RMSprop",
@@ -1621,4 +1660,5 @@ __all__ = [
     "ForeachMARSWrappedAdamW",
     "ForeachAdamW_lr_schedule",
     "ForeachCOSMOS"
+    "ForeachDistributedShampoo"
 ]

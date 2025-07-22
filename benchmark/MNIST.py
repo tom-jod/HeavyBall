@@ -122,7 +122,7 @@ def main(
         base_lr=1e-3,
         trials=trials,
         estimate_condition_number = False,
-        test_loader=None,
+        test_loader=test_loader,
         track_variance=True
     )
 

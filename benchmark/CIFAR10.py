@@ -126,7 +126,7 @@ def main(
     data_gen = create_data_generator()
     def data():
         return next(data_gen)
-    print(len(trainset))
+    print(f"shape: {trainset[0][0].shape}")
     trial(
         model,
         data,
@@ -145,7 +145,7 @@ def main(
         base_lr=1e-3,
         trials=trials,
         estimate_condition_number = False,
-        test_loader=None,
+        test_loader=testloader,
         track_variance=True
     )
 

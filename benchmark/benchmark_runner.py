@@ -212,7 +212,7 @@ def aggregate_and_plot(results, benchmark_name, output_dir):
         
         # Truncate all trajectories
         truncated = [traj[:min_length] for traj in trajectories]
-        mean_runtime = group["runtime"]
+        mean_runtime = group["runtime"].mean()
         if truncated:
             # Calculate statistics
             mean_traj = np.mean(truncated, axis=0)
@@ -224,7 +224,7 @@ def aggregate_and_plot(results, benchmark_name, output_dir):
             plt.plot(x, mean_traj, label=f"{optimizer} (n={mean_runtime})", linewidth=1)
             plt.fill_between(x, mean_traj - se_traj, mean_traj + se_traj, alpha=0.2)
     
-    plt.xlabel('Iteration')
+    plt.xlabel('Iteration (x1000)')
     plt.ylabel('Loss')
     plt.title(f'{benchmark_name} - Loss Trajectories')
     plt.legend()

@@ -389,7 +389,7 @@ def collate_graphs(batch):
     labels = torch.stack(all_labels)
     weights = torch.stack(all_weights)
     
-    return graph, labels, weights
+    return graph, (labels, weights)
 
 
 def binary_cross_entropy_with_mask(labels, logits, mask, label_smoothing=0.0):
@@ -487,11 +487,11 @@ def main(
     def data():
         nonlocal data_iter
         try:
-            graph, labels, weights = next(data_iter)
+            graph, (labels, weights) = next(data_iter)
         except StopIteration:
             # Reset iterator when exhausted
             data_iter = iter(train_loader)
-            graph, labels, weights = next(data_iter)
+            graph, (labels, weights) = next(data_iter)
         
         # Move to GPU
         graph = GraphsTuple(
@@ -505,6 +505,8 @@ def main(
         )
         
         return graph, (labels.cuda(), weights.cuda())
+    
+
     
     # Multi-label binary classification loss with masking
     def loss_fn(output, target_tuple):
@@ -526,7 +528,7 @@ def main(
     
     # Target loss based on algoperf OGBG benchmark (AP score, lower is better for loss)
     # We use 1 - AP as loss, so target loss = 1 - 0.280981 = 0.719019
-    target_loss = win_condition_multiplier * 0.719019
+    target_loss = win_condition_multiplier * 0.0
     
     trial(
         model,

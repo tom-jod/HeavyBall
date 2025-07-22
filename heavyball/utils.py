@@ -253,6 +253,38 @@ def _compilable_exp_avg_sq_(
     copy_stochastic_list_(out, denom)
     return out
 
+@decorator_knowngood
+def _compilable_exp_avg_sq_(
+    state: List[Tensor], grad: List[Tensor], beta2: Tensor, eps: Tensor, out: List[Optional[Tensor]]
+):
+    # Filter out None gradients before processing
+    valid_indices = []
+    valid_grad = []
+    valid_state = []
+    
+    for i, (g, s) in enumerate(zip(grad, state)):
+        if g is not None:
+            valid_indices.append(i)
+            valid_grad.append(g)
+            valid_state.append(s)
+    
+    if not valid_grad:
+        # No valid gradients, return original state
+        return state
+    
+    # Process only valid gradients
+    g32 = [promote(g) for g in valid_grad]
+    s32 = _lerp(valid_state, torch._foreach_mul(g32, g32), beta2)
+    
+    denom = [eps_sqrt(d, eps) for d in s32]
+    
+    # Reconstruct the full result list with None values in correct positions
+    result = [None] * len(state)
+    for i, idx in enumerate(valid_indices):
+        result[idx] = denom[i]
+    
+    return result
+
 
 def exp_avg_sq_(state, grad, beta2, eps, out=None):
     state, grad, out = list_guard(state, grad, out)
@@ -478,6 +510,26 @@ def get_orthogonal_matrix_QR(GG: List[Tensor], Q: List[Tensor], exp_avg: Optiona
     :param Q: List of current eigenbases (updated in-place to Q_new).
     :param exp_avg: Exponential moving average in the old eigenspace (updated in-place if provided).
     """
+       # Handle None Q
+    if Q is None:
+        #print("Warning: Q is None in get_orthogonal_matrix_QR, skipping update")
+        return
+        
+    # Handle empty GG
+    if isinstance(GG, list) and not GG:
+        print("Warning: GG is empty in get_orthogonal_matrix_QR, skipping update")
+        return
+        
+    # Handle empty Q
+    if isinstance(Q, list) and not Q:
+        print("Warning: Q is empty in get_orthogonal_matrix_QR, skipping update")
+        return
+    
+    # Validate dimensions
+    if exp_avg is not None and exp_avg.dim() != len(Q):
+        print(f"Warning: exp_avg dim {exp_avg.dim()} does not match Q length {len(Q)}, skipping update")
+        return
+    
     if exp_avg is not None and exp_avg.dim() == 0:
         Q.clear()
         return
@@ -531,79 +583,116 @@ def get_orthogonal_matrix_QR(GG: List[Tensor], Q: List[Tensor], exp_avg: Optiona
         if q is not None:
             copy_stochastic_(q, q_new)
 
-
-def get_orthogonal_matrix(mat, max_eps: float = 1e-3, min_eps: float = 1e-30):
+def get_orthogonal_matrix(mat):
     """
-    Computes the eigenbases of the preconditioner using torch.linalg.eigh decomposition.
+    Robust orthogonal matrix computation with comprehensive error handling
     """
-
+    print(f"get_orthogonal_matrix called with mat: {mat}")
+    
+    # Handle empty or None matrices
+    if not mat or all(m is None for m in mat):
+        print("All matrices are None or empty")
+        return []
+    
+    # Filter out None matrices
+    valid_matrices = [m for m in mat if m is not None]
+    if not valid_matrices:
+        print("No valid matrices found")
+        return []
+    
+    print(f"Processing {len(valid_matrices)} valid matrices")
+    
     final = []
-    for m in mat:
-        if m is None:
-            final.append(None)
-            continue
+    
+    for i, matrix_to_decompose in enumerate(valid_matrices):
+        print(f"Processing matrix {i} with shape {matrix_to_decompose.shape}")
         
-        # Early NaN/Inf detection
-        if torch.isnan(m.data).any() or torch.isinf(m.data).any():
-            print(f"Warning: Input matrix contains NaN/Inf, using identity matrix")
-            identity = torch.eye(m.shape[0], device=m.device, dtype=m.dtype)
-            final.append(identity)
-            continue
-        
-        m = promote(m.data)
-        original_device, original_dtype = m.device, m.dtype
-        
-        eps = min_eps
-        success = False
-        
-        while not success:
+        try:
+            # Validate input matrix
+            if matrix_to_decompose is None:
+                print(f"Matrix {i} is None")
+                final.append(None)
+                continue
+                
+            # Check for invalid values before any operations
+            if not torch.isfinite(matrix_to_decompose).all():
+                print(f"Matrix {i} contains non-finite values")
+                device = matrix_to_decompose.device
+                dtype = matrix_to_decompose.dtype
+                final.append(torch.eye(matrix_to_decompose.shape[0], device=device, dtype=dtype))
+                continue
+            
+            # Store original properties
+            original_device = matrix_to_decompose.device
+            original_dtype = matrix_to_decompose.dtype
+            
+            print(f"Matrix {i} stats: min={matrix_to_decompose.min():.6f}, max={matrix_to_decompose.max():.6f}")
+            print(f"Matrix {i} condition number estimate: {torch.linalg.cond(matrix_to_decompose):.6f}")
+            
+            # Try eigendecomposition
+            m = matrix_to_decompose.clone()
+            success = False
+            eigvec = None
+            
+            # Method 1: Try on original device with original dtype
             try:
-                # Additional safety check after promote
-                if torch.isnan(m).any():
-                    m = torch.where(torch.isnan(m), torch.randn_like(m) * 1e-8, m)
-                if torch.isinf(m).any():
-                    m = torch.where(torch.isinf(m), torch.sign(m) * 1e8, m)
-                
+                print(f"Attempting eigendecomposition for matrix {i}")
+                eps = 1e-30
                 eye = torch.eye(m.shape[0], device=m.device, dtype=m.dtype)
-                matrix_to_decompose = m + eps * eye
-                
-                # Final check before decomposition
-                if torch.isnan(matrix_to_decompose).any() or torch.isinf(matrix_to_decompose).any():
-                    raise RuntimeError("Matrix still contains NaN/Inf after cleaning")
-                
-                _eigval, eigvec = torch.linalg.eigh(matrix_to_decompose)
-                eigvec = eigvec.to(device=original_device, dtype=original_dtype)
+                eigval, eigvec = torch.linalg.eigh(m + eps * eye)
+                print(f"Eigendecomposition successful for matrix {i}")
+                print(f"Eigenvalues range: {eigval.min():.6f} to {eigval.max():.6f}")
                 success = True
-                
-            except torch.OutOfMemoryError:
-                if m.device.type == "cpu":
-                    print("Out of memory on CPU, using identity matrix")
-                    eigvec = torch.eye(m.shape[0], device=original_device, dtype=original_dtype)
-                    success = True
-                else:
-                    m = m.cpu()
-                    
             except (RuntimeError, torch._C._LinAlgError) as e:
-                if "NaN" in str(e) or "illegal memory access" in str(e):
-                    print(f"Linear algebra error: {e}, using identity matrix")
-                    eigvec = torch.eye(m.shape[0], device=original_device, dtype=original_dtype)
-                    success = True
-                elif m.dtype != torch.double:
-                    m = m.double()
-                elif eps < max_eps:
-                    eps = eps ** (2 / 3)
+                print(f"Eigendecomposition failed for matrix {i}: {e}")
+                if "illegal memory access" in str(e):
+                    print(f"Memory access error, trying CPU fallback")
+                    # Try on CPU
+                    try:
+                        m_cpu = m.cpu()
+                        eps = 1e-30
+                        eye_cpu = torch.eye(m_cpu.shape[0], dtype=m_cpu.dtype)
+                        eigval, eigvec = torch.linalg.eigh(m_cpu + eps * eye_cpu)
+                        eigvec = eigvec.to(original_device)
+                        print(f"CPU fallback successful for matrix {i}")
+                        success = True
+                    except Exception as cpu_error:
+                        print(f"CPU fallback also failed: {cpu_error}")
+                        success = False
                 else:
-                    print(f"All recovery attempts failed: {e}, using identity matrix")
-                    eigvec = torch.eye(m.shape[0], device=original_device, dtype=original_dtype)
-                    success = True
-                    
-            if success:
-                clean()
-        
-        # Ensure correct device/dtype and flip for descending eigenvalue order
-        eigvec = eigvec.to(device=original_device, dtype=original_dtype)
-        eigvec = torch.flip(eigvec, [1])
-        final.append(eigvec)
+                    success = False
+            
+            # If eigendecomposition failed, use identity matrix
+            if not success or eigvec is None:
+                print(f"Using identity matrix for matrix {i}")
+                try:
+                    identity = torch.eye(m.shape[0], dtype=original_dtype, device=original_device)
+                    eigvec = identity
+                    print(f"Identity matrix created successfully for matrix {i}")
+                except Exception as identity_error:
+                    print(f"Failed to create identity matrix: {identity_error}")
+                    eigvec = torch.eye(m.shape[0], dtype=torch.float32)
+            
+            final.append(eigvec)
+            print(f"Matrix {i} processed successfully")
+            
+        except Exception as outer_error:
+            print(f"Catastrophic error processing matrix {i}: {outer_error}")
+            import traceback
+            traceback.print_exc()
+            # Emergency fallback
+            try:
+                shape = matrix_to_decompose.shape[0] if matrix_to_decompose is not None else 1
+                final.append(torch.eye(shape, dtype=torch.float32))
+            except:
+                final.append(torch.eye(1, dtype=torch.float32))
+    
+    print(f"get_orthogonal_matrix returning: {len(final)} matrices")
+    for i, f in enumerate(final):
+        if f is not None:
+            print(f"  Result[{i}]: shape {f.shape}")
+        else:
+            print(f"  Result[{i}]: None")
     
     return final
 
@@ -635,6 +724,12 @@ def get_beta2(group):
     if "betas" in group:
         return group["betas"][1]
     raise ValueError("Beta2 not found in group.")
+
+
+def get_beta3(group):
+    if "betas" in group:
+        return group["betas"][2]
+    raise ValueError("Beta3 not found in group.")
 
 
 def stochastic_lerp_(x: List[Tensor], y: List[Tensor], a: Union[float, int, Tensor]):
@@ -732,37 +827,68 @@ def update_ggt(grad, GG, max_precond_dim, precondition_1d, beta):
     """
     if grad.dim() == 1 and (not precondition_1d or grad.shape[0] > max_precond_dim):
         return
-
+    
     for idx, m in enumerate(GG):
-        if not isinstance(m, Tensor):
+        # Get the dimension for this index
+        if idx >= grad.dim():
+            break
+            
+        dim = grad.shape[idx]
+        
+        # Skip if dimension is too large
+        if dim > max_precond_dim:
             continue
+            
+        # Initialize matrix if it doesn't exist
+        if not isinstance(m, Tensor):
+            # Create new matrix with small regularization
+            device = grad.device
+            dtype = grad.dtype
+            # Initialize with small identity matrix instead of zeros
+            regularization = 1e-6
+            GG[idx] = torch.eye(dim, device=device, dtype=dtype) * regularization
+            print(f"Initialized GG[{idx}] with shape {dim}x{dim} and regularization {regularization}")
+        
+        # Now update the matrix
         b = einsum_base[idx]
         g0 = einsum_base[: grad.dim()]
         g1 = g0.replace(b, b.upper())
         outer_product = compiled_einsum(f"{g0},{g1}->{b + b.upper()}", grad, grad)
-        stochastic_lerp_(m, outer_product, 1 - beta)
+        
+        # Add regularization to prevent singular matrices
+        regularization = 1e-8
+        outer_product = outer_product + torch.eye(dim, device=grad.device, dtype=grad.dtype) * regularization
+        
+        stochastic_lerp_(GG[idx], outer_product, 1 - beta)
 
 
 @decorator
-def update_ggt_no_momentum(grad, max_precond_dim, precondition_1d, beta):
-    """ 
-    Simplified by @francois-rozet in commit 704ccc4bab52429f945df421647ec82c54cdd65f
-    Re-commited due to faulty merge
+def update_gtg_no_momentum(grad, max_precond_dim, precondition_1d, beta):
+    """
+    Compute G^T G for each dimension consistently
     """
     if grad.dim() == 1 and (not precondition_1d or grad.shape[0] > max_precond_dim):
         return
-
-    ggt_list = []
-
+    
+    gtg_list = []
+    
     for idx in range(grad.dim()):
         b = einsum_base[idx]
         g0 = einsum_base[: grad.dim()]
-        g1 = g0.replace(b, b.upper())
-
-        outer_product = compiled_einsum(f"{g0},{g1}->{b + b.upper()}", grad, grad)
-        ggt_list.append(outer_product)
-
-    return ggt_list
+        
+        # Create g1 by making ALL other dimensions uppercase except the target dimension
+        g1 = ""
+        for i, char in enumerate(g0):
+            if i == idx:
+                g1 += char  # Keep target dimension lowercase
+            else:
+                g1 += char.upper()  # Make other dimensions uppercase
+        
+        # This contracts over all dimensions except idx, giving G^T G
+        outer_product = compiled_einsum(f"{g1},{g0}->{b + b.upper()}", grad, grad)
+        gtg_list.append(outer_product)
+    
+    return gtg_list
 
 
 def tree_apply(fn):
@@ -811,13 +937,15 @@ def update_preconditioner(grad, Q, GG, exp_avg, max_precond_dim, precondition_1d
     if update_precond:
         get_orthogonal_matrix_QR(GG, Q, exp_avg)
 
-def update_preconditioner_cosmos(grad, U, S, exp_avg, max_precond_dim, precondition_1d, beta2, update_precond):
+def update_preconditioner_cosmos(grad, U, S, exp_avg, max_precond_dim, precondition_1d, beta2, beta3, update_precond):
     """
     Updates the preconditioner matrices and the eigenbases (L, R, Q_L, Q_R in the paper).
     """
-    GG = update_ggt_no_momentum(grad, max_precond_dim, precondition_1d, beta2)
-    if update_precond:
-        cosmos_update_basis(grad, GG, U, S, beta2)
+    #GG = update_gtg_no_momentum(grad, max_precond_dim, precondition_1d, beta2)
+    
+    # Only update basis if we have valid GG and this tensor uses COSMOS
+    if update_precond and U is not None and S is not None:
+        cosmos_update_basis(grad, U, S, beta2, beta3)
 
 def update_preconditioner_CASPR(grad, Q, GG, exp_avg, max_precond_dim, precondition_1d, beta, update_precond):
     """
@@ -830,122 +958,191 @@ def update_preconditioner_CASPR(grad, Q, GG, exp_avg, max_precond_dim, precondit
 
 def init_preconditioner(grad, state, max_precond_dim, precondition_1d):
     """
-    Initializes the preconditioner matrices (L and R in the paper).
+    Initialize preconditioner with comprehensive error handling
     """
-    state["GG"] = []  # Will hold all the preconditioner matrices (L and R in the paper).
-    if grad.numel() > 1 and (grad.ndim > 1 or precondition_1d):
-        for sh in grad.shape:
-            if sh > max_precond_dim or sh == 1:
-                # via @francois-rozet: https://github.com/HomebrewML/HeavyBall/commit/8b86be04967e2d095136d5603724f488f2d46592#diff-a430393dd0a6ee393944a9ed16416115c175de2414cf4a96e647197697f265e9R621
+    try:
+        # Validate input gradient
+        if grad is None:
+            print("Warning: grad is None, skipping preconditioner initialization")
+            return
+            
+        # Check if gradient is accessible
+        try:
+            grad_shape = grad.shape
+            grad_device = grad.device
+            grad_dtype = grad.dtype
+        except RuntimeError as e:
+            if "illegal memory access" in str(e):
+                print("Warning: Cannot access gradient due to memory corruption, skipping preconditioner")
+                return
+            raise
+        
+        # Check for invalid values
+        if not torch.isfinite(grad).all():
+            print("Warning: Gradient contains non-finite values, skipping preconditioner")
+            return
+            
+        # Clear CUDA cache before operations
+        if grad_device.type == 'cuda':
+            torch.cuda.empty_cache()
+        
+        # Initialize GG if not exists
+        if "GG" not in state:
+            state["GG"] = []
+        
+        # Ensure GG has correct length
+        sh = grad.shape
+        print(sh)
+        if len(sh) == 1:
+            if not precondition_1d:
+                print("1D gradient with precondition_1d=False, skipping")
+                return
+            if len(state["GG"]) == 0:
                 state["GG"].append(None)
-            else:
-                state["GG"].append(torch.zeros(sh, sh, device=grad.device, dtype=grad.dtype))
-    else:
-        state["GG"].append(None)
+        else:
+            while len(state["GG"]) < len(sh):
+                state["GG"].append(None)
+        
+        # Update GG matrices with error handling
+        try:
+            update_ggt(grad, state["GG"], max_precond_dim, precondition_1d, 0)
+            
+        except Exception as e:
+            print(f"Error in update_ggt: {e}, initializing with identity matrices")
+            # Initialize with identity matrices
+            state["GG"] = []
+            for dim in sh:
+                if dim <= max_precond_dim:
+                    state["GG"].append(torch.eye(dim, device=grad_device, dtype=grad_dtype))
+                else:
+                    state["GG"].append(None)
+        
+        # Get orthogonal matrices with error handling
+        try:
+            state["Q"] = get_orthogonal_matrix(state["GG"])
+            print(state["Q"])
+        except Exception as e:
+            print(f"Error in get_orthogonal_matrix: {e}, using identity matrices")
+            state["Q"] = []
+            for gg in state["GG"]:
+                if gg is not None:
+                    state["Q"].append(torch.eye(gg.shape[0], device=gg.device, dtype=gg.dtype))
+                else:
+                    state["Q"].append(None)
+                    
+    except Exception as e:
+        print(f"Critical error in init_preconditioner: {e}")
+        # Emergency fallback - disable preconditioning for this parameter
+        state["Q"] = []
+        if "GG" in state:
+            for _ in state["GG"]:
+                state["Q"].append(None)
 
-    update_ggt(grad, state["GG"], max_precond_dim, precondition_1d, 0)
-    state["Q"] = get_orthogonal_matrix(state["GG"])
 
+def cosmos_update_basis(g, U, S, beta2, beta3):
+    """
+    COSMOS basis update following Algorithm 1 from the paper
+    """
     
-def init_preconditioner_cosmos(grad, state, max_precond_dim, precondition_1d):
-    """
-    Initializes the preconditioner matrices for COSMOS optimizer.
-    Following the same pattern as init_preconditioner but for COSMOS.
-    """
-    # Initialize storage for preconditioner matrices
-    state["U"] = []  # Orthogonal matrices U_t
-    state["S"] = []  # Diagonal matrices S_t
+    # Handle the case where inputs might not be lists
+    if not isinstance(g, (list, tuple)):
+        g = [g]
+    if not isinstance(U, (list, tuple)):
+        U = [U]
+    if not isinstance(S, (list, tuple)):
+        S = [S]
     
-    # Use the same logic as init_preconditioner
-    if grad.numel() > 1 and (grad.ndim > 1 or precondition_1d):
-        for sh in grad.shape:
-            if sh > max_precond_dim or sh == 1:
-                # Skip preconditioning for dimensions that are too large or size 1
-                state["U"].append(None)
-                state["S"].append(None)
-            else:
-                # Initialize U_t as identity matrix (same size as the dimension)
-                state["U"].append(torch.eye(sh, device=grad.device, dtype=grad.dtype))
-                # Initialize S_t as identity matrix  
-                state["S"].append(torch.eye(sh, device=grad.device, dtype=grad.dtype))
-    else:
-        # For 1D gradients or when not preconditioning
-        state["U"].append(None)
-        state["S"].append(None)
-
-
-def cosmos_update_basis(g, GG, U, S, beta2):
-    """
-    Optimized version of the basis update using custom built functions from get_orthogonal_matrix_QR
-    """
-    for g, m, u_old, s_old in zip(g, GG, U, S):
-        if m is None:
+    for i, (g_tensor, u_tensor, s_tensor) in enumerate(zip(g, U, S)):
+        if u_tensor is None or s_tensor is None:
             continue
             
-        g_promoted = promote(g)    
-        u_old_promoted = promote(u_old)
-        s_old_promoted = promote(s_old)
-        m_promoted = promote(m)
-        
-        # Debug: Check shapes and types
-        print(f"u_old_promoted shape: {u_old_promoted.shape}")
-        print(f"s_old_promoted shape: {s_old_promoted.shape}")
-        print(f"m_promoted shape: {m_promoted.shape}")
-        
-        # M_t = β2 U_{t-1} S_{t-1} + (1 - β2) GGT @ U_{t-1}
-        scaled_s = torch.matmul(u_old_promoted, s_old_promoted)
-        
-        # Compute m_promoted @ u_old_promoted
-        m_u_product = torch.matmul(m_promoted, u_old_promoted)
-        
-        # M = beta2 * scaled_s + (1 - beta2) * (m_promoted @ u_old_promoted)
-        M = stochastic_lerp_(scaled_s, m_u_product, 1-beta2)
-        
-        # Debug: Check if M is None
-        if M is None:
-            print("ERROR: M is None after stochastic_lerp_")
-            print(f"scaled_s: {scaled_s}")
-            print(f"m_u_product: {m_u_product}")
-            print(f"1-beta2: {1-beta2}")
+        # Promote to higher precision
+        g_promoted = promote(g_tensor)     # Gt: gradient
+       
+        u_promoted = promote(u_tensor)     # Ut-1: basis matrix (n, r)
+        s_promoted = promote(s_tensor)     # St-1: S matrix (r, r)
+       
+        # For 2D gradients, we need to compute Gt^T @ Gt
+        if g_promoted.dim() == 2:
+            # Line 5: Update U using QR decomposition
+            # Ut ← QR(β₃Ut-1St-1 + (1 - β₃)Gt^T GtUt-1)
+            
+            # First term: β₃ * Ut-1 @ St-1
+            term1 = beta3 * torch.matmul(u_promoted, s_promoted)
+            
+            # Second term: (1 - β₃) * Gt^T @ Gt @ Ut-1
+            
+            gt_gt = torch.matmul(g_promoted.T,g_promoted)
+ 
+            term2 = (1 - beta3) * torch.matmul(gt_gt, u_promoted)
+            
+            # Combined matrix for QR decomposition
+            M_combined = term1 + term2
+            
+            # QR decomposition to get new orthogonal basis
+            u_new, _ = torch.linalg.qr(M_combined, mode='reduced')
+            
+            # Line 6: Update S matrix
+            # St ← Ut^T(β₃Ut-1St-1Ut-1^T + (1 - β₃)Gt^T Gt)Ut
+            
+            # First term: β₃ * Ut-1 @ St-1 @ Ut-1^T
+            old_s_full = beta3 * torch.matmul(torch.matmul(u_promoted, s_promoted), u_promoted.T)
+            
+            # Second term: (1 - β₃) * Gt^T @ Gt
+            new_contrib = (1 - beta3) * gt_gt
+            
+            # Combined full matrix
+            full_matrix = old_s_full + new_contrib
+            
+            # Project to new basis: St = Ut^T @ full_matrix @ Ut
+            s_new = torch.matmul(torch.matmul(u_new.T, full_matrix), u_new)
+            
+        else:
+            # For 1D gradients, fall back to simpler update
             continue
         
-        # Compute eigenvalue estimates
-        est_eig = compiled_einsum("ij,ij->j", u_old_promoted, m_u_product)
-        sort_idx = torch.argsort(est_eig, descending=True)
-        
-        # Apply sorting and use inplace orthogonalization
-        M_sorted = M[:, sort_idx]
-        u_new = inplace_orthogonal_(M_sorted, precise_zeroth_power_mode)
-        
-        # rotate s into the full rank space
-        s_rotated = torch.matmul(torch.matmul(u_old, s_old), u_old.T)
-        s_t = stochastic_lerp_(s_rotated, m_promoted, 1-beta2)
-        
-        # rotate back into updated low rank space
-        s_new = torch.matmul(torch.matmul(u_new.T, s_t), u_new)
-        
-        # Update U,S,V in-place using copy_stochastic_
-        copy_stochastic_(u_old, u_new)
-        copy_stochastic_(s_old, s_new)
-        
+        # Update U and S in-place
+        copy_stochastic_(u_tensor, u_new)
+        copy_stochastic_(s_tensor, s_new)
+    
     return U, S
 
-
-@decorator
-def project(grad, Q, back: bool):
+def project(grad, Q, back=False):
     """
-    :param grad:
-    :param Q:
-    :param back: whether to project to Shampoo eigenbases or back to original space
-    :return:
+    Project gradient using orthogonal matrices Q.
+    
+    :param grad: gradient tensor
+    :param Q: list of orthogonal matrices (can be None)
+    :param back: whether to project back
+    :return: projected gradient
     """
+    if Q is None:
+        # No preconditioning, return original gradient
+        return grad
+        
     param = einsum_base[: grad.dim()]
-    preconditioners = ",".join([(g + g.upper())[:: -1 if back else 1] for m, g in zip(Q, param) if m is not None])
+    
+    # Filter out None matrices and create valid preconditioners
+    valid_preconditioners = []
+    valid_matrices = []
+    
+    for i, (m, g) in enumerate(zip(Q, param)):
+        if m is not None:
+            valid_preconditioners.append((g + g.upper())[:: -1 if back else 1])
+            valid_matrices.append(m)
+    
+    if not valid_preconditioners:
+        # No valid preconditioners, return original gradient
+        return grad
+        
+    preconditioners = ",".join(valid_preconditioners)
+    
     if preconditioners:
         out = "".join([c.upper() if c.upper() in preconditioners else c for c in param])
-        out = compiled_einsum(f"{param},{preconditioners}->{out}", promote(grad), *[q for q in Q if q is not None])
-        grad = out.to(grad.dtype)
-    return grad
+        out = compiled_einsum(f"{param},{preconditioners}->{out}", promote(grad), *valid_matrices)
+        return out
+    else:
+        return grad
 
 
 @contextlib.contextmanager
@@ -1665,125 +1862,230 @@ def matmul_UT_A(U_list, A_list):
     
     return result_list
 
-
-@decorator_knowngood
-def _compilable_cosmos_(
-    exp_avg: List[Tensor],
-    exp_avg_sq: List[Tensor],
-    grad: List[Tensor],
-    U: List[Tensor],
-    S: List[Tensor],
-    beta1: float,
-    beta2: float,
-    gamma: float,
-    step: int,
-    eps: float = 1e-8,
-    compiled_einsum=None,
-):
-    if compiled_einsum is None:
-        compiled_einsum = torch.einsum
-      # Debug: Print types and shapes
+def cosmos_project_gradients(grad_list, U_list):
+    """Project gradients using COSMOS U matrices (following official implementation)."""
+    result_list = []
     
-    beta1 = beta_debias(beta1, step)
-    beta2 = beta_debias(beta2, step)
-    
-    g32 = list(map(promote, grad))
-    
-    U32 = []
-    for u in U:
-        if isinstance(u, list):
-            if len(u) > 0 and u[0] is not None:
-                U32.append(promote(u[0]))  # Take first tensor from each list
-            else:
-                U32.append(None)
+    for grad, U in zip(grad_list, U_list):
+        if grad is None or U is None:
+            result_list.append(None)
+            continue
+            
+        # Official COSMOS does: U.T @ grad (not grad @ U)
+        # This projects the gradient into the low-rank subspace
+        if isinstance(U, list) and len(U) > 0 and U[0] is not None:
+            result = torch.matmul(U[0].T, grad)  # Shape: (rank, grad.size(1))
         else:
-            U32.append(promote(u))
+            result = grad
+            
+        result_list.append(result)
     
-    S32 = list(map(promote, S))
-    print(f"g32 type: {type(g32)}, length: {len(g32)}")
-    print(f"U32 type: {type(U32)}, length: {len(U32)}")
-    if len(g32) > 0:
-        print(f"g32[0] type: {type(g32[0])}, shape: {g32[0].shape if hasattr(g32[0], 'shape') else 'no shape'}")
-    if len(U32) > 0:
-        print(f"U32[0] type: {type(U32[0])}, shape: {U32[0].shape if hasattr(U32[0], 'shape') else 'no shape'}")
- 
-    # Replace: gu = g32 @ U32
-    gu = matmul_tensor_lists(g32, U32)
-    
-    exp_avg32 = _lerp(exp_avg, g32, beta1)
-    denom = _compilable_exp_avg_sq_(exp_avg_sq, gu, beta2, eps, [None])
-    
-    # Replace: mu = exp_avg32 @ U32
-    mu = matmul_tensor_lists(exp_avg32, U32)
-    
-    u32 = torch._foreach_div(exp_avg32, denom)
-    
-    # Replace: A_t = u32 @ U32.T
-    A_t = matmul_A_UT(u32, U32)
-    
-    # Replace: mu @ U32.T
-    mu_U_T = matmul_A_UT(mu, U32)
-    complementary_space = torch._foreach_sub(exp_avg32, mu_U_T)
-    
-    # Handle the norm calculation for each tensor in the list
-    norms = []
-    for tensor in complementary_space:
-        if tensor is not None:
-            norm = torch.linalg.norm(tensor, ord='fro')
-            norms.append(norm)
-        else:
-            norms.append(None)
-    
-    # Normalize each tensor by its norm
-    complementary_space_n = []
-    for tensor, norm in zip(complementary_space, norms):
-        if tensor is not None and norm is not None:
-            complementary_space_n.append(tensor / norm)
-        else:
-            complementary_space_n.append(None)
-    
-    # Apply orthogonalization and compute B_t
-    B_t = []
-    for tensor in complementary_space_n:
-        if tensor is not None:
-            ortho_tensor = inplace_orthogonal_(tensor)
-            b_val = torch.linalg.norm(ortho_tensor, ord='fro')
-            B_t.append(b_val)
-        else:
-            B_t.append(None)
-    
-    # Compute √m for each tensor and scale B_t
-    sqrt_m_scaled_B = []
-    for i, (b_val, tensor) in enumerate(zip(B_t, g32)):
-        if b_val is not None and tensor is not None:
-            sqrt_m = math.sqrt(tensor.shape[0])
-            scaled_b = b_val * sqrt_m * gamma  # Fixed the multiplication
-            sqrt_m_scaled_B.append(scaled_b)
-        else:
-            sqrt_m_scaled_B.append(None)
-    
-    # Final update: G_t = A_t + γ * B_t * √m
-    G_t = torch._foreach_add(A_t, sqrt_m_scaled_B)
-    copy_stochastic_list_(grad, G_t)
+    return result_list
 
 
 def cosmos_(
     exp_avg: List[Tensor],
     exp_avg_sq: List[Tensor],
+    adam_exp_avg_sq: List[Tensor],
     grad: List[Tensor],
     U: List[Tensor],
     S: List[Tensor],
     beta1: float,
     beta2: float,
+    lr: float,
     gamma: float,
     step: int,
     eps: float = 1e-8,
-    compiled_einsum=None,
 ):
-    exp_avg, exp_avg_sq, grad, U, S = map(list_guard, (exp_avg, exp_avg_sq, grad, U, S))
-    beta1, beta2, gamma, step, eps = scalar_guard(beta1, beta2, gamma, step, eps, exp_avg[0])
-    _compilable_cosmos_(exp_avg, exp_avg_sq, grad, U, S, beta1, beta2, gamma, step, eps, compiled_einsum)
+    exp_avg, exp_avg_sq, adam_exp_avg_sq, grad, U, S = map(list_guard, (exp_avg, exp_avg_sq, adam_exp_avg_sq, grad, U, S))
+    beta1, beta2, gamma, step, eps, lr = scalar_guard(beta1, beta2, gamma, step, eps, lr, exp_avg[0])
+    _compilable_cosmos_(exp_avg, exp_avg_sq, adam_exp_avg_sq, grad, U, S, beta1, beta2, lr, gamma, step, eps)
     return grad
+
+@decorator_knowngood
+def _compilable_cosmos_(
+    exp_avg: List[Tensor],
+    exp_avg_sq: List[Tensor],
+    adam_exp_avg_sq: List[Tensor],
+    grad: List[Tensor],
+    U: List[Tensor],
+    S: List[Tensor],
+    beta1: float,
+    beta2: float,
+    lr: float,
+    gamma: float,
+    step: int,
+    eps: float = 1e-8,
+):
+    beta1 = beta_debias(beta1, step)
+    beta2 = beta_debias(beta2, step)
+    
+    g32 = list(map(promote, grad))
+    exp_avg32 = list(map(promote, exp_avg))
+    U32 = [promote(u) if u is not None else None for u in U]
+    S32 = [promote(s) if s is not None else None for s in S]
+    
+    # Update first moment (same as Adam)
+    exp_avg32 = _lerp(exp_avg32, g32, beta1)
+    
+    # Find which parameters use COSMOS vs Adam
+    cosmos_mask = []
+    for i, (grad_tensor, U_tensor, S_tensor) in enumerate(zip(g32, U, S)):
+        use_cosmos = (grad_tensor is not None and 
+                     grad_tensor.dim() == 2 and 
+                     grad_tensor.size(0) <= 10000 and 
+                     U_tensor is not None and 
+                     S_tensor is not None)
+        cosmos_mask.append(use_cosmos)
+    
+    # Process Adam parameters with vectorized operations
+    adam_grads = [g for g, use_cosmos in zip(g32, cosmos_mask) if not use_cosmos and g is not None]
+    adam_exp_avg_sq = [sq for sq, use_cosmos in zip(exp_avg_sq, cosmos_mask) if not use_cosmos]
+    adam_exp_avg32 = [ea for ea, use_cosmos in zip(exp_avg32, cosmos_mask) if not use_cosmos]
+    
+    if adam_grads:
+        # Use optimized Adam processing
+        denom = _compilable_exp_avg_sq_(adam_exp_avg_sq, adam_grads, beta2, eps, [None])
+        adam_updates = torch._foreach_div(adam_exp_avg32, denom)
+    else:
+        adam_updates = []
+    
+    # Process COSMOS parameters individually (harder to vectorize)
+    cosmos_updates = []
+    
+    for i, use_cosmos in enumerate(cosmos_mask):
+        if use_cosmos:
+           
+            update = cosmos_low_rank_update(
+                g32[i], exp_avg32[i], exp_avg_sq[i], U[i], S[i],
+                beta1, beta2, lr, gamma, step, eps
+            )
+            
+            cosmos_updates.append(update)
+       
+    # Merge results
+    updates = []
+    adam_idx = 0
+    cosmos_idx = 0
+    for use_cosmos in cosmos_mask:
+        if use_cosmos:
+            updates.append(cosmos_updates[cosmos_idx])
+            cosmos_idx += 1
+        else:
+            updates.append(adam_updates[adam_idx] if adam_idx < len(adam_updates) else None)
+            adam_idx += 1
+    
+    copy_stochastic_list_(grad, updates)
+
+def cosmos_low_rank_update(grad, exp_avg, exp_avg_sq, U, S, beta1, beta2, lr, gamma, step, eps):
+    """
+    Returns the parameter update (not modifying exp_avg directly)
+    """
+   
+    if step == 1:
+        # Initialize U using SVD
+        W = torch.matmul(grad.T, grad)
+        U_svd, _, _ = torch.linalg.svd(W, full_matrices=False)
+        U.data = U_svd[:, :U.size(1)]
+        S.data = torch.matmul(torch.matmul(U.T, grad.T), torch.matmul(grad, U)) * (1 - beta2)
+        exp_avg_sq.data = torch.zeros(grad.size(0), U.size(1), device=grad.device, dtype=grad.dtype)
+        # For first step, return a small update or zero
+        return torch.zeros_like(grad) * lr
+    
+    # Update basis
+    cosmos_update_llama_style(grad, U, S, beta2)
+    
+    # Project to low-rank space
+    low_rank_grad = torch.matmul(grad, U)
+    
+    #exp_avg_sq.mul_(beta2).addcmul_(low_rank_grad, low_rank_grad, value=1 - beta2)
+    exp_avg_sq = beta2 * exp_avg_sq + (1-beta2) * (low_rank_grad * low_rank_grad)
+    
+
+    V_add_eps = exp_avg_sq + eps
+    # Compute update in low-rank space
+    t = torch.matmul(exp_avg, U) 
+    corrected = t / beta1
+    denom = (V_add_eps / beta2)**0.5
+    t1 = corrected / denom
+    A = torch.matmul(t1, U.T)
+    
+    # Orthogonal complement update
+    t_orth = exp_avg - torch.matmul(t, U.T)
+    t_orth = t_orth / (t_orth.norm() + eps)
+    t_orth = zeropower_via_newtonschulz5(t_orth, steps=5)
+    sqrt_n = (grad.size(1) ** 0.5)
+    sqrt_m = (grad.size(0) ** 0.5)
+    B = t_orth * sqrt_n / (t_orth.norm() + eps)
+    
+    G = A + gamma * sqrt_m * B
+    final_update = G * sqrt_n / (G.norm() + eps)
+    
+    return final_update
+
+def adam_fallback_update(grad, exp_avg, exp_avg_sq, beta1, beta2, lr, step, eps):
+    """
+    Returns the Adam parameter update
+    """
+    denom = _compilable_exp_avg_sq_(exp_avg_sq, grad, beta2, eps, [None])
+    u32 = torch._foreach_div(exp_avg, denom)
+    print(f"Adam returning: type={type(u32)}, shape={u32.shape}")
+    return u32
+
+def cosmos_update_llama_style(grad, U, S, beta2):
+    """Update U and S matrices for LLaMA-style COSMOS."""
+    U_old = U.detach().clone()
+     
+    U.data = beta2 * torch.matmul(U, S) + (1 - beta2) * torch.matmul(grad.T, torch.matmul(grad, U))
+    U.data, _ = torch.linalg.qr(U, mode='reduced')
+    S.data = beta2 * torch.matmul(U_old, torch.matmul(S, U_old.T)) + \
+             (1 - beta2) * torch.matmul(grad.T,grad)
+    S.data = torch.matmul(U.T, torch.matmul(S,U))
+
+def zeropower_via_newtonschulz5(G, steps=10, eps=1e-7):
+    """
+    Newton-Schulz iteration for matrix inverse square root.
+    From the official COSMOS implementation.
+    """
+    assert len(G.shape) == 2
+    a, b, c = (3.4445, -4.7750, 2.0315)
+    X = G.bfloat16()
+    X /= (X.norm() + eps)  # ensure top singular value <= 1
+    
+    if G.size(0) > G.size(1):
+        X = X.T
+        
+    for _ in range(steps):
+        A = X @ X.T
+        B = A @ X
+        X = a * X + b * B + c * A @ B
+        
+    if G.size(0) > G.size(1):
+        X = X.T
+        
+    return X
+
+def init_preconditioner_cosmos(grad, state, rank=64):
+    """
+    Initialize COSMOS preconditioner for a single gradient tensor.
+    """
+
+    device = grad.device
+    dtype = grad.dtype
+    
+    # LLaMA-style: U is (cols, rank), S is (rank, rank) 
+    if len(grad.shape) > 1:
+        actual_rank = min(rank, grad.size(1))
+        state["U"] = torch.eye(grad.size(1), actual_rank, dtype=dtype, device=device)
+    else:
+        actual_rank = rank
+        state["U"] = torch.eye(grad.size(0), actual_rank, dtype=dtype, device=device)
+
+    
+    state["S"] = torch.eye(actual_rank, dtype=dtype, device=device)
+    state["adam_exp_avg_sq"] = torch.zeros_like(grad)
+    # exp_avg_sq should be in low-rank space: (rows, rank)
+    state["exp_avg_sq"] = torch.zeros(grad.size(0), actual_rank, dtype=dtype, device=device)
 
 
 @decorator_knowngood
@@ -3579,3 +3881,205 @@ def sam_step(parameters, ball_size, adaptive: bool = True):
         stochastic_add_(p.data, grad, ball_size)
         p.grad.zero_()
     return old_params
+
+def merge_small_dims(shape, max_dim):
+    """Merge small dimensions to reduce memory usage.
+    
+    Example: [1, 2, 512, 1, 2048, 1, 3, 4] -> [1024, 2048, 12] if max_dim = 1024
+    """
+    if not shape or len(shape) <= 1:
+        return shape
+    
+    # Convert to list for easier manipulation
+    shape_list = list(shape)
+    
+    # If all dimensions are small enough, return as-is
+    if all(s <= max_dim for s in shape_list):
+        return tuple(shape_list)
+    
+    # Merge small consecutive dimensions
+    merged = []
+    current_product = 1
+    
+    for dim in shape_list:
+        if current_product * dim <= max_dim:
+            current_product *= dim
+        else:
+            if current_product > 1:
+                merged.append(current_product)
+            current_product = dim
+    
+    # Don't forget the last dimension
+    if current_product > 1:
+        merged.append(current_product)
+    
+    return tuple(merged) if merged else tuple(shape_list)
+
+def update_preconditioner_mode_(G_matrix, grad, mode_idx, beta2, eps):
+    """Update preconditioner matrix for a specific tensor mode"""
+    # Unfold the gradient tensor along the specified mode
+    grad_unfolded = unfold_tensor_mode(grad, mode_idx)
+    
+    # Compute outer product for this mode: G += grad_mode @ grad_mode.T
+    outer_product = torch.mm(grad_unfolded, grad_unfolded.t())
+    
+    # Add regularization
+    regularization = eps * torch.eye(outer_product.size(0), 
+                                   device=outer_product.device, 
+                                   dtype=outer_product.dtype)
+    outer_product = outer_product + regularization
+    
+    # Update with exponential moving average
+    G_matrix.mul_(beta2).add_(outer_product, alpha=1 - beta2)
+
+def unfold_tensor_mode(tensor, mode):
+    """Unfold tensor along specified mode (mode-n matricization)"""
+    # Move the mode dimension to the front
+    dims = list(range(tensor.dim()))
+    dims[0], dims[mode] = dims[mode], dims[0]
+    
+    # Permute and reshape
+    unfolded = tensor.permute(dims)
+    mode_size = unfolded.shape[0]
+    unfolded = unfolded.reshape(mode_size, -1)
+    
+    return unfolded
+
+def update_orthogonal_basis_(G_matrix, Q_matrix):
+    """Update orthogonal basis using QR decomposition"""
+    try:
+        # Compute one step of power iteration followed by QR
+        temp = torch.mm(G_matrix, Q_matrix)
+        
+        # QR decomposition
+        Q_new, _ = torch.linalg.qr(temp)
+        
+        # Update Q_matrix in place
+        Q_matrix.copy_(Q_new)
+        
+    except torch.linalg.LinAlgError:
+        # If QR fails, just keep the old Q_matrix
+        pass
+
+def apply_mode_preconditioning(grad, Q_matrix, mode_idx):
+    """Apply preconditioning for a specific tensor mode"""
+    # This applies the preconditioner Q^T to the specified mode
+    
+    # Get original shape
+    original_shape = grad.shape
+    
+    # Move mode to the front
+    dims = list(range(grad.dim()))
+    dims[0], dims[mode_idx] = dims[mode_idx], dims[0]
+    
+    # Permute tensor
+    grad_permuted = grad.permute(dims)
+    
+    # Reshape for matrix multiplication
+    mode_size = grad_permuted.shape[0]
+    grad_flat = grad_permuted.reshape(mode_size, -1)
+    
+    # Apply preconditioner: Q^T @ grad_flat
+    preconditioned_flat = torch.mm(Q_matrix.t(), grad_flat)
+    
+    # Reshape back
+    new_shape = list(grad_permuted.shape)
+    new_shape[0] = Q_matrix.shape[0]  # Might be different due to dimensionality reduction
+    
+    if preconditioned_flat.numel() == torch.prod(torch.tensor(new_shape)):
+        preconditioned = preconditioned_flat.reshape(new_shape)
+        
+        # Permute back to original dimension order
+        inv_dims = [0] * len(dims)
+        for i, d in enumerate(dims):
+            inv_dims[d] = i
+        
+        result = preconditioned.permute(inv_dims)
+        
+        # If shape changed due to preconditioning, we need to handle it
+        if result.shape != original_shape:
+            # For now, just return the original gradient
+            # In a full implementation, you'd need to handle dimension changes properly
+            return grad
+        
+        return result
+    else:
+        # Shape mismatch, return original gradient
+        return grad
+
+def compute_adam_updates_(exp_avg, exp_avg_sq, grad_list, beta2, step, eps, use_bias_correction=True):
+    """Compute Adam updates for grafting"""
+    updates = []
+    
+    for i, grad in enumerate(grad_list):
+        # Update exponential moving averages
+        exp_avg[i].mul_(0.9).add_(grad, alpha=0.1)  # beta1 = 0.9
+        exp_avg_sq[i].mul_(beta2).addcmul_(grad, grad, value=1 - beta2)
+        
+        # Bias correction
+        if use_bias_correction:
+            bias_correction1 = 1 - 0.9 ** step
+            bias_correction2 = 1 - beta2 ** step
+            corrected_exp_avg = exp_avg[i] / bias_correction1
+            corrected_exp_avg_sq = exp_avg_sq[i] / bias_correction2
+        else:
+            corrected_exp_avg = exp_avg[i]
+            corrected_exp_avg_sq = exp_avg_sq[i]
+        
+        # Compute update
+        denom = corrected_exp_avg_sq.sqrt().add_(eps)
+        update = corrected_exp_avg / denom
+        updates.append(update)
+    
+    return updates
+
+def compute_rmsprop_updates_(exp_avg_sq, grad_list, beta2, eps):
+    """Compute RMSprop updates for grafting"""
+    updates = []
+    
+    for i, grad in enumerate(grad_list):
+        # Update second moment
+        exp_avg_sq[i].mul_(beta2).addcmul_(grad, grad, value=1 - beta2)
+        
+        # Compute update
+        denom = exp_avg_sq[i].sqrt().add_(eps)
+        update = grad / denom
+        updates.append(update)
+    
+    return updates
+
+def update_momentum_list_(momentum_list, grad_list, beta1, step, use_bias_correction=True):
+    """Update momentum for a list of gradients and return filtered gradients"""
+    filtered_grads = []
+    
+    for momentum, grad in zip(momentum_list, grad_list):
+        # Update momentum: m = beta1 * m + (1 - beta1) * grad
+        momentum.mul_(beta1).add_(grad, alpha=1 - beta1)
+        
+        # Apply bias correction if enabled
+        if use_bias_correction:
+            bias_correction = 1 - beta1 ** step
+            filtered_grad = momentum / bias_correction
+        else:
+            filtered_grad = momentum
+        
+        filtered_grads.append(filtered_grad)
+    
+    return filtered_grads
+
+def fused_parameter_update_list_(param_list, update_list, lr, weight_decay, caution):
+    """Apply parameter updates with weight decay"""
+    for param, update in zip(param_list, update_list):
+        # Apply weight decay if specified
+        if weight_decay != 0:
+            param.data.add_(param.data, alpha=-weight_decay * lr)
+        
+        # Apply the update
+        if caution:
+            # Cautious update - clip large updates
+            update_norm = torch.norm(update)
+            param_norm = torch.norm(param.data)
+            if update_norm > param_norm:
+                update = update * (param_norm / update_norm)
+        
+        param.data.add_(update, alpha=lr)

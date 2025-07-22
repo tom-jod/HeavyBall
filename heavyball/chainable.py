@@ -16,9 +16,11 @@ from torch.optim.lr_scheduler import (
 )
 from torch.optim import SGD
 from . import utils
+import sys
+import os
+
 
 use_default = utils.use_default
-
 
 def _key_in_state(state, key):
     if isinstance(key, str):
@@ -548,11 +550,8 @@ def scale_by_adopt(group, update, grad, param, exp_avg, exp_avg_sq):
 def _init_soap(state, group, update, grad, param, inner: str = ""):
     utils.init_preconditioner(grad, state, group["max_precond_dim"], group["precondition_1d"])
 
-
-
 def _init_cosmos(state, group, update, grad, param, inner: str = ""):
-    utils.init_preconditioner_cosmos(grad, state, group["max_precond_dim"], group["precondition_1d"])
-
+    utils.init_preconditioner_cosmos(grad, state) 
 
 def _init_psgd_kron(state, group, update, grad, param, cached: bool = False, prob: Optional[callable] = None):
     Q = utils.init_Q_exprs(
@@ -683,6 +682,230 @@ def heavyball_momentum(group, updates, grads, params, momentum):
     return utils.heavyball_momentum(momentum, updates, utils.get_beta1(group))
 
 
+def _init_tensor_shampoo(state, group, update, grad, param):
+    """Initialize Shampoo preconditioner states for arbitrary tensor dimensions"""
+    G_modes = []
+    Q_modes = []
+    merged_shapes = []
+    
+    for p in param:
+        if _should_skip_preconditioning(p, group):
+            # Skip preconditioning - store empty lists
+            G_modes.append([])
+            Q_modes.append([])
+            merged_shapes.append(param.shape)
+        else:
+            # Determine tensor shape (with optional dimension merging)
+            if group["use_merge_dims"]:
+                merged_shape = utils.merge_small_dims(
+                    p.shape, group["merge_small_dims_threshold"]
+                )
+            else:
+                merged_shape = p.shape
+            
+            merged_shapes.append(merged_shape)
+            
+            # Initialize preconditioner matrices for each mode
+            param_G_modes = []
+            param_Q_modes = []
+            
+            modes_to_precondition = _get_modes_to_precondition(merged_shape, group)
+            
+            for mode_idx, should_precondition in enumerate(modes_to_precondition):
+                if should_precondition:
+                    dim_size = merged_shape[mode_idx]
+                    
+                    # Skip if dimension is too large
+                    if (group["skip_preconditioning_dim_size_gt"] > 0 and 
+                        dim_size > group["skip_preconditioning_dim_size_gt"]):
+                        param_G_modes.append(None)
+                        param_Q_modes.append(None)
+                        continue
+                    
+                    # Limit dimension size for memory efficiency
+                    actual_dim = min(dim_size, group["max_preconditioner_dim"])
+                    
+                    # Initialize G matrix (statistics accumulator)
+                    device, dtype = p.device, getattr(torch, group["storage_dtype"])
+                    G_matrix = torch.eye(actual_dim, device=device, dtype=dtype) * group["eps"]
+                    param_G_modes.append(G_matrix)
+                    
+                    # Initialize Q matrix (orthogonal basis)
+                    Q_matrix = torch.eye(actual_dim, device=device, dtype=dtype)
+                    param_Q_modes.append(Q_matrix)
+                else:
+                    param_G_modes.append(None)
+                    param_Q_modes.append(None)
+            
+            G_modes.append(param_G_modes)
+            Q_modes.append(param_Q_modes)
+    
+    return {
+        "G_modes": G_modes,
+        "Q_modes": Q_modes, 
+        "merged_shapes": merged_shapes
+    }
+
+@zero_guard("exp_avg", "exp_avg_sq", "momentum")  # For grafting + momentum
+@general_guard("G_modes", "Q_modes", "merged_shapes", init_fn=_init_tensor_shampoo)
+@no_state
+def update_by_tensor_shampoo(group, update, grad, param, exp_avg, exp_avg_sq, momentum,
+                            G_modes, Q_modes, merged_shapes):
+    """Unified tensor Shampoo update supporting arbitrary tensor dimensions"""
+    
+    # 1. Apply momentum/gradient filtering if enabled
+    if group["betas"][0] > 0:
+        filtered_grad = utils.update_momentum_list_(
+            momentum, update, group["betas"][0], group["step"], group.get("use_bias_correction", True)
+        )
+    else:
+        filtered_grad = update
+    
+    # 2. Determine which tensors to precondition
+    use_shampoo = group["step"] >= group["start_preconditioning_step"]
+    
+    if use_shampoo:
+        # Apply tensor Shampoo preconditioning
+        preconditioned_grad = _apply_tensor_shampoo_preconditioning(
+            filtered_grad, param, G_modes, Q_modes, merged_shapes, group
+        )
+    else:
+        # During warmup, skip Shampoo preconditioning
+        preconditioned_grad = filtered_grad
+    
+    # 3. Apply grafting for layer-wise scaling
+    if group.get("grafting_type") and group["grafting_type"] != "none":
+        final_update = _apply_tensor_grafting(
+            preconditioned_grad, filtered_grad, exp_avg, exp_avg_sq, group, use_shampoo
+        )
+    else:
+        final_update = preconditioned_grad
+    
+    # 4. Apply final parameter update with weight decay
+    utils.fused_parameter_update_list_(
+        param, final_update, group["lr"], group["weight_decay"], group["caution"]
+    )
+    
+    raise SkipUpdate from None
+
+
+def _should_skip_preconditioning(param, group):
+    """Determine if we should skip preconditioning for this parameter"""
+    # Skip based on rank
+    if param.dim() < group["skip_preconditioning_rank_lt"]:
+        return True
+    
+    # Skip based on dimension size
+    if (group["skip_preconditioning_dim_size_gt"] > 0 and 
+        any(s > group["skip_preconditioning_dim_size_gt"] for s in param.shape)):
+        return True
+    
+    return False
+
+def _get_modes_to_precondition(shape, group):
+    """Determine which tensor modes to precondition based on preconditioner_type"""
+    rank = len(shape)
+    
+    if group["preconditioner_type"] == "all" or rank <= 1:
+        return [True] * rank  # Precondition all dimensions
+    elif group["preconditioner_type"] == "input":
+        return [True] * (rank - 1) + [False]  # All but last dimension
+    elif group["preconditioner_type"] == "output":  
+        return [False] * (rank - 1) + [True]  # Only last dimension
+    else:
+        raise ValueError(f"Unknown preconditioner_type: {group['preconditioner_type']}")
+
+def _apply_tensor_shampoo_preconditioning(grad_list, param_list, G_modes, Q_modes, merged_shapes, group):
+    """Apply Shampoo preconditioning to gradients of arbitrary tensor dimensions"""
+    preconditioned_grads = []
+    should_update_preconditioners = (group["step"] % group["precondition_frequency"] == 0)
+    
+    for grad, param, G_list, Q_list, merged_shape in zip(
+        grad_list, param_list, G_modes, Q_modes, merged_shapes
+    ):
+        if not G_list:  # Skip preconditioning for this parameter
+            preconditioned_grads.append(grad)
+            continue
+        
+        # Reshape gradient to merged shape if needed
+        if merged_shape != param.shape:
+            reshaped_grad = grad.view(merged_shape)
+        else:
+            reshaped_grad = grad
+        
+        # Apply multi-mode preconditioning
+        preconditioned_grad = reshaped_grad
+        
+        for mode_idx, (G_matrix, Q_matrix) in enumerate(zip(G_list, Q_list)):
+            if G_matrix is not None and Q_matrix is not None:
+                # Update statistics (G matrix) 
+                if should_update_preconditioners:
+                    utils.update_preconditioner_mode_(
+                        G_matrix, reshaped_grad, mode_idx, 
+                        group["betas"][1], group["eps"]
+                    )
+                    
+                    # Update orthogonal basis (Q matrix) using QR decomposition
+                    utils.update_orthogonal_basis_(G_matrix, Q_matrix)
+                
+                # Apply preconditioning for this mode
+                preconditioned_grad = utils.apply_mode_preconditioning(
+                    preconditioned_grad, Q_matrix, mode_idx
+                )
+        
+        # Reshape back to original parameter shape
+        if merged_shape != param.shape:
+            preconditioned_grad = preconditioned_grad.view(param.shape)
+        
+        preconditioned_grads.append(preconditioned_grad)
+    
+    return preconditioned_grads
+
+def _apply_tensor_grafting(shampoo_updates, original_grads, exp_avg, exp_avg_sq, group, use_shampoo):
+    """Apply grafting to scale Shampoo updates using first-order method norms"""
+    if not use_shampoo:
+        # During warmup, just use the grafting method directly
+        return _compute_grafting_updates(original_grads, exp_avg, exp_avg_sq, group)
+    
+    # Compute grafting updates for comparison
+    grafting_updates = _compute_grafting_updates(original_grads, exp_avg, exp_avg_sq, group)
+    
+    # Apply grafting: scale Shampoo updates by grafting norms
+    grafted_updates = []
+    for shampoo_update, grafting_update in zip(shampoo_updates, grafting_updates):
+        # Compute norms
+        shampoo_norm = torch.norm(shampoo_update) + 1e-16  # Avoid division by zero
+        grafting_norm = torch.norm(grafting_update)
+        
+        # Scale Shampoo update by grafting norm ratio
+        scale_factor = grafting_norm / shampoo_norm
+        grafted_update = shampoo_update * scale_factor
+        
+        grafted_updates.append(grafted_update)
+    
+    return grafted_updates
+
+def _compute_grafting_updates(grad_list, exp_avg, exp_avg_sq, group):
+    """Compute updates using the grafting method (Adam, RMSprop, etc.)"""
+    grafting_type = group["grafting_type"]
+    
+    if grafting_type == "adam":
+        return utils.compute_adam_updates_(
+            exp_avg, exp_avg_sq, grad_list, 
+            group["betas"][1], group["step"], group["eps"],
+            group.get("use_bias_correction", True)
+        )
+    elif grafting_type == "rmsprop":
+        return utils.compute_rmsprop_updates_(
+            exp_avg_sq, grad_list,
+            group["betas"][1], group["eps"]
+        )
+    elif grafting_type == "sgd":
+        return grad_list  # No preconditioning
+    else:
+        raise ValueError(f"Unknown grafting_type: {grafting_type}")
+
+
 _optim_fns = {"adam": utils.adam_, "laprop": utils.laprop_, "lion": utils.LION_}
 
 
@@ -719,35 +942,26 @@ def scale_by_soap(group, update, grad, param, exp_avg, exp_avg_sq, Q, GG, inner:
 _optim_fns_cosmos = {"cosmos": utils.cosmos_, "laprop": utils.laprop_, "lion": utils.LION_}
 
 @zero_guard("exp_avg", "exp_avg_sq")
-@general_guard("U", "S", init_fn=_init_cosmos)
+@general_guard("U", "S", "adam_exp_avg_sq", init_fn=_init_cosmos)
 @no_state
-def scale_by_cosmos(group, update, grad, param, exp_avg, exp_avg_sq, U, S, inner: str = "cosmos"):
-    for up, u, s, ea in zip(update, U, S, exp_avg):
-        utils.update_preconditioner_cosmos(
-            utils.promote(up),
-            u,
-            s,
-            ea,
-            group["max_precond_dim"],
-            group["precondition_1d"],
-            utils.get_beta2(group),
-            group["is_preconditioning"],
-        )
-
+def scale_by_cosmos(group, update, grad, param, exp_avg, exp_avg_sq, adam_exp_avg_sq, U, S, inner: str = "cosmos"):
+   
     fn = _optim_fns_cosmos[inner]
+   
     precond = fn(
         exp_avg,
         exp_avg_sq,
+        adam_exp_avg_sq,
         grad,
         U, 
         S,
         utils.get_beta1(group),
         utils.get_beta2(group),
-        group["shampoo_beta"], # use shampoo_beta as gamma in cosmos
+        group["lr"],
+        utils.get_beta3(group), # let beta3 be gamma for cosmos
         group["step"] - 1,
         group["eps"],
     )
-
     return precond
 
 def _update_psgd_precond(
@@ -1061,6 +1275,50 @@ def set_indices(fns: Iterable[callable], retain: bool = True, offset: int = 0):
             fn = fn.fn
     return fns
 
+def create_step_schedule_fn(total_steps, decay_points=[0.5, 0.75], gamma=0.1):
+    """Creates a function that returns LR multiplier for step decay schedule"""
+    milestones = [int(p * total_steps) for p in decay_points]
+    
+    def get_lr_multiplier(step):
+        multiplier = 1.0
+        for milestone in milestones:
+            if step >= milestone:
+                multiplier *= gamma
+        return multiplier
+    
+    return get_lr_multiplier
+
+def create_step_schedule_fn(total_steps, decay_points=[0.5, 0.75], gamma=0.1):
+    """Creates a function that returns LR multiplier for step decay schedule"""
+    milestones = [int(p * total_steps) for p in decay_points]
+    
+    def get_lr_multiplier(step):
+        multiplier = 1.0
+        for milestone in milestones:
+            if step >= milestone:
+                multiplier *= gamma
+        return multiplier
+    
+    return get_lr_multiplier
+
+def create_warmup_cosine_schedule_fn(total_steps, warmup_ratio=0.05, min_lr_ratio=0.0):
+    """Creates a function that returns LR multiplier for linear warmup + cosine annealing schedule"""
+    warmup_steps = int(warmup_ratio * total_steps)
+    
+    def get_lr_multiplier(step):
+        if step <= warmup_steps:
+            # Linear warmup: scale from 0 to 1
+            return step / warmup_steps if warmup_steps > 0 else 1.0
+        else:
+            # Cosine annealing after warmup
+            cosine_steps = total_steps - warmup_steps
+            current_cosine_step = step - warmup_steps
+            
+            # Cosine annealing formula
+            cosine_factor = 0.5 * (1 + math.cos(math.pi * current_cosine_step / cosine_steps))
+            return min_lr_ratio + (1.0 - min_lr_ratio) * cosine_factor
+    
+    return get_lr_multiplier
 
 class ChainOpt(utils.StatefulOptimizer):
     promote: bool = False
@@ -1070,10 +1328,23 @@ class ChainOpt(utils.StatefulOptimizer):
         super().__init__(params, defaults, foreach)
         self.fns = fns
         
-        # Learning rate scheduler will be initialized when first needed
+        # Initialize step decay function with defaults
+        # Get total_steps from defaults, use a reasonable default if not provided
+        total_steps = defaults.get("total_steps", 100000)
+        decay_points = defaults.get("decay_points", [0.5, 0.75])
+        decay_gamma = defaults.get("decay_gamma", 0.1)
+        warmup_ratio = defaults.get("warmup_ratio", 0.05)  # 5% warmup by default
+        min_lr_ratio = defaults.get("min_lr_ratio", 0.0)   # Minimum LR as ratio of base LR
+        
+        # Create the warmup + cosine schedule function
+        self._lr_schedule_fn = create_warmup_cosine_schedule_fn(
+            total_steps, warmup_ratio, min_lr_ratio
+        )
+        #self._step_decay_fn = create_step_schedule_fn(total_steps, decay_points, decay_gamma)
+        # Keep existing scheduler initialization for backward compatibility
         self.lr_scheduler = None
         self._scheduler_initialized = False
-    
+
     def _initialize_lr_scheduler(self):
         """Initialize LR scheduler based on the first parameter group that needs it"""
         if self._scheduler_initialized:
@@ -1085,16 +1356,24 @@ class ChainOpt(utils.StatefulOptimizer):
             if group.get("lr_schedule", False):
                 schedule_group = group
                 break
-        
+                
         if schedule_group is None:
             self._scheduler_initialized = True
             return
-        
+
         # Get scheduler configuration from the group
         scheduler_type = schedule_group.get("scheduler_type", "cosine")
         total_steps = schedule_group.get("total_steps", 100000)
         
-        # Create a dummy optimizer for the scheduler
+        # Handle step_decay scheduler
+        if scheduler_type == "step_decay":
+            decay_points = schedule_group.get("decay_points", [0.5, 0.75])
+            gamma = schedule_group.get("gamma", 0.1)
+            self._step_decay_fn = create_step_schedule_fn(total_steps, decay_points, gamma)
+            self._scheduler_initialized = True
+            return
+            
+        # Create a dummy optimizer for PyTorch schedulers
         dummy_param = torch.nn.Parameter(torch.zeros(1))
         dummy_optimizer = SGD([dummy_param], lr=schedule_group["lr"])
         
@@ -1127,9 +1406,9 @@ class ChainOpt(utils.StatefulOptimizer):
             )
         else:
             raise ValueError(f"Unsupported scheduler type: {scheduler_type}")
-        
+            
         self._scheduler_initialized = True
-
+    
     @property
     def fns(self):
         return self._fns
@@ -1152,7 +1431,7 @@ class ChainOpt(utils.StatefulOptimizer):
                 f"only supported with foreach=True (currently foreach={group['foreach']})."
             )
             group["base_lr"] = group["lr"]
-        
+            
         caution = group["caution"]
         use_ema = group.get("use_ema", False)
         prev_grads = group.get("prev_grads", [])
@@ -1160,7 +1439,7 @@ class ChainOpt(utils.StatefulOptimizer):
         group["prev_grads"] = prev_grads
         
         vals = list(self.split_p_and_g_in_group(
-            group, should_promote=self.promote, 
+            group, should_promote=self.promote,
             beta1=utils.get_beta1(group), use_ema=use_ema
         ))
         
@@ -1179,38 +1458,47 @@ class ChainOpt(utils.StatefulOptimizer):
             else:
                 step = 0
             break
-        
+            
         # Increment step
         group["step"] = state["step"] = step = step + 1
         
         # Handle learning rate scheduling
         current_lr = group["base_lr"]
         
-        # Apply warmup if specified
-        warmup_steps = group.get("warmup_steps", 0)
-        if warmup_steps > 0 and step <= warmup_steps:
-            warmup_factor = step / warmup_steps
-            current_lr = group["base_lr"] * warmup_factor
-       
-        # Apply LR schedule if enabled
-        if group.get("lr_schedule", False):
-            self._initialize_lr_scheduler()
-            if self.lr_scheduler is not None:
-                self.lr_scheduler.step()
-                current_lr = self.lr_scheduler.get_last_lr()[0]
+        # Check if we should use the new warmup + cosine schedule
+        use_warmup_cosine = group.get("use_warmup_cosine", True)  # Default to True
         
+        if use_warmup_cosine:
+            # Use warmup + cosine annealing schedule
+            lr_multiplier = self._lr_schedule_fn(step)
+            current_lr = group["base_lr"] * lr_multiplier
+        else:
+            # Fall back to existing logic for backward compatibility
+            # Apply warmup if specified
+            warmup_steps = group.get("warmup_steps", 0)
+            if warmup_steps > 0 and step <= warmup_steps:
+                warmup_factor = step / warmup_steps
+                current_lr = group["base_lr"] * warmup_factor
+            
+            # Apply other LR schedules if explicitly enabled
+            if group.get("lr_schedule", False):
+                self._initialize_lr_scheduler()
+                if self.lr_scheduler is not None:
+                    self.lr_scheduler.step()
+                    current_lr = self.lr_scheduler.get_last_lr()[0]
+                
         group["lr"] = current_lr
         group["prev_lr"] = current_lr
+    
         # Apply optimization step
         if not group["foreach"] or len(p) == 1:
             for param, grad in zip(p, g):
                 chain(self.state_, group, [grad], [param], *self.fns)
         else:
             chain(self.state_, group, g, p, *self.fns)
-        
+            
         group["caution"] = caution
         group["step"] = None
-
 
 class CosineSandwichSchedule:
     def __init__(self, total_steps, gamma, warmup_ratio=0.125, hold_ratio=0.5):
