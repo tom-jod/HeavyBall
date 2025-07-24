@@ -38,6 +38,20 @@ class Model(nn.Module):
         x = self.fc3(x)
         return F.log_softmax(x, dim=1)
 
+def set_deterministic_weights(model, seed=42):
+    """Initialize model with deterministic weights using a fixed seed"""
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
+    
+    # Re-initialize all parameters
+    for module in model.modules():
+        if isinstance(module, nn.Linear):
+            # Use Xavier/Glorot uniform initialization with fixed seed
+            torch.nn.init.xavier_uniform_(module.weight)
+            if module.bias is not None:
+                torch.nn.init.zeros_(module.bias)
+    
+    return model
 
 @app.command()
 def main(
@@ -52,7 +66,10 @@ def main(
     trials: int = 10,
 ):
     dtype = [getattr(torch, d) for d in dtype]
+    
+    # Usage in your script:
     model = Model(hidden_size).cuda()
+    model = set_deterministic_weights(model, seed=42)
     
     # Load MNIST data
     transform = transforms.Compose([
@@ -71,7 +88,7 @@ def main(
     train_loader = torch.utils.data.DataLoader(
         train_dataset, 
         batch_size=batch, 
-        shuffle=True,
+        shuffle=False,
         num_workers=0,
         pin_memory=True
     )
@@ -86,9 +103,8 @@ def main(
         pin_memory=True
 )
     
-    # Create data iterator that matches heavyball format
     data_iter = iter(train_loader)
-    
+
     def data():
         nonlocal data_iter
         try:
@@ -103,7 +119,7 @@ def main(
     # Custom loss function that matches the expected signature
     def loss_fn(output, target):
         return F.nll_loss(output, target)
-    print(len(train_dataset))
+    
     trial(
         model,
         data,
@@ -112,7 +128,7 @@ def main(
         steps,
         opt[0],
         dtype[0],
-        hidden_size,  # features parameter
+        hidden_size, 
         batch,
         weight_decay,
         method[0],
@@ -123,7 +139,8 @@ def main(
         trials=trials,
         estimate_condition_number = False,
         test_loader=test_loader,
-        track_variance=True
+        track_variance=False,
+        test_optimizer_implementation=True,
     )
 
 
