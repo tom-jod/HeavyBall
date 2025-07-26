@@ -1,4 +1,3 @@
-import pathlib
 from typing import List, Optional
 
 import torch
@@ -29,7 +28,7 @@ TOLERANCE = 1e-3
 
 def objective(x, penalty):
     """Objective function with a penalty for violating the constraint x <= 1."""
-    return (x - 2.0) ** 2 + penalty * torch.relu(x - TARGET_X)
+    return (x - 2.0) ** 2 + penalty * torch.log(TARGET_X - x)
 
 
 class Model(nn.Module):
@@ -62,38 +61,17 @@ def main(
     config: Optional[str] = None,
 ):
     penalty = configs.get(config, {}).get("penalty", 1e6)
-    dtype = [getattr(torch, d) for d in dtype]
-
-    # Clean up old plots if any (though this benchmark doesn't plot)
-    for path in pathlib.Path(".").glob("constrained_optimization*.png"):
-        path.unlink()
-
     model = Model(penalty)
-    model.double()  # Use double for precision if needed
-
-    # No external data needed for this simple objective
-    def data():
-        return None, None
-
-    # The loss is the objective value itself
-    loss_fn = None
 
     trial(
         model,
-        data,
-        loss_fn,
+        None,
+        None,
         win_condition,
         steps,
         opt[0],
-        dtype[0],
-        1,  # size (not relevant here)
-        1,  # batch (not relevant here)
         weight_decay,
-        method[0],
-        1,  # length (not relevant here)
-        1,  # depth (not relevant here)
         failure_threshold=3,
-        base_lr=1e-3,  # Default base LR, hyperopt will search
         trials=trials,
         group=32,  # Smaller group size might be better for simple problems
     )

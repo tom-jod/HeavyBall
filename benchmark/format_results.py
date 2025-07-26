@@ -41,7 +41,7 @@ def read_benchmark_results(file_path):
     if not details:
         raise ValueError("Details section not found.")
     table = details.group(1).strip()
-    lines = re.search(r"\|:?-+:(.*?)\|\n(.*)", table, re.DOTALL).group(2).strip().split("\n")
+    lines = re.search(r"\|:?-+:?(.*?)\|\n(.*)", table, re.DOTALL).group(2).strip().split("\n")
     data = []
     for i, line in enumerate(lines):
         if not line.strip() or line.startswith("|---"):
@@ -177,13 +177,9 @@ app = typer.Typer(pretty_exceptions_enable=False)
 
 @app.command()
 def main(file: str = typer.Argument("benchmark_results.md")):
-    try:
-        df = read_benchmark_results(file)
-        if df.empty:
-            print("No data loaded from benchmark file.")
-            return
-    except Exception as e:
-        print(f"Error reading benchmark file: {e}")
+    df = read_benchmark_results(file)
+    if df.empty:
+        print("No data loaded from benchmark file.")
         return
     success_total_matrix = create_success_matrix(df)
     if success_total_matrix.empty:
@@ -194,7 +190,7 @@ def main(file: str = typer.Argument("benchmark_results.md")):
         print("Plot generation failed.")
         return
     plt.savefig("benchmark_matrix.png", dpi=300, bbox_inches="tight", facecolor="white", pad_inches=0.3)
-    print("Saved heatmap to: benchmark_heatmap.png")
+    print("Saved heatmap to: benchmark_matrix.png")
     plt.close(fig)
 
 

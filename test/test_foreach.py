@@ -5,7 +5,7 @@ from torch import nn
 import heavyball
 import heavyball.utils
 from benchmark.utils import get_optim
-from heavyball.utils import PSGDBase, clean, set_torch
+from heavyball.utils import clean, set_torch
 
 
 def get_memory():
@@ -63,4 +63,4 @@ def test_foreach(opt, size, depth: int, iterations: int = 4096, outer_iterations
     for p0, p1 in zip(*peaks):
         assert p0 > p1
     for l0, l1 in zip(*losses):  # increase error tolerance for PSGD, as we have different RNGs -> expected differences
-        assert torch.allclose(l0, l1, rtol=0.01 if isinstance(opt, PSGDBase) else 1e-5)
+        assert torch.allclose(l0, l1, rtol=0.01 if "PSGD" in opt.__class__.__name__ else 1e-5)

@@ -50,29 +50,17 @@ def main(
     config: Optional[str] = None,
 ):
     sparsity = configs.get(config, {}).get("sparsity", sparsity)
-    dtype = [getattr(torch, d) for d in dtype]
     model = Model(sparsity=sparsity).cuda().double()
 
-    def data():
-        return None, None
-
-    # Win condition accounts for sparsity - harder to reach very low loss
     trial(
         model,
-        data,
+        None,
         None,
         loss_win_condition(win_condition_multiplier * 1e-4),
         steps,
         opt[0],
-        dtype[0],
-        1,
-        1,
         weight_decay,
-        method[0],
-        1,
-        1,
         failure_threshold=5,
-        base_lr=1e-3,
         trials=trials,
     )  # More failure attempts allowed
 

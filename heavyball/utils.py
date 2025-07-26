@@ -571,9 +571,21 @@ def get_orthogonal_matrix(mat, max_eps: float = 1e-3, min_eps: float = 1e-30):
                 if m.device.type == "cpu":
                     raise
                 else:
+                    # Synchronize and clean CUDA state before retry
+                    if m.is_cuda:
+                        torch.cuda.synchronize(m.device)
+                    clean()
                     m = m.cpu()
-            except RuntimeError:  # failed to compute eigenvalues
-                if m.dtype != torch.double:
+            except RuntimeError as e:  # failed to compute eigenvalues
+                # Check if this is a CUDA error that needs special handling
+                if m.is_cuda and ("CUDA" in str(e) or "illegal memory access" in str(e)):
+                    # CUDA context might be corrupted, move to CPU first
+                    torch.cuda.synchronize(m.device)
+                    clean()
+                    m = m.cpu()
+                    if m.dtype != torch.double:
+                        m = m.double()
+                elif m.dtype != torch.double:
                     m = m.double()
                 elif eps < max_eps:
                     eps = eps ** (2 / 3)
@@ -848,6 +860,10 @@ class ExactHVPFailed(ValueError):
 use_default = object()
 
 
+def _tensor_key(x: Tensor):
+    return x.data_ptr(), x.numel(), x.dtype, x.device
+
+
 class StatefulOptimizer(torch.optim.Optimizer):
     """
     finite_differences saves memory, but needs more compute. (Alternative is true HVP)
@@ -920,7 +936,9 @@ class StatefulOptimizer(torch.optim.Optimizer):
     def state_(self, arg: Tensor, fail: bool = True):
         if not fail and arg not in self.mapping:
             return {}
-        state_param, index = self.mapping_inverse[arg.data_ptr()]
+        if _tensor_key(arg) not in self.mapping_inverse:
+            self._init_mapping()
+        state_param, index = self.mapping_inverse[_tensor_key(arg)]
         if state_param not in self.state:
             self.state[state_param] = collections.defaultdict(dict)
         return self.state[state_param][index]
@@ -943,7 +961,7 @@ class StatefulOptimizer(torch.optim.Optimizer):
             if p not in self.mapping:
                 self.mapping[p] = p_views = merge_group(group, p)
                 for i, pv in enumerate(p_views):
-                    self.mapping_inverse[pv.data_ptr()] = (p, i)
+                    self.mapping_inverse[_tensor_key(pv)] = (p, i)
 
     def split_p_and_g_in_group(
         self,
@@ -966,7 +984,7 @@ class StatefulOptimizer(torch.optim.Optimizer):
 
             self.mapping[p] = p_views = merge_group(group, p)
             for i, pv in enumerate(p_views):
-                self.mapping_inverse[pv.data_ptr()] = (p, i)
+                self.mapping_inverse[_tensor_key(pv)] = (p, i)
 
             vector = getattr(p, "vector", None)
             hessian_vector = getattr(p, "hessian_vector", None)
@@ -1265,7 +1283,7 @@ def fused_adam_(
     caution: bool,
 ):
     y, exp_avg, exp_avg_sq, grad = list_guard(y, exp_avg, exp_avg_sq, grad)
-    beta1, beta2, step, lr = scalar_guard(beta1, beta2, step, lr, y[0])
+    beta1, beta2, step, lr, decay = scalar_guard(beta1, beta2, step, lr, decay, y[0])
     _fused_compilable_adam_(y, exp_avg, exp_avg_sq, update, grad, beta1, beta2, step, decay, lr, eps, caution)
 
 
@@ -1344,7 +1362,7 @@ def fused_laprop_(
     eps: float = 1e-8,
 ):
     exp_avg, exp_avg_sq, grad, y = list_guard(exp_avg, exp_avg_sq, grad, y)
-    beta1, beta2, step, lr, eps = scalar_guard(beta1, beta2, step, lr, eps, exp_avg[0])
+    beta1, beta2, step, lr, eps, decay = scalar_guard(beta1, beta2, step, lr, eps, decay, exp_avg[0])
     _fused_compilable_laprop_(y, exp_avg, exp_avg_sq, update, grad, beta1, beta2, step, lr, decay, caution, eps)
 
 
@@ -1363,7 +1381,7 @@ def _fused_compilable_adopt_(y, update, grad, exp_avg_sq, exp_avg, beta1, beta2,
 
 def fused_adopt_(y, update, grad, exp_avg_sq, exp_avg, beta1, beta2, step, lr, eps, decay, caution):
     exp_avg, exp_avg_sq, grad, y = list_guard(exp_avg, exp_avg_sq, grad, y)
-    beta1, beta2, step, lr = scalar_guard(beta1, beta2, step, lr, exp_avg[0])
+    beta1, beta2, step, lr, decay = scalar_guard(beta1, beta2, step, lr, decay, exp_avg[0])
     _fused_compilable_adopt_(y, update, grad, exp_avg_sq, exp_avg, beta1, beta2, step, lr, eps, decay, caution)
 
 
@@ -2214,7 +2232,7 @@ def _psgd_precond_update_(
         if update.ndim < 2:
             lb = update.norm(float("inf"))
         else:
-            lb = max_singular_value(update, None, power_iter=power_iter)
+            lb = max_singular_value(update, power_iter=power_iter)
             update = promote(update)
             if store_triu_as_line:
                 update = triu_to_line([update])[0][1]
@@ -2286,78 +2304,83 @@ def inverse_free_psgd_update_precond(
 
 
 @decorator_knowngood
-def _compilable_l2_clip_(x, clip_at):
-    ref = x
-    x = list(map(promote, x))
-    norm = torch._foreach_norm(x)
-    torch._foreach_maximum_(norm, clip_at)
-    out = torch._foreach_div(x, norm)
-    return stochastic_round_list_(ref, out)
+def _clip(x, norm, clip_at, eps=1e-8):
+    x32 = promote(x)
+    # (x / y.clamp(min=eps)).clamp(max=1) == x / y.clamp(min=max(x, eps))
+    norm = clip_at / norm.clamp(min=max(clip_at, eps))
+    x32 = x32 * norm
+    copy_stochastic_(x, x32)
+
+
+@decorator_knowngood
+def _compilable_l2_clip_(xs, clip_at, eps=1e-8):
+    for x in xs:
+        _clip(x, promote(x).norm(), clip_at, eps)
 
 
 def l2_normalization_(x, clip_at: float = 1e-8):
     x = list_guard(x)
-    return _compilable_l2_clip_(x, clip_at)
+    _compilable_l2_clip_(x, clip_at)
+    return x
 
 
 def l2_clip_(x, clip_at: float = 1.0):
     x = list_guard(x)
-    return _compilable_l2_clip_(x, clip_at)
+    _compilable_l2_clip_(x, clip_at)
+    return x
 
 
 @decorator_knowngood
-def _compilable_rmsnorm_clip_(x, clip_at):
-    x = list(map(promote, x))
-    norm = torch._foreach_norm(x)
-    norm = [n.div_(x_.numel() ** 0.5) for n, x_ in zip(norm, x)]
-    torch._foreach_maximum_(norm, clip_at)
-    return torch._foreach_div(x, norm)
+def _compilable_rmsnorm_clip_(xs, clip_at, eps=1e-8):
+    for x in xs:
+        _clip(x, promote(x).square().mean().sqrt(), clip_at, eps)
 
 
 def rmsnorm_clip_(x, clip_at: float = 1.0):
     x = list_guard(x)
-    return _compilable_rmsnorm_clip_(x, clip_at)
+    _compilable_rmsnorm_clip_(x, clip_at)
+    return x
 
 
 @decorator_knowngood
-def _compilable_global_rmsnorm_clip_(x, clip_at):
+def _compilable_global_rmsnorm_clip_(x, clip_at, eps=1e-8):
     norm = 0
-    items = 0
+    numel = sum([i.numel() for i in x])
     for i in x:
-        norm += promote(i.square().sum())
-        items += i.numel()
-    norm = (norm / items) ** 0.5
-    norm = norm.clamp(min=clip_at)
-    stochastic_multiply_(x, 1 / norm)
-    return x
+        norm += promote(i).square().sum()
+    norm = (norm / numel) ** 0.5
+    scalar = clip_at / norm.clamp(min=max(clip_at, eps))
+    stochastic_multiply_(x, scalar)
 
 
 def global_rmsnorm_clip(x, clip_at: float = 1.0):
     x = list_guard(x)
     clip_at = scalar_guard(clip_at, x[0])
-    return _compilable_global_rmsnorm_clip_(x, clip_at)
+    _compilable_global_rmsnorm_clip_(x, clip_at)
+    return x
 
 
 @decorator_knowngood
-def _compilable_global_l2norm_clip_(x, clip_at):
+def _compilable_global_l2norm_clip_(x, clip_at, eps=1e-8):
     norm = 0
     for i in x:
-        norm += promote(i.square().sum())
+        norm += promote(i).square().sum()
     norm = norm**0.5
-    norm = norm.clamp(min=clip_at)
-    stochastic_multiply_(x, 1 / norm)
-    return x
+    scalar = clip_at / norm.clamp(min=max(clip_at, eps))
+    stochastic_multiply_(x, scalar)
 
 
 def global_l2norm_clip(x, clip_at: float = 1.0):
     x = list_guard(x)
     clip_at = scalar_guard(clip_at, x[0])
-    return _compilable_global_l2norm_clip_(x, clip_at)
+    _compilable_global_l2norm_clip_(x, clip_at)
+    return x
 
 
 def rmsnorm_normalize_(x, clip_at: float = 1e-6):
     x = list_guard(x)
-    return _compilable_rmsnorm_clip_(x, clip_at)
+    _compilable_rmsnorm_clip_(x, clip_at)
+    return x
 
 
 @decorator_knowngood
@@ -2570,7 +2593,7 @@ def _compilable_fused_precond_grad_cached_(ea: Tensor, param, lr, grad, decay, c
 
 
 def fused_precond_grad_cached_(ea: Tensor, param, lr, grad, decay, caution, cached_q: List[Tensor]):
-    lr = scalar_guard(lr, param[0])
+    lr, decay = scalar_guard(lr, decay, param[0])
     _compilable_fused_precond_grad_cached_(ea, param, lr, grad, decay, caution, cached_q)
 
 
@@ -2639,7 +2662,7 @@ def fused_psgd_precond_grad(
     store_triu_as_line: bool = False,
     symmetric_output: bool = False,
 ):
-    lr = scalar_guard(lr, param[0])
+    lr, decay = scalar_guard(lr, decay, param[0])
     _compilable_fused_psgd_precond_grad(
         ea, param, lr, grad, decay, caution, preconds, store_triu_as_line, symmetric_output
     )

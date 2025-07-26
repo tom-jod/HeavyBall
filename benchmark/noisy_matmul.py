@@ -66,15 +66,8 @@ def main(
         param_norm_win_condition(1e-7 * win_condition_multiplier, model.offset),
         steps,
         opt[0],
-        dtype[0],
-        size,
-        batch,
         weight_decay,
-        method[0],
-        1,
-        depth,
         failure_threshold=depth * 2,
-        base_lr=1e-3,
         trials=trials,
     )
 
