@@ -17,7 +17,7 @@ import torch._dynamo
 torch._dynamo.config.suppress_errors = True
 torch._dynamo.config.disable = True
 
-# NAdamW implementation
+# Copy the NAdamW optimizer and scheduler classes from your template
 class NAdamW(torch.optim.Optimizer):
     def __init__(self, params, lr=1e-3, betas=(0.9, 0.999), eps=1e-8, weight_decay=1e-2):
         if not 0.0 <= lr:
@@ -137,7 +137,7 @@ class WarmCosineCycles(object):
 
     def f(self, t, phi):
         return self.lr_min + 0.5 * (self.lr_max - self.lr_min) * (
-            1 + math.cos((t - self.warmup_steps - phi * self.alpha * self.T) * math.pi /
+            1 + math.cos((t - self.warmup_steps - phi * self.alpha * self.T) * math.pi / 
                         (self.alpha * self.T - self.warmup_steps))
         )
 
@@ -171,9 +171,9 @@ class Model(nn.Module):
     def forward(self, x):
         x = self.flatten(x)
         x = F.relu(self.fc1(x))
-        x = self.dropout1(x)
+        #x = self.dropout1(x)
         x = F.relu(self.fc2(x))
-        x = self.dropout2(x)
+        #x = self.dropout2(x)
         x = self.fc3(x)
         return F.log_softmax(x, dim=1)
 
@@ -192,6 +192,7 @@ def evaluate_model(model, test_loader):
     test_loss /= len(test_loader.dataset)
     accuracy = 100. * correct / len(test_loader.dataset)
     return test_loss, accuracy
+
 
 def set_deterministic_weights(model, seed=42):
     """Initialize model with deterministic weights using a fixed seed"""
@@ -212,12 +213,12 @@ def set_deterministic_weights(model, seed=42):
 def main(
     hidden_size: int = 128,
     batch: int = 64,
-    steps: int = 1000,
-    weight_decay: float = 0,
-    lr: float = 1e-3,
+    steps: int = 100,
+    weight_decay: float = 0.0,
+    lr: float = 0.001,
     warmup_factor: float = 0.05,
     cycles: int = 1,
-    eval_every: int = 100,
+    eval_every: int = 10,
     optimizer_type: str = "adamw",  # adamw, nadamw, sgd, shampoo
     # Shampoo-specific parameters
     max_preconditioner_dim: int = 1024,
@@ -225,9 +226,10 @@ def main(
     start_preconditioning_step: int = 1,
     grafting_type: str = "ADAM",  # ADAM, ADAGRAD, SGD, RMSPROP, or NONE
 ):
+    
     torch.manual_seed(42)
     torch.cuda.manual_seed(42)
-    # Create model with deterministic weights
+    # Usage in your script:
     model = Model(hidden_size).cuda()
     model = set_deterministic_weights(model, seed=42)
     
@@ -244,7 +246,7 @@ def main(
         data_dir, train=True, download=True, transform=transform
     )
     train_loader = torch.utils.data.DataLoader(
-        train_dataset, batch_size=batch, shuffle=False,
+        train_dataset, batch_size=batch, shuffle=False, 
         num_workers=0, pin_memory=True
     )
     
@@ -252,10 +254,9 @@ def main(
         data_dir, train=False, download=True, transform=transform
     )
     test_loader = torch.utils.data.DataLoader(
-        test_dataset, batch_size=batch, shuffle=False,
+        test_dataset, batch_size=batch, shuffle=False, 
         num_workers=0, pin_memory=True
     )
-    
     # Initialize optimizer based on type
     if optimizer_type.lower() == "shampoo":
         # Import Distributed Shampoo
@@ -267,6 +268,16 @@ def main(
             GraftingConfig,
             RMSpropGraftingConfig,
             SGDGraftingConfig,
+        )
+        import torch.distributed as dist
+        torch.backends.cuda.preferred_linalg_library()
+        # Initialize distributed processing for single process
+        if not dist.is_initialized():
+            dist.init_process_group(
+                backend='gloo',  # Use 'nccl' if you have CUDA
+                init_method='tcp://localhost:23456',
+                rank=0,
+                world_size=1
         )
         # Create grafting configuration
         if grafting_type == "ADAM":
@@ -339,7 +350,7 @@ def main(
         optimizer = torch.optim.SGD(
             model.parameters(),
             lr=lr,
-            momentum=0.9,
+            momentum=0.0,
             weight_decay=weight_decay
         )
         print("Using SGD")
@@ -347,6 +358,7 @@ def main(
     else:
         raise ValueError(f"Unknown optimizer type: {optimizer_type}. Choose from: adamw, nadamw, sgd, shampoo")
     
+
     # Initialize scheduler
     warmup_steps = int(warmup_factor * steps)
     if cycles == 1:
@@ -362,34 +374,50 @@ def main(
     
     # Training loop
     data_iter = iter(train_loader)
+    def debug_model_weights(model, script_name):
+        print(f"{script_name} - Model weight checksums:")
+        for name, param in model.named_parameters():
+            print(f"  {name}: {param.sum().item():.6f} (shape: {param.shape})")
+
+    debug_model_weights(model, "SImple")  # or "Simple"
     model.train()
-    
+    losses = []
     print(f"Starting training for {steps} steps...")
     print(f"Dataset size: {len(train_dataset)}")
     print(f"Steps per epoch: {len(train_dataset) // batch}")
-    
+    torch.manual_seed(42)
+    data_new = torch.randn(64, 1, 28, 28).cuda()
+    targets = torch.randint(0, 10, (64,)).cuda()
+
+    def data_func():
+        return data_new, targets
     for step in range(steps):
         # Get next batch
         try:
             data, target = next(data_iter)
+            
         except StopIteration:
             data_iter = iter(train_loader)
             data, target = next(data_iter)
+            
+        data, target = data_func()
+       # data, target = data.cuda(), target.cuda()
         
-        data, target = data.cuda(), target.cuda()
-        
+
+
         # Forward pass
         optimizer.zero_grad()
         output = model(data)
         loss = F.nll_loss(output, target)
         
-        # Backward pass
+                
         loss.backward()
-        scheduler.step()
+        #scheduler.step()  
         optimizer.step()
         
         # Logging and evaluation
         if step % eval_every == 0 or step == steps - 1:
+            losses.append(loss.item())
             current_lr = optimizer.param_groups[0]['lr']
             test_loss, accuracy = evaluate_model(model, test_loader)
             print(f"Step {step:4d} | Train Loss: {loss.item():.4f} | "
@@ -398,6 +426,6 @@ def main(
             model.train()  # Switch back to training mode
     
     print("Training completed!")
-
+    print(losses)
 if __name__ == "__main__":
     app()

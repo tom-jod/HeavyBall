@@ -2,6 +2,26 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 def plot_optimizer_comparison():
+    """
+    # HeavyBall Distributed Shampoo data (updated results)
+    # These are sampled every 100 steps based on the loss_trajectory length
+    hb_steps = np.array([0, 100, 200, 300, 400, 500, 600, 700, 800, 900])
+    hb_losses = np.array([3.0330703258514404, 0.5347680449485779, 0.3953389525413513, 
+                         0.4102182984352112, 0.18977977335453033, 0.3436037003993988, 
+                         0.12236490845680237, 0.37468141317367554, 0.2440858781337738, 
+                         0.34949609637260437])
+    hb_test_acc = np.array([7.93, 88.5, 89.09, 92.49, 93.62, 94.21, 94.65, 95.13, 95.46, 95.55])
+    
+    # Original Distributed Shampoo data (from your provided output)
+    orig_steps = np.array([0, 100, 200, 300, 400, 500, 600, 700, 800, 900, 999])
+    orig_train_losses = np.array([3.0358, 0.7677, 0.3920, 0.3000, 0.3126, 0.3510, 
+                                 0.3343, 0.4676, 0.3511, 0.4243, 0.3232])
+    orig_test_losses = np.array([2.7167, 0.4266, 0.3107, 0.2346, 0.2090, 0.1900, 
+                                0.1749, 0.1698, 0.1654, 0.1628, 0.1626])
+    orig_test_acc = np.array([7.97, 87.86, 90.70, 93.23, 93.79, 94.42, 94.82, 94.96, 94.97, 95.03, 95.05])
+    orig_lr = np.array([2.00e-05, 9.93e-04, 9.39e-04, 8.37e-04, 6.99e-04, 5.40e-04, 
+                       3.76e-04, 2.25e-04, 1.04e-04, 2.66e-05, 0.00e+00])
+    
      # HeavyBall SGD data (new results)
     # These are sampled every 100 steps based on the loss_trajectory length
     hb_steps = np.array([0, 100, 200, 300, 400, 500, 600, 700, 800, 900])
@@ -30,6 +50,12 @@ def plot_optimizer_comparison():
                          0.44733762741088867])
     hb_test_acc = np.array([7.93, 86.96, 89.1, 92.21, 93.02, 93.78, 94.14, 94.45, 94.69, 94.67])
     
+    external_adamw_steps = np.array([0, 100, 200, 300, 400, 500, 600, 700, 800, 900])
+    external_adamw_losses = np.array([3.0330703258514404, 0.6683779358863831, 0.5175971984863281, 
+                                    0.49873846769332886, 0.23800301551818848, 0.2730451822280884, 
+                                    0.1415085345506668, 0.44332951307296753, 0.21742264926433563, 
+                                    0.42769765853881836])
+    external_adamw_test_acc = np.array([7.93, 87.03, 89.27, 92.3, 93.01, 93.71, 94.16, 94.33, 94.62, 94.74])
     # Original AdamW data (from your provided output)
     orig_steps = np.array([0, 100, 200, 300, 400, 500, 600, 700, 800, 900, 999])
     orig_train_losses = np.array([3.0358, 0.8401, 0.5289, 0.2862, 0.3456, 0.3708, 
@@ -39,12 +65,13 @@ def plot_optimizer_comparison():
     orig_test_acc = np.array([7.96, 86.34, 89.02, 92.49, 93.10, 93.74, 94.17, 94.27, 94.50, 94.66, 94.60])
     orig_lr = np.array([2.00e-05, 9.93e-04, 9.39e-04, 8.37e-04, 6.99e-04, 5.40e-04, 
                        3.76e-04, 2.25e-04, 1.04e-04, 2.66e-05, 0.00e+00])
-    """
+    
     # Create subplots
     fig, ((ax1, ax2)) = plt.subplots(1, 2, figsize=(15, 8))
     
     # Plot 1: Training Loss Comparison
     ax1.plot(hb_steps, hb_losses, 'b-o', label='HeavyBall', linewidth=2, markersize=6)
+    ax1.plot(external_adamw_steps, external_adamw_losses, 'b-o', label='HeavyBall-External', linewidth=2, markersize=6)
     ax1.plot(orig_steps, orig_train_losses, 'r-s', label='Original (NAdamW)', linewidth=2, markersize=6)
     ax1.set_xlabel('Training Steps')
     ax1.set_ylabel('Training Loss')

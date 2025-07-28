@@ -18,7 +18,7 @@ from torch.optim import SGD
 from . import utils
 import sys
 import os
-
+from optimizers.nadamw import NAdamW
 
 use_default = utils.use_default
 
@@ -306,6 +306,18 @@ def scale_by_adam(group, update, grad, param, exp_avg, exp_avg_sq):
         group["eps"],
     )
 
+@zero_guard("exp_avg", "exp_avg_sq")
+@no_state
+def scale_by_nadam(group, update, grad, param, exp_avg, exp_avg_sq):
+    return utils.nadam_(
+        exp_avg,
+        exp_avg_sq,
+        update,
+        utils.get_beta1(group),
+        utils.get_beta2(group),
+        group["step"],  #
+        group["eps"],
+    )
 
 @no_state
 def update_by_SGD(group, update, grad, param):
@@ -341,6 +353,24 @@ def update_by_adam(group, update, grad, param, exp_avg, exp_avg_sq):
     )
     raise SkipUpdate from None
 
+@zero_guard("exp_avg", "exp_avg_sq")
+@no_state
+def update_by_nadam(group, update, grad, param, exp_avg, exp_avg_sq):
+    utils.fused_nadam_(
+        param,
+        exp_avg,
+        exp_avg_sq,
+        update,
+        grad,
+        utils.get_beta1(group),
+        utils.get_beta2(group),
+        group["step"],
+        group["lr"],
+        group["eps"],
+        group["weight_decay"],
+        group["caution"],
+    )
+    raise SkipUpdate from None
 
 @zero_guard("exp_avg", "exp_avg_sq", "sum_of_norm_grad_sq",  "sum_of_norm_d_sq", "eta")
 @no_state
@@ -783,7 +813,7 @@ def update_by_tensor_shampoo(group, update, grad, param, exp_avg, exp_avg_sq, mo
     
     # 4. Apply final parameter update with weight decay
     utils.fused_parameter_update_list_(
-        param, final_update, group["lr"], group["weight_decay"], group["caution"]
+        param, final_update, -group["lr"], group["weight_decay"], group["caution"]
     )
     
     raise SkipUpdate from None
@@ -1344,6 +1374,303 @@ class ChainOpt(utils.StatefulOptimizer):
         # Keep existing scheduler initialization for backward compatibility
         self.lr_scheduler = None
         self._scheduler_initialized = False
+        self._global_external_optimizers = {}
+        # Global optimizers for DistributedShampoo (created once)
+        self._global_shampoo_optimizers = {}
+        self._param_to_optimizer_map = {}  # Track which optimizer handles which param
+
+    def _step(self, group):
+        if "base_lr" not in group:
+            group["base_lr"] = group["lr"]
+            
+        if "prev_lr" in group and group["prev_lr"] != group["lr"]:
+            utils.warn_once(
+                f"Learning rate changed between steps. This is an experimental feature and "
+                f"only supported with foreach=True (currently foreach={group['foreach']})."
+            )
+            group["base_lr"] = group["lr"]
+            
+        caution = group["caution"]
+        use_ema = group.get("use_ema", False)
+        prev_grads = group.get("prev_grads", [])
+        prev_loss = group.get("prev_loss", None)
+        group["prev_grads"] = prev_grads
+        
+        vals = list(self.split_p_and_g_in_group(
+            group, should_promote=self.promote,
+            beta1=utils.get_beta1(group), use_ema=use_ema
+        ))
+        
+        if not vals:
+            return
+            
+        p, g = zip(*vals)
+        
+        # Get and update step count
+        for param in p:
+            state = self.state_(param)
+            if "step" in state:
+                step = state["step"]
+            elif self.compile_step:
+                step = utils.scalar_guard(0, param)
+            else:
+                step = 0
+            break
+            
+        # Increment step
+        group["step"] = state["step"] = step = step + 1
+        
+        # Handle learning rate scheduling
+        current_lr = group["base_lr"]
+        
+        # Check if we should use the new warmup + cosine schedule
+        use_warmup_cosine = group.get("use_warmup_cosine", True)  # Default to True
+        """
+        if use_warmup_cosine:
+            # Use warmup + cosine annealing schedule
+            lr_multiplier = self._lr_schedule_fn(step)
+            current_lr = group["base_lr"] * lr_multiplier
+        else:
+            # Fall back to existing logic for backward compatibility
+            # Apply warmup if specified
+            warmup_steps = group.get("warmup_steps", 0)
+            if warmup_steps > 0 and step <= warmup_steps:
+                warmup_factor = step / warmup_steps
+                current_lr = group["base_lr"] * warmup_factor
+            
+            # Apply other LR schedules if explicitly enabled
+            if group.get("lr_schedule", False):
+                self._initialize_lr_scheduler()
+                if self.lr_scheduler is not None:
+                    self.lr_scheduler.step()
+                    current_lr = self.lr_scheduler.get_last_lr()[0]
+        """
+        if step%1000==0:
+            print(current_lr)    
+        group["lr"] = current_lr
+        group["prev_lr"] = current_lr
+        # Apply optimization step
+        external_optimizer_type = group.get("external_optimizer", None)
+        
+        if external_optimizer_type is not None:
+            # For external optimizers, we need to extract the actual parameter tensors
+            # p and g are tuples from zip(*vals), we need the actual tensors
+            param_tensors = [param for param, _ in vals]  # Extract just the parameters
+            self._use_external_optimizer(group, external_optimizer_type, param_tensors, g)
+        else:
+            # Use your custom chain-based optimizers
+            if not group["foreach"] or len(p) == 1:
+                for param, grad in zip(p, g):
+                    chain(self.state_, group, [grad], [param], *self.fns)
+            else:
+                chain(self.state_, group, g, p, *self.fns)
+            
+        group["caution"] = caution
+        group["step"] = None
+        
+    def _create_global_shampoo_optimizers(self):
+        """Create DistributedShampoo optimizers following AlgoPerf's approach"""
+        if self._global_shampoo_optimizers:
+            return  # Already created
+        
+        print("Creating global Shampoo optimizers...")
+        
+        # Collect all parameters that will use DistributedShampoo
+        all_shampoo_params = []
+        shampoo_groups = []
+        
+        for group in self.param_groups:
+            
+            all_shampoo_params.extend(group['params'])
+            shampoo_groups.append(group)
+        
+        if not all_shampoo_params:
+            print("No Shampoo parameters found!")
+            return
+        
+        print(f"Total Shampoo parameters: {len(all_shampoo_params)}")
+        
+        # Split parameters like AlgoPerf does
+        small_params = []
+        large_params = []
+        
+        for param in all_shampoo_params:
+            # Use AlgoPerf's criterion: any dimension >= 1M
+            if torch.any(torch.tensor(param.shape) >= 1_000_000):
+                large_params.append(param)
+                print(f"Large param: {param.shape}, id={id(param)}")
+            else:
+                small_params.append(param)
+                print(f"Small param: {param.shape}, id={id(param)}")
+        
+        print(f"Split: {len(small_params)} small, {len(large_params)} large")
+        
+        # Get configuration from first shampoo group
+        if not shampoo_groups:
+            print("No shampoo groups found!")
+            return
+            
+        first_group = shampoo_groups[0]
+        
+        # Create optimizers following AlgoPerf's exact approach
+        if small_params:
+            print(f"Creating DistributedShampoo for {len(small_params)} small parameters")
+            self._global_shampoo_optimizers['small'] = self._create_algoperf_shampoo(
+                small_params, first_group, use_full_shampoo=True
+            )
+            
+            # Map parameters to optimizer
+            for param in small_params:
+                param_id = id(param)
+                self._param_to_optimizer_map[param_id] = 'small'
+                print(f"Mapped small param {param.shape} (id={param_id}) to 'small'")
+        
+        if large_params:
+            print(f"Creating DistributedShampoo for {len(large_params)} large parameters")
+            self._global_shampoo_optimizers['large'] = self._create_algoperf_shampoo(
+                large_params, first_group, use_full_shampoo=False
+            )
+            
+            # Map parameters to optimizer
+            for param in large_params:
+                param_id = id(param)
+                self._param_to_optimizer_map[param_id] = 'large'
+                print(f"Mapped large param {param.shape} (id={param_id}) to 'large'")
+        
+        print(f"Created {len(self._global_shampoo_optimizers)} optimizers")
+        print(f"Parameter map has {len(self._param_to_optimizer_map)} entries")
+
+    def _create_algoperf_shampoo(self, params, group, use_full_shampoo=True):
+        """Create DistributedShampoo exactly like AlgoPerf"""
+        try:
+            from optimizers.distributed_shampoo.distributed_shampoo import DistributedShampoo
+            from optimizers.distributed_shampoo.shampoo_types import (
+                AdamGraftingConfig, DDPShampooConfig, CommunicationDType
+            )
+            import torch.distributed as dist
+            
+            # Initialize distributed if needed
+            if not dist.is_initialized():
+                dist.init_process_group(
+                    backend='gloo',
+                    init_method='tcp://localhost:23456',
+                    rank=0,
+                    world_size=1
+                )
+            
+            lr = group["lr"]
+            weight_decay = group.get("weight_decay", 0.0)
+            eps = group.get("eps", 1e-8)
+            
+            # Create grafting config (AlgoPerf always uses Adam for grafting)
+            grafting_config = AdamGraftingConfig(
+                beta2=group.get("beta2", 0.999),
+                epsilon=group.get("grafting_epsilon", 1e-8),
+            )
+            
+            # Different configs for small vs large params (like AlgoPerf)
+            if use_full_shampoo:
+                # Small parameters - full Shampoo
+                max_preconditioner_dim = group.get("max_preconditioner_dim", 1024)
+                start_preconditioning_step = group.get("start_preconditioning_step", 1)
+            else:
+                # Large parameters - RWS AdaGrad mode
+                max_preconditioner_dim = 524_288  # AlgoPerf's value for large params
+                start_preconditioning_step = torch.inf  # Disable Shampoo, use only grafting
+            
+            optimizer = DistributedShampoo(
+                params,
+                lr=lr,
+                betas=(group.get("beta1", 0.9), group.get("beta2", 0.999)),
+                epsilon=eps,
+                momentum=group.get("momentum", 0.0),
+                weight_decay=weight_decay,
+                max_preconditioner_dim=max_preconditioner_dim,
+                precondition_frequency=group.get("precondition_frequency", 1),
+                start_preconditioning_step=start_preconditioning_step,
+                inv_root_override=group.get("inv_root_override", 0),
+                exponent_multiplier=group.get("exponent_multiplier", 1.0),
+                use_nadam=group.get("use_nadam", False),
+                use_nesterov=True,
+                use_bias_correction=True,
+                use_decoupled_weight_decay=True,
+                grafting_config=grafting_config,
+                use_normalized_grafting=group.get("use_normalized_grafting", False),
+                use_merge_dims=True,
+                use_pytorch_compile=False,
+                distributed_config=DDPShampooConfig(
+                    communication_dtype=CommunicationDType.FP32,
+                    num_trainers_per_group=8,
+                    communicate_params=False,
+                ),
+                preconditioner_dtype=torch.float32,
+                use_protected_eigh=True,
+                track_root_inv_residuals=False,
+            )
+            
+            return optimizer
+            
+        except Exception as e:
+            print(f"Failed to create AlgoPerf-style DistributedShampoo: {e}")
+            return torch.optim.AdamW(params, lr=lr, weight_decay=weight_decay, eps=eps)
+
+    def _use_external_optimizer(self, group, optimizer_type, param_tensors, grads):
+        """Handle external PyTorch optimizers using AlgoPerf approach"""
+        
+        if optimizer_type.lower() == "distributedshampoo":
+            # Ensure global optimizers are created
+            self._create_global_shampoo_optimizers()
+            
+            # Assign gradients to parameters
+            for param, grad in zip(param_tensors, grads):
+                param.grad = grad
+            
+            # Step the appropriate optimizers
+            optimizers_to_step = set()
+            for param in param_tensors:
+                if id(param) in self._param_to_optimizer_map:
+                    optimizer_key = self._param_to_optimizer_map[id(param)]
+                    optimizers_to_step.add(optimizer_key)
+            
+            # Step each optimizer that has parameters with gradients
+            for optimizer_key in optimizers_to_step:
+                if optimizer_key in self._global_shampoo_optimizers:
+                    optimizer = self._global_shampoo_optimizers[optimizer_key]
+                    try:
+                        optimizer.step()
+                    except Exception as e:
+                        print(f"Error stepping {optimizer_key} DistributedShampoo: {e}")
+            
+            # Clear gradients
+            for param in param_tensors:
+                param.grad = None
+                
+        else:
+            # Get the global optimizer (created once with all parameters)
+            optimizer = self._get_or_create_global_external_optimizer(optimizer_type)
+            
+            # Assign gradients to the specific parameters in this group
+            for param, grad in zip(param_tensors, grads):
+                param.grad = grad
+            
+            # Update hyperparameters for this step
+            self._update_optimizer_params(optimizer, group)
+            
+            # Step the optimizer (it will only update parameters that have gradients)
+            
+            if hasattr(optimizer, '_initialize_state'):
+                optimizer._initialize_state(param_tensors)
+           
+            try:
+                optimizer.step()
+            except KeyError as e:
+                print(f"KeyError in external optimizer {optimizer_type}: {e}")
+                # Try to initialize missing state and retry
+                self._fix_missing_state(optimizer, param_tensors, str(e))
+            #optimizer.step()
+            # Clear gradients for parameters in this group
+            for param in param_tensors:
+                param.grad = None
 
     def _initialize_lr_scheduler(self):
         """Initialize LR scheduler based on the first parameter group that needs it"""
@@ -1421,84 +1748,247 @@ class ChainOpt(utils.StatefulOptimizer):
     def _set_indices(self, retain=True):
         self._fns = set_indices(self.fns, retain)
 
-    def _step(self, group):
-        if "base_lr" not in group:
-            group["base_lr"] = group["lr"]
+         
+    def _get_or_create_global_external_optimizer(self, optimizer_type):
+        """Create external optimizer once with ALL parameters"""
+        if optimizer_type not in self._global_external_optimizers:
+            # Collect ALL parameters from ALL groups
+            all_params = []
+            for group in self.param_groups:
+                all_params.extend(group['params'])
             
-        if "prev_lr" in group and group["prev_lr"] != group["lr"]:
-            utils.warn_once(
-                f"Learning rate changed between steps. This is an experimental feature and "
-                f"only supported with foreach=True (currently foreach={group['foreach']})."
+            # Use the first group's settings as defaults
+            first_group = self.param_groups[0]
+            
+            self._global_external_optimizers[optimizer_type] = self._create_external_optimizer(
+                optimizer_type, all_params, first_group
             )
-            group["base_lr"] = group["lr"]
+            if optimizer_type == 'distributedshampoo':
+                for group in self._global_external_optimizers[optimizer_type].param_groups:
+                    group["optimizer_type"] = "distributedshampoo"
+
+        return self._global_external_optimizers[optimizer_type]
+
+    def _fix_missing_state(self, optimizer, param_tensors, error_msg):
+        """Fix missing state in external optimizers"""
+        if "MOMENTUM_LIST" in error_msg:
+            # Initialize momentum state for all parameters
+            for group in optimizer.param_groups:
+                for p in group['params']:
+                    if p.grad is not None:
+                        state = optimizer.state[p]
+                        if 'momentum_buffer' not in state:
+                            state['momentum_buffer'] = torch.zeros_like(p.data)
+        
+        if "MASKED_MOMENTUM_LIST" in error_msg or "masked_momentum_list" in error_msg:
             
-        caution = group["caution"]
-        use_ema = group.get("use_ema", False)
-        prev_grads = group.get("prev_grads", [])
-        prev_loss = group.get("prev_loss", None)
-        group["prev_grads"] = prev_grads
-        
-        vals = list(self.split_p_and_g_in_group(
-            group, should_promote=self.promote,
-            beta1=utils.get_beta1(group), use_ema=use_ema
-        ))
-        
-        if not vals:
-            return
+            # Initialize momentum state for all parameters
+            for group in optimizer.param_groups:
+                for p in group['params']:
+                    if p.grad is not None:
+                        
+                        state = optimizer.state[p]
+                        if 'masked_momentum_list' not in state:
+                            print("YES")
+                            state['masked_momentum_list'] = torch.zeros_like(p.data)
+                            
+
+
+    def _create_external_optimizer(self, optimizer_type, params, group):
+        """Factory method to create different external optimizers"""
+
+        # Ensure params is a list
+        if not isinstance(params, list):
+            params = [params]
+
+        # Common hyperparameters
+        lr = group["lr"]
+        weight_decay = group["weight_decay"]
+        eps = group.get("eps", 1e-8)
+
+        if optimizer_type.lower() == "adamw":
             
-        p, g = zip(*vals)
+            return torch.optim.AdamW(
+                params,
+                lr=lr,
+                betas=(utils.get_beta1(group), utils.get_beta2(group)),
+                eps=eps,
+                weight_decay=weight_decay
+            )
         
-        # Get and update step count
-        for param in p:
-            state = self.state_(param)
-            if "step" in state:
-                step = state["step"]
-            elif self.compile_step:
-                step = utils.scalar_guard(0, param)
-            else:
-                step = 0
-            break
-            
-        # Increment step
-        group["step"] = state["step"] = step = step + 1
+        elif optimizer_type.lower() == "nadamw":
+            return NAdamW(
+            params,
+            lr=lr,
+            betas=(utils.get_beta1(group), utils.get_beta2(group)),
+            eps=eps,
+            weight_decay=weight_decay
+        )
+        elif optimizer_type.lower() == "distributedshampoo":
+            # Import Distributed Shampoo
+            from optimizers.distributed_shampoo.distributed_shampoo import DistributedShampoo
+            from optimizers.distributed_shampoo.shampoo_types import (
+                AdamGraftingConfig,
+                AdaGradGraftingConfig,
+                DDPShampooConfig,
+                GraftingConfig,
+                RMSpropGraftingConfig,
+                SGDGraftingConfig,
+            )
+            import torch.distributed as dist
+            torch.backends.cuda.preferred_linalg_library()
+            # Initialize distributed processing for single process
+            if not dist.is_initialized():
+                dist.init_process_group(
+                    backend='gloo',  # Use 'nccl' if you have CUDA
+                    init_method='tcp://localhost:23456',
+                    rank=0,
+                    world_size=1
+            )
+            # Create grafting configuration
+            grafting_type = group.get("grafting_type", "ADAM")
+
+            if grafting_type == "ADAM":
+                grafting_config = AdamGraftingConfig(
+                    beta2=0.999,
+                    epsilon=1e-8,
+                )
+            elif grafting_type == "ADAGRAD":
+                grafting_config = AdaGradGraftingConfig(
+                    epsilon=1e-8,
+                )
+            elif grafting_type == "SGD":
+                grafting_config = SGDGraftingConfig()
+            elif grafting_type == "RMSPROP":
+                grafting_config = RMSpropGraftingConfig(
+                    beta2=0.999,
+                    epsilon=1e-8,
+                )
+            else:  
+                grafting_config = None
+            max_preconditioner_dim = group.get("max_preconditioner_dim", 1024)
+            precondition_frequency = group.get("precondition_frequency", 1)
+            start_preconditioning_step = group.get("start_preconditioning_step", 1)
+
+            param_groups = [{
+                "params": params,
+                "lr": lr,
+                "weight_decay": weight_decay,
+                "momentum": utils.get_beta1(group),
+                "beta1": utils.get_beta1(group),
+                "beta2": utils.get_beta2(group),
+            }]
         
-        # Handle learning rate scheduling
-        current_lr = group["base_lr"]
-        
-        # Check if we should use the new warmup + cosine schedule
-        use_warmup_cosine = group.get("use_warmup_cosine", True)  # Default to True
-        
-        if use_warmup_cosine:
-            # Use warmup + cosine annealing schedule
-            lr_multiplier = self._lr_schedule_fn(step)
-            current_lr = group["base_lr"] * lr_multiplier
+           
+            # Create DistributedShampoo with minimal required parameters
+            return DistributedShampoo(
+                params,
+                lr=lr,
+                betas=(utils.get_beta1(group), utils.get_beta2(group)),
+                epsilon=eps,
+                momentum=0.0,
+                weight_decay=weight_decay,
+                max_preconditioner_dim=max_preconditioner_dim,
+                precondition_frequency=precondition_frequency,
+                start_preconditioning_step=start_preconditioning_step,
+                inv_root_override=0,
+                exponent_multiplier=1.0,
+                use_nadam=False,
+                use_nesterov=False,
+                use_bias_correction=True,
+                use_decoupled_weight_decay=True,
+                grafting_config=grafting_config,
+                use_normalized_grafting=False,
+                use_merge_dims=True,
+                use_pytorch_compile=False,
+                distributed_config=None,  
+                preconditioner_dtype=torch.float32,
+                use_protected_eigh=True,
+                track_root_inv_residuals=False,
+            )
+
+        elif optimizer_type.lower() == "adam":
+            return torch.optim.Adam(
+                params,
+                lr=lr,
+                betas=(utils.get_beta1(group), utils.get_beta2(group)),
+                eps=eps,
+                weight_decay=weight_decay
+            )
+
+        elif optimizer_type.lower() == "sgd":
+            momentum = utils.get_beta1(group)
+            return torch.optim.SGD(
+                params,
+                lr=lr,
+                momentum=momentum,
+                weight_decay=weight_decay
+            )
+
+        elif optimizer_type.lower() == "rmsprop":
+            alpha = group.get("alpha", 0.99)
+            momentum = utils.get_beta1(group)
+            return torch.optim.RMSprop(
+                params,
+                lr=lr,
+                alpha=alpha,
+                eps=eps,
+                weight_decay=weight_decay,
+                momentum=momentum
+            )
+
+        elif optimizer_type.lower() == "adagrad":
+            return torch.optim.Adagrad(
+                params,
+                lr=lr,
+                eps=eps,
+                weight_decay=weight_decay
+            )
+
+        elif optimizer_type.lower() == "adadelta":
+            rho = group.get("rho", 0.9)
+            return torch.optim.Adadelta(
+                params,
+                lr=lr,
+                rho=rho,
+                eps=eps,
+                weight_decay=weight_decay
+            )
+
+        elif optimizer_type.lower() == "adamax":
+            return torch.optim.Adamax(
+                params,
+                lr=lr,
+                betas=(utils.get_beta1(group), utils.get_beta2(group)),
+                eps=eps,
+                weight_decay=weight_decay
+            )
+
         else:
-            # Fall back to existing logic for backward compatibility
-            # Apply warmup if specified
-            warmup_steps = group.get("warmup_steps", 0)
-            if warmup_steps > 0 and step <= warmup_steps:
-                warmup_factor = step / warmup_steps
-                current_lr = group["base_lr"] * warmup_factor
+            raise ValueError(f"Unsupported external optimizer: {optimizer_type}")
+
+    def _update_optimizer_params(self, optimizer, group):
+        """Update optimizer hyperparameters to match current group settings"""
+
+        for param_group in optimizer.param_groups:
+            param_group['lr'] = group["lr"]
+            param_group['weight_decay'] = group["weight_decay"]
             
-            # Apply other LR schedules if explicitly enabled
-            if group.get("lr_schedule", False):
-                self._initialize_lr_scheduler()
-                if self.lr_scheduler is not None:
-                    self.lr_scheduler.step()
-                    current_lr = self.lr_scheduler.get_last_lr()[0]
-                
-        group["lr"] = current_lr
-        group["prev_lr"] = current_lr
-    
-        # Apply optimization step
-        if not group["foreach"] or len(p) == 1:
-            for param, grad in zip(p, g):
-                chain(self.state_, group, [grad], [param], *self.fns)
-        else:
-            chain(self.state_, group, g, p, *self.fns)
+            # Update optimizer-specific parameters
+            if 'betas' in param_group:
+                param_group['betas'] = (utils.get_beta1(group), utils.get_beta2(group))
             
-        group["caution"] = caution
-        group["step"] = None
+            if 'eps' in param_group:
+                param_group['eps'] = group.get("eps", 1e-8)
+            
+            if 'momentum' in param_group:
+                param_group['momentum'] = utils.get_beta1(group)
+            
+            if 'alpha' in param_group:
+                param_group['alpha'] = group.get("alpha", 0.99)
+            
+            if 'rho' in param_group:
+                param_group['rho'] = group.get("rho", 0.9)
 
 class CosineSandwichSchedule:
     def __init__(self, total_steps, gamma, warmup_ratio=0.125, hold_ratio=0.5):

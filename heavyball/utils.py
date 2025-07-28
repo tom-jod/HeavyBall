@@ -705,6 +705,14 @@ def _compilable_stochastic_lerp_(x: List[Tensor], y: List[Tensor], a: Union[floa
             y32 = y32.to(x32.dtype)
         copy_stochastic_(x_, x32 * (1 - a) + y32 * a)
 
+@decorator_knowngood
+def _compilable_stochastic_sub_(x: List[Tensor], y: List[Tensor], a: Union[float, int, Tensor]):
+    for x_, y_ in zip(x, y):
+        x32 = promote(x_)
+        y32 = promote(y_)
+        if x32.dtype != y32.dtype:
+            y32 = y32.to(x32.dtype)
+        copy_stochastic_(x_, (x32 - y32 * a) / (1 - a + 1e-10))
 
 def get_beta1(group):
     beta = None
@@ -737,6 +745,10 @@ def stochastic_lerp_(x: List[Tensor], y: List[Tensor], a: Union[float, int, Tens
     a = scalar_guard(a, x[0])
     _compilable_stochastic_lerp_(x, y, a)
 
+def stochastic_sub_(x: List[Tensor], y: List[Tensor], a: Union[float, int, Tensor]):
+    x, y = list_guard(x, y)
+    a = scalar_guard(a, x[0])
+    _compilable_stochastic_sub_(x, y, a)
 
 def list_guard(*xs):
     out = []
@@ -1586,32 +1598,45 @@ class StatefulOptimizer(torch.optim.Optimizer):
                 else:
                     group['prev_grads'].append(torch.zeros_like(p.data))
         return prev_loss
-    
-
+        
     def step(self, closure: Optional[Callable] = None):
         if self.precond_schedule is None:
             self._is_preconditioning = False
         else:
             self._is_preconditioning = psgd_should_update(self.inner_group, self.precond_schedule, self.precond_rng)
+        
         loss = self._handle_closure(closure)
-
+        
         # we assume that parameters are constant and that there are no excessive recompiles
         with torch.no_grad(), torch._dynamo.utils.disable_cache_limit():
             for group in self.param_groups:
                 if "param_count" not in group:
                     group["param_count"] = sum(p.numel() for p in group["params"])
                 group["is_preconditioning"] = self._is_preconditioning
-                self._step(group)
-                if self.use_ema:
-                    self.ema_update()
-                for real, views in self.mapping.items():
-                    for tensor in (real, *views):
-                        for key in ("grad", "vector", "hessian_vector", "orig"):
-                            if hasattr(tensor, key):
-                                setattr(tensor, key, None)
+                
+                # Check if this group uses an external optimizer
+                if "optimizer_type" in group:
+                    # Handle external optimizer
+                    param_tensors = [p for p in group['params'] if p.grad is not None]
+                    grads = [p.grad for p in param_tensors]
+                    
+                    if param_tensors:
+                        self._use_external_optimizer(group, group["optimizer_type"], param_tensors, grads)
+                else:
+                    # Use your existing chain-based approach
+                    self._step(group)
+            
+            if self.use_ema:
+                self.ema_update()
+            
+            for real, views in self.mapping.items():
+                for tensor in (real, *views):
+                    for key in ("grad", "vector", "hessian_vector", "orig"):
+                        if hasattr(tensor, key):
+                            setattr(tensor, key, None)
+        
         return loss
     
-
     def step_with_prev(self, closure: Optional[Callable] = None, prev_closure: Optional[Callable] = None):
         if self.precond_schedule is None:
             self._is_preconditioning = False
@@ -1653,6 +1678,14 @@ def _lerp(state: List[Tensor], grad: List[Tensor], beta):
     copy_stochastic_list_(state, ea32)
     return ea32
 
+@decorator_knowngood
+def _undo_lerp(state: List[Tensor], grad: List[Tensor], beta):
+    ea32 = list(map(promote, state))
+    grad = list(map(promote, grad))
+    beta = promote(beta)
+    stochastic_sub_(ea32, grad, 1 - beta)
+    copy_stochastic_list_(state, ea32)
+    return ea32
 
 @decorator_knowngood
 def _compilable_SGD_(
@@ -1739,6 +1772,45 @@ def adam_(
     exp_avg, exp_avg_sq, grad = map(list_guard, (exp_avg, exp_avg_sq, grad))
     beta1, beta2, step, eps = scalar_guard(beta1, beta2, step, eps, exp_avg[0])
     _compilable_adam_(exp_avg, exp_avg_sq, grad, beta1, beta2, step, eps)
+    return grad
+
+@decorator_knowngood
+def _compilable_nadam_(
+    exp_avg: List[Tensor],
+    exp_avg_sq: List[Tensor],
+    grad: List[Tensor],
+    beta1: Tensor,
+    beta2: Tensor,
+    step: Tensor,
+    eps: Tensor,
+):
+    beta1_original = beta1
+    beta1 = beta_debias(beta1, step)
+    beta2 = beta_debias(beta2, step)
+
+    g32 = list(map(promote, grad))
+    exp_avg32 = _lerp(exp_avg, g32, beta1)
+    denom = _compilable_exp_avg_sq_(exp_avg_sq, g32, beta2, eps, [None])
+    exp_avg32 = _lerp(exp_avg, g32, beta1_original)
+    u32 = torch._foreach_div(exp_avg32, denom)
+
+    copy_stochastic_list_(grad, u32)
+    exp_avg32 = _undo_lerp(exp_avg, g32, beta1_original)
+
+
+def nadam_(
+    exp_avg: List[Tensor],
+    exp_avg_sq: List[Tensor],
+    grad: List[Tensor],
+    beta1: float,
+    beta2: float,
+    step: int,
+    eps: float = 1e-8,
+):
+    
+    exp_avg, exp_avg_sq, grad = map(list_guard, (exp_avg, exp_avg_sq, grad))
+    beta1, beta2, step, eps = scalar_guard(beta1, beta2, step, eps, exp_avg[0])
+    _compilable_nadam_(exp_avg, exp_avg_sq, grad, beta1, beta2, step, eps)
     return grad
 
 
@@ -2143,6 +2215,7 @@ def LION_(
     _compilable_LION_(exp_avg, exp_avg_sq, grad, beta1, beta2, step)
     return grad
 
+
 @decorator_knowngood
 def _fused_compilable_adam_(
     y: List[Tensor],
@@ -2158,13 +2231,29 @@ def _fused_compilable_adam_(
     eps: Tensor,
     caution: bool,
 ):
-    beta1 = beta_debias(beta1, step)
-    beta2 = beta_debias(beta2, step)
+    # Use PyTorch's standard bias correction instead of beta_debias
+    bias_correction1 = 1 - beta1 ** step
+    bias_correction2 = 1 - beta2 ** step
     
+    # Promote tensors to float32
     u32, g32 = [list(map(promote, x)) for x in [update, grad]]
-    exp_avg32 = _lerp(exp_avg, u32, beta1)
-    denom = _compilable_exp_avg_sq_(exp_avg_sq, u32, beta2, eps, [None])
-    u32 = torch._foreach_div(exp_avg32, denom)
+    
+    exp_avg32 = _lerp(exp_avg, u32, beta1)  
+    exp_avg_sq_updated = _compilable_exp_avg_sq_(exp_avg_sq, u32, beta2, eps, [None])
+    
+    # Apply PyTorch-style bias correction
+    # Divide by bias correction factors instead of debiased betas
+    exp_avg_corrected = torch._foreach_div(exp_avg32, bias_correction1)
+    #exp_avg_sq_corrected = torch._foreach_div(exp_avg_sq_updated, bias_correction2)
+    
+    # Compute denominator: sqrt(corrected_second_moment) + eps
+    denom = torch._foreach_sqrt(exp_avg_sq_updated)
+    denom = torch._foreach_add(denom, eps)
+    
+    # Compute update: corrected_first_moment / denom
+    u32 = torch._foreach_div(exp_avg_corrected, denom)
+    
+    # Apply parameter update
     _compilable_update_(y, u32, decay, lr, caution, g32)
 
 
@@ -2186,6 +2275,60 @@ def fused_adam_(
     y, exp_avg, exp_avg_sq, grad = list_guard(y, exp_avg, exp_avg_sq, grad)
     beta1, beta2, step, lr = scalar_guard(beta1, beta2, step, lr, y[0])
     _fused_compilable_adam_(y, exp_avg, exp_avg_sq, update, grad, beta1, beta2, step, decay, lr, eps, caution)
+
+@decorator_knowngood
+def _fused_compilable_nadam_(
+    y: List[Tensor],
+    exp_avg: List[Tensor],
+    exp_avg_sq: List[Tensor],
+    update: List[Tensor],
+    grad: List[Tensor],
+    beta1: Tensor,
+    beta2: Tensor,
+    step: Tensor,
+    decay: Tensor,
+    lr: Tensor,
+    eps: Tensor,
+    caution: bool,
+):
+    beta1 = beta_debias(beta1, step)
+    beta2 = beta_debias(beta2, step)
+    
+    u32, g32 = [list(map(promote, x)) for x in [update, grad]]
+    exp_avg32 = _lerp(exp_avg, u32, beta1)
+    denom = _compilable_exp_avg_sq_(exp_avg_sq, u32, beta2, eps, [None])
+    u32 = torch._foreach_div(exp_avg32, denom)
+    
+    beta1_original = beta1
+    beta1 = beta_debias(beta1, step)
+    beta2 = beta_debias(beta2, step)
+
+    u32, g32 = [list(map(promote, x)) for x in [update, grad]]
+    exp_avg32 = _lerp(exp_avg, u32, beta1)
+    denom = _compilable_exp_avg_sq_(exp_avg_sq, u32, beta2, eps, [None])
+    exp_avg32 = _lerp(exp_avg, u32, beta1_original)
+    u32 = torch._foreach_div(exp_avg32, denom)
+    _compilable_update_(y, u32, decay, lr, caution, g32)
+    exp_avg32 = _undo_lerp(exp_avg, g32, beta1_original)
+
+def fused_nadam_(
+    y: List[Tensor],
+    exp_avg: List[Tensor],
+    exp_avg_sq: List[Tensor],
+    update: List[Tensor],
+    grad: List[Tensor],
+    beta1: float,
+    beta2: float,
+    step: int,
+    lr: float,
+    eps: float,
+    decay: float,
+    caution: bool,
+):
+    
+    y, exp_avg, exp_avg_sq, grad = list_guard(y, exp_avg, exp_avg_sq, grad)
+    beta1, beta2, step, lr = scalar_guard(beta1, beta2, step, lr, y[0])
+    _fused_compilable_nadam_(y, exp_avg, exp_avg_sq, update, grad, beta1, beta2, step, decay, lr, eps, caution)
 
 
 @decorator_knowngood

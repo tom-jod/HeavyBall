@@ -24,17 +24,17 @@ class Model(nn.Module):
         super().__init__()
         self.flatten = nn.Flatten()
         self.fc1 = nn.Linear(28 * 28, hidden_size)
-        self.dropout1 = nn.Dropout(0.25)
+        #self.dropout1 = nn.Dropout(0.25)
         self.fc2 = nn.Linear(hidden_size, hidden_size)
-        self.dropout2 = nn.Dropout(0.5)
+        #self.dropout2 = nn.Dropout(0.5)
         self.fc3 = nn.Linear(hidden_size, 10)
     
     def forward(self, x):
         x = self.flatten(x)
         x = F.relu(self.fc1(x))
-        x = self.dropout1(x)
+        #x = self.dropout1(x)
         x = F.relu(self.fc2(x))
-        x = self.dropout2(x)
+        #x = self.dropout2(x)
         x = self.fc3(x)
         return F.log_softmax(x, dim=1)
 
@@ -70,7 +70,12 @@ def main(
     # Usage in your script:
     model = Model(hidden_size).cuda()
     model = set_deterministic_weights(model, seed=42)
-    
+    def debug_model_weights(model, script_name):
+        print(f"{script_name} - Model weight checksums:")
+        for name, param in model.named_parameters():
+            print(f"  {name}: {param.sum().item():.6f} (shape: {param.shape})")
+
+    debug_model_weights(model, "HeavyBall")  # or "Simple"
     # Load MNIST data
     transform = transforms.Compose([
         transforms.ToTensor(),
@@ -104,7 +109,7 @@ def main(
 )
     
     data_iter = iter(train_loader)
-
+    """
     def data():
         nonlocal data_iter
         try:
@@ -115,7 +120,13 @@ def main(
             batch_data, batch_targets = next(data_iter)
         
         return batch_data.cuda(), batch_targets.cuda()
-    
+    """
+    torch.manual_seed(42)
+    data_new = torch.randn(64, 1, 28, 28).cuda()
+    targets = torch.randint(0, 10, (64,)).cuda()
+
+    def data():
+        return data_new, targets
     # Custom loss function that matches the expected signature
     def loss_fn(output, target):
         return F.nll_loss(output, target)
