@@ -83,13 +83,18 @@ class Model(nn.Module):
 def main(
     method: List[str] = typer.Option(["qr"], help="Eigenvector method to use (for SOAP)"),
     dtype: List[str] = typer.Option(["float32"], help="Data type to use"),
-    num_classes: int = 10,
+    num_classes: int = 100,
     batch: int = 128,
-    steps: int = 1000,
+    steps: int = 0,
     weight_decay: float = 5e-4,
     opt: List[str] = typer.Option(["ForeachSOAP"], help="Optimizers to use"),
     win_condition_multiplier: float = 1.0,
     trials: int = 10,
+    estimate_condition_number: bool = False,
+    test_loader: bool = None,
+    track_variance: bool = False,
+    runtime_limit: int = 3600 * 24,
+    step_hint: int = 67000
 ):
     dtype = [getattr(torch, d) for d in dtype]
     model = Model(num_classes).cuda()
@@ -116,7 +121,7 @@ def main(
     testset = torchvision.datasets.CIFAR10(
         root='./data', train=False, download=True, transform=transform_test
     )
-    testloader = DataLoader(testset, batch_size=batch, shuffle=False, num_workers=2, pin_memory=True)
+    test_loader = DataLoader(testset, batch_size=batch, shuffle=False, num_workers=2, pin_memory=True)
     
     def create_data_generator():
         while True:  # Infinite generator
@@ -126,7 +131,7 @@ def main(
     data_gen = create_data_generator()
     def data():
         return next(data_gen)
-    print(f"shape: {trainset[0][0].shape}")
+    
     trial(
         model,
         data,
@@ -144,13 +149,13 @@ def main(
         failure_threshold=10,
         base_lr=1e-3,
         trials=trials,
-        estimate_condition_number = False,
-        test_loader=testloader,
-        track_variance=True
+        estimate_condition_number=estimate_condition_number,
+        test_loader=test_loader,
+        track_variance=track_variance,
+        runtime_limit=runtime_limit,
+        step_hint=step_hint
     )
 
 
 if __name__ == "__main__":
     app()
-
-# steps per epoch int(50000/128)

@@ -59,16 +59,11 @@ def main(
     dtype: List[str] = typer.Option(["float32"], help="Data type to use"),
     hidden_size: int = 128,
     batch: int = 64,
-    steps: int = 0,
+    steps: int = 100,
     weight_decay: float = 0,
     opt: List[str] = typer.Option(["ForeachSOAP"], help="Optimizers to use"),
     win_condition_multiplier: float = 1.0,
     trials: int = 10,
-    estimate_condition_number: bool = False,
-    test_loader: bool = None,
-    track_variance: bool = False,
-    runtime_limit: int = 3600 * 24,
-    step_hint: int = 67000
 ):
     dtype = [getattr(torch, d) for d in dtype]
     
@@ -114,7 +109,7 @@ def main(
 )
     
     data_iter = iter(train_loader)
-    
+    """
     def data():
         nonlocal data_iter
         try:
@@ -125,8 +120,13 @@ def main(
             batch_data, batch_targets = next(data_iter)
         
         return batch_data.cuda(), batch_targets.cuda()
-    
- 
+    """
+    torch.manual_seed(42)
+    data_new = torch.randn(64, 1, 28, 28).cuda()
+    targets = torch.randint(0, 10, (64,)).cuda()
+
+    def data():
+        return data_new, targets
     # Custom loss function that matches the expected signature
     def loss_fn(output, target):
         return F.nll_loss(output, target)
@@ -135,7 +135,7 @@ def main(
         model,
         data,
         loss_fn,
-        loss_win_condition(win_condition_multiplier * 0.3),
+        loss_win_condition(win_condition_multiplier * 1),
         steps,
         opt[0],
         dtype[0],
@@ -148,12 +148,12 @@ def main(
         failure_threshold=10,
         base_lr=1e-3,
         trials=trials,
-        estimate_condition_number=estimate_condition_number,
+        estimate_condition_number = False,
         test_loader=test_loader,
-        track_variance=track_variance,
-        runtime_limit=runtime_limit,
-        step_hint=step_hint
+        track_variance=False,
+        test_optimizer_implementation=True,
     )
+
 
 if __name__ == "__main__":
     app()

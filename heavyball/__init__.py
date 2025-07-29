@@ -714,8 +714,8 @@ class ForeachSFAdamW(C.ScheduleFree):
         betas=(0.9, 0.99),
         eps=1e-6,
         weight_decay=0,
-        warmup_steps=0,
-        r=0.0,
+        warmup_steps=20,
+        r=0.75,
         weight_lr_power=2.0,
         foreach: bool = True,
         storage_dtype: str = "float32",
@@ -728,12 +728,17 @@ class ForeachSFAdamW(C.ScheduleFree):
         beta2_scale: float = 0.8,
         mars_schedule: bool = False,
         use_ema: bool = False,
+        use_warmup_cosine: bool = False,
         **kwargs,
     ):
         defaults = locals()
         defaults.pop("self")
         params = defaults.pop("params")
         defaults.update(defaults.pop("kwargs"))
+        
+        # Set external optimizer
+        defaults["use_warmup_cosine"] = use_warmup_cosine
+        defaults["warmup_steps"] = warmup_steps
 
         if kwargs:
             utils.warn_once(f"Working with uncaptured keyword arguments: {kwargs}")

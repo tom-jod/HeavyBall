@@ -7,7 +7,7 @@ import random
 import sys
 import time
 import warnings
-
+import json
 import numpy as np
 import optuna
 import torch
@@ -51,6 +51,8 @@ def get_optim(optim, params, **kwargs) -> C.BaseOpt:
     # Force total_steps to be included if it exists in kwargs
     if 'total_steps' in kwargs:
         filtered_args['total_steps'] = kwargs['total_steps']
+    if 'warmup_ratio' in kwargs:
+        filtered_args['warmup_ratio'] = kwargs['warmup_ratio']
     
     o = optim(params, **filtered_args)
     return o
@@ -281,7 +283,7 @@ class Objective:
         failure_threshold,
         model,
         opt: str,
-        steps,
+        steps, # Use steps = 0 as a flag to run for a fixed amount of time rather than fixed number of steps
         group,
         data,
         loss_fn,
@@ -291,6 +293,8 @@ class Objective:
         estimate_condition_number,
         test_loader,
         track_variance,
+        runtime_limit,
+        step_hint,
         ema_index: int = 0,
         **kwargs,
     ):
@@ -301,6 +305,8 @@ class Objective:
                 mod.flatten_parameters()
         self.opt = opt
         self.steps = steps
+        if steps == 0:
+            self.steps = int(1e9) # Very large number, so we are not limited by number of steps
         self.group = group
         self.data = data
         self.loss_fn = loss_fn
@@ -308,7 +314,6 @@ class Objective:
         self.weight_decay = weight_decay
         self.warmup_trials = int(warmup_trials)
         self.kwargs = kwargs
-        self.kwargs["total_steps"] = steps
         self.ema_index = ema_index
 
         # up to 32768 consecutive times can the new loss be (1 - 1e-7)x larger than the preceding loss
@@ -334,13 +339,18 @@ class Objective:
         self.avg = None
         self.use_cudnn = True
         self.set_precond_init_scale = False
-        self.end_time = int(os.environ.get("HEAVYBALL_BENCHMARK_TIMEOUT", 3600 * 24)) + time.time() # was 3600 * 4
+        #self.end_time = int(os.environ.get("HEAVYBALL_BENCHMARK_TIMEOUT", 3600 * 24)) + time.time() # was 3600 * 4
+        self.start_time = time.time()
+        self.runtime_limit = runtime_limit
         self._last_loss = float('inf')
         self.best_losses = []
         self.current_losses = []
         self.estimate_condition_number = estimate_condition_number
         self.test_loader = test_loader
         self.track_variance = track_variance
+        # Set total_steps for lr schedules
+        self.kwargs["total_steps"] = step_hint
+        
 
     def win_condition(self, loss=None):
         if loss is not None:
@@ -361,18 +371,39 @@ class Objective:
         
         input_kwargs = locals()
         input_kwargs.pop("self")
+       
         params = {
-            "lr": params[0],
-            "betas": (1 - params[1], 1 - params[2], 1 - params[3]),
-            "beta": 1 - params[1],
-            "beta3": 1 - params[3],
-            "shampoo_beta": 1 - params[4],
-            "sam_step_size": params[4],
-            "eps": 1e-8,
-            "precond_lr": params[4],
-            "weight_decay": params[5],
-            # we never have both precond_lr and shampoo_beta
+            "lr": params[0],                           # learning_rate
+            "betas": (1 - params[1], 1 - params[2], 1 - params[3]),  # (beta1, beta2, beta3)
+            "beta": 1 - params[1],                     # beta1 (one_minus_beta1)
+            "beta3": 1 - params[3],                    # beta3 (one_minus_beta3)
+            "shampoo_beta": 1 - params[4],             # shampoo_beta (one_minus_shampoo_beta)
+            "sam_step_size": params[4],                # one_minus_shampoo_beta
+            "eps": params[6],                          # epsilon
+            "precond_lr": params[4],                   # one_minus_shampoo_beta
+            "weight_decay": params[5],                 # weight_decay
+            "warmup_factor": params[7],                # warmup_factor
+            "dropout_rate": params[8],                 # dropout_rate
+            "label_smoothing": params[9],              # label_smoothing
+            "momentum": 1 - params[10],                # momentum (one_minus_momentum)
+            "one_minus_momentum": params[10],          # one_minus_momentum
+            "use_momentum": params[11],                # use_momentum
+            "max_preconditioner_dim": params[12],      # max_preconditioner_dim
+            "precondition_frequency": params[13],      # precondition_frequency
+            "start_preconditioning_step": params[14],  # start_preconditioning_step
+            "inv_root_override": params[15],           # inv_root_override
+            "exponent_multiplier": params[16],         # exponent_multiplier
+            "grafting_type": params[17],               # grafting_type
+            "grafting_epsilon": params[18],            # grafting_epsilon
+            "use_normalized_grafting": params[19],     # use_normalized_grafting
+            "communication_dtype": params[20],         # communication_dtype
+            "communicate_params": params[21],          # communicate_params
+            "use_cosine_decay": params[22],            # use_cosine_decay
+            "use_nadam": params[23],                   # use_nadam
+            "step_hint_factor": params[24],            # step_hint_factor
         }
+        self.kwargs["warmup_ratio"] = params["warmup_factor"]
+        
         torch.cuda.reset_peak_memory_stats()
         if self.set_precond_init_scale:
             params["precond_init_scale"] = 0.1
@@ -385,15 +416,24 @@ class Objective:
         self.condition_numbers = []
         self.current_losses = []
         prev_model_params = None
+        step_counter = 0
+        timeout_reached = False
+        self.start_time = time.time()
+        self.end_time = self.runtime_limit + time.time() # was 3600 * 4
         # iterate through each epoch
         for i in range(self.steps // self.group):
            
             if not hasattr(self, 'test_accuracies'):
                 self.test_accuracies = []
             if self.test_loader != None:
-                test_accuracy = evaluate_model(self.m, self.test_loader)
+                test_accuracy = evaluate_model(self.m, self.test_loader, self.loss_fn)
                 self.test_accuracies.append(test_accuracy)
-
+                
+                if self.win_condition(test_accuracy):
+                    runtime = time.time() - self.start_time
+                    print({"WIN"})
+                    return validator.ema_states.min().item(), self.m, torch_hist[-1].item(), self.current_losses, self.test_accuracies, self.grad_variances, self.condition_numbers, step_counter, runtime
+                
             if self.estimate_condition_number: 
                 with torch.backends.cudnn.flags(enabled=False):
                     #if i % int(self.steps // (self.group*5)) == 0:
@@ -409,8 +449,10 @@ class Objective:
                 o.train()
             
             for j in range(self.group):
-                
+                step_counter += 1
+        
                 if self.requires_prev_minibatch(o):
+                    print("HERE")
                     # Get current batch
                     curr_inp, curr_tgt = self.data()
                     
@@ -440,6 +482,7 @@ class Objective:
 
                 
                 def _closure():
+                    
                     loss = self.m() if inp is None else self.m(inp)
                     if self.loss_fn is not None:
                         loss = self.loss_fn(loss, tgt)
@@ -484,7 +527,9 @@ class Objective:
                     if self.requires_prev_model(o):
                         loss = o.step_with_prev(_closure, _prev_closure)
                     else:
+                        
                         loss = o.step(_closure)
+                      
                 except PrecondInitError:
                     self.set_precond_init_scale = True
                     return self._inner(**input_kwargs)
@@ -492,32 +537,39 @@ class Objective:
                 with torch.no_grad():
                     torch_hist[j] = loss.detach()
 
-                if j == self.group - 1:
-                    # Add loss to step_losses and current_losses (once per epoch: outer loop)
+                # Add loss to step_losses and current_losses (once per epoch: outer loop)
+                if j == 0:
                     self.current_losses.append(float(torch_hist[j]))
-                    
+                if time.time() > self.end_time:  # timeout
+                    timeout_reached = True
+
+            if timeout_reached:
+                break
+            
         # Get current memory usage before returning
         self.current_memory_usage = get_gpu_memory_usage()
-        return validator.ema_states.min().item(), self.m, torch_hist[-1].item(), self.current_losses, self.test_accuracies, self.grad_variances, self.condition_numbers
+        runtime = time.time() - self.start_time
+        return validator.ema_states.min().item(), self.m, torch_hist[-1].item(), self.current_losses, self.test_accuracies, self.grad_variances, self.condition_numbers, step_counter, runtime
     
     def objective(self, params):
         self.attempt += 1
-        target, model, loss, step_losses, test_accuracies, grad_variances, condition_numbers = self._inner(params)
+        target, model, loss, step_losses, test_accuracies, grad_variances, condition_numbers, step_counter, runtime = self._inner(params)
         self.loss = loss
         #if self.best_loss is None or loss < self.best_loss or not np.isfinite(self.best_loss):
         self.best_loss = loss
         self.best_at = self.attempt
-        self.avg = np.log(np.array(params))
+        self.avg = None
         self.best_losses = step_losses.copy() 
         self.test_accuracies = test_accuracies.copy()
         self.grad_variances = grad_variances.copy()
         self.condition_numbers = condition_numbers.copy()
         self.memory_usage = getattr(self, 'current_memory_usage', 0)/ (1024**2)
+        self.step_counter = step_counter
+        self.runtime = runtime
 
         #if self.best_at * 100 < self.attempt and self.attempt - self.best_at > self.warmup_trials:  # no improvements
         #    raise Stop
-        if time.time() > self.end_time:  # timeout
-            raise Stop
+        
         return target
     
     def get_best(self):
@@ -589,7 +641,7 @@ def trial(
     depth,
     trials=10,
     failure_threshold=3,
-    group=1000,
+    group=10,
     base_lr: float = 1e-3,
     return_best: bool = False,
     warmup_trial_pct: int = 0.2,
@@ -597,20 +649,21 @@ def trial(
     estimate_condition_number: bool = False,
     test_loader=None,
     track_variance=False,
+    test_optimizer_implementation=False,
+    runtime_limit: int = 3600 * 24, # Default runtime limit is a day
+    step_hint: int = 0,
 ):
-    """
-    condition_numbers = [0]
-    if estimate_condition_number:
-        with torch.backends.cudnn.flags(enabled=False):
-            condition_numbers = []
-            for i in range(5):
-                condition_numbers.append(estimate_condition_number_hvp(model, data, n_probes=20, n_samples=10, loss_fn=loss_fn))
-            #condition_number = estimate_condition_number_hvp(model, data, n_probes=20, n_samples=2000)
-    """
+    use_fixed_hyperparams = False
+    if opt in ["SFAdamW", "ExternalDistributedShampoo"]:
+        opt_name = opt
+        print("using_list")
+        use_fixed_hyperparams = True
 
-
-    group = min(group, steps)
-    heavyball.utils.set_torch()
+    if test_optimizer_implementation:
+        group = 10
+    # If no step hint given assume we do not need one as we are limiting the trial by number of steps rather than runtime
+    if steps != 0:
+        step_hint = steps
     
     if isinstance(opt, list):
         opt = opt[0]
@@ -619,7 +672,7 @@ def trial(
     if opt.startswith("cautious-"):
         opt = opt[len("cautious-") :]
         kwargs["caution"] = True
-    kwargs["total_steps"] = steps 
+    #kwargs["total_steps"] = steps 
     if opt.startswith("unscaled_cautious-"):
         opt = opt[len("unscaled_cautious-") :]
         heavyball.utils.disable_caution_scaling()
@@ -674,128 +727,331 @@ def trial(
         estimate_condition_number,
         test_loader,
         track_variance,
+        runtime_limit,
+        step_hint,
         **kwargs,
     )
     
     torch.cuda.synchronize()
     start_time = time.time()
     #stdout, sys.stdout = sys.stdout, sys.stderr
-   
+    
     set_seed()
     
     # Use a list to store win condition status (mutable object that can be modified from inner function)
     win_status = [False]
     global current_loss_trajectory
     current_loss_trajectory = []
-    try:
+
+    def create_params_dict(tuned_values, tuned_indices):
+        """Create the required params dictionary format"""
+        return {f"param_{i}_{param_names[i]}": val for i, val in zip(tuned_indices, tuned_values)}
+    
+    # Define all default hyperparameters
+    default_hyperparams = {
+        0: 0.004,      # learning_rate
+        1: 0.1,        # one_minus_beta1
+        2: 0.0045,     # one_minus_beta2
+        3: 0.0045,     # one_minus_beta3
+        4: 0.001,      # one_minus_shampoo_beta
+        5: 0.08,       # weight_decay
+        6: 1e-8,       # epsilon
+        7: 0.02,       # warmup_factor
+        8: 0.1,        # dropout_rate
+        9: 0.4,        # label_smoothing
+        10: 0.0,       # one_minus_momentum
+        11: False,     # use_momentum
+        12: 1024,      # max_preconditioner_dim
+        13: 100,       # precondition_frequency
+        14: -1,        # start_preconditioning_step
+        15: 0,         # inv_root_override
+        16: 1.0,       # exponent_multiplier
+        17: "ADAM",    # grafting_type
+        18: 1e-8,      # grafting_epsilon
+        19: False,     # use_normalized_grafting
+        20: "FP32",    # communication_dtype
+        21: True,      # communicate_params
+        22: True,      # use_cosine_decay
+        23: True,      # use_nadam
+        24: 1.0,       # step_hint_factor
+        25: 1.0,       # beta2
+    }
+    
+    param_names = {
+        0: "learning_rate", 1: "one_minus_beta1", 2: "one_minus_beta2", 
+        3: "one_minus_beta3", 4: "one_minus_shampoo_beta", 5: "weight_decay",
+        6: "epsilon", 7: "warmup_factor", 8: "dropout_rate", 9: "label_smoothing",
+        10: "one_minus_momentum", 11: "use_momentum", 12: "max_preconditioner_dim",
+        13: "precondition_frequency", 14: "start_preconditioning_step", 15: "inv_root_override",
+        16: "exponent_multiplier", 17: "grafting_type", 18: "grafting_epsilon",
+        19: "use_normalized_grafting", 20: "communication_dtype", 21: "communicate_params",
+        22: "use_cosine_decay", 23: "use_nadam", 24: "step_hint_factor", 25: "beta2"
+    }
+    
+    def create_full_params_tuple(tuned_values, tuned_indices):
+        """Create a full parameter tuple with specific indices tuned and others using defaults"""
+        full_params = []
+        tuned_dict = dict(zip(tuned_indices, tuned_values))
+        
+        for i in range(26):  # Total number of parameters
+            if i in tuned_dict:
+                full_params.append(tuned_dict[i])
+            else:
+                full_params.append(default_hyperparams[i])
+
+        # update 1-beta2 if beta2 has been specified (this is the case in SFAdamW)
+        if full_params[25] != 1.0:
+            full_params[2] = 1 - full_params[25]
+        
+        # ignore beta2 param (number 25)
+        return tuple(full_params[:25])
+    
+    if test_optimizer_implementation:
+        print("Testing Optimizer Implementation")
+        # Specify exactly which parameter indices to tune
+        tuned_indices = [0, 1, 2, 3, 4, 5]  # You can change this to [0, 3, 4] or any other combination
+        
         sampler = AutoSampler(
             seed=0x123125,
             search_space={
-                "lr": optuna.distributions.FloatDistribution(1e-5, 1e-1, log=True),#1e-7, 100
-                "1mbeta1": optuna.distributions.FloatDistribution(1e-5, 0.1, log=True),#to 1
-                "1mbeta2": optuna.distributions.FloatDistribution(1e-5, 0.1, log=True),#to 1
-                "1mbeta3": optuna.distributions.FloatDistribution(1e-5, 0.1, log=True),#to 1
-                "1mshampoo_beta": optuna.distributions.FloatDistribution(1e-5, 1, log=True),
-                "weight_decay": optuna.distributions.FloatDistribution(1e-6, 1e-1, log=True), 
+                f"param_{i}": optuna.distributions.FloatDistribution(1e-3, 1e-3) if i in [1,2,3,4] 
+                            else optuna.distributions.FloatDistribution(0, 0) if i == 5
+                            else optuna.distributions.FloatDistribution(1e-3, 1e-3)
+                for i in tuned_indices
             },
         )
         study = optuna.create_study(direction="minimize", sampler=sampler)
         winning_params = {}
-        
         all_trial_results = []
-    
+        
         def _optuna_objective(trial):
             set_seed(0x12312)
-            lr = trial.suggest_float("lr", 1e-5, 1e-1, log=True)
-            one_minus_beta1 = trial.suggest_float("1mbeta1", 1e-5, 0.1, log=True)
-            one_minus_beta2 = trial.suggest_float("1mbeta2", 1e-5, 0.1, log=True)
-            one_minus_beta3 = trial.suggest_float("1mbeta3", 0.5, 1-1e-5, log=True)
-            one_minus_shampoo_beta = trial.suggest_float("1mshampoo_beta", 1e-5, 0.1, log=True)
-            weight_decay = trial.suggest_float("weight_decay", 1e-6, 1e-1, log=True)
+            
+            # Get tuned parameter values
+            tuned_values = []
+            for i in tuned_indices:
+                if i == 0:  # learning_rate
+                    value = trial.suggest_float(f"param_{i}", 1e-3, 1e-3)
+                elif i in [1, 2, 3, 4]:  # beta parameters
+                    value = trial.suggest_float(f"param_{i}", 1e-3, 1e-3)
+                elif i == 5:  # weight_decay
+                    value = trial.suggest_float(f"param_{i}", 0, 0)
+                else:
+                    value = trial.suggest_float(f"param_{i}", 1e-3, 1e-3)  # default range
+                tuned_values.append(value)
+            
+            # Create full params tuple
+            full_params = create_full_params_tuple(tuned_values, tuned_indices)
+            params_dict = create_params_dict(tuned_values, tuned_indices)
             loss = float("inf")
-            try:
-                # Run an optimization trial and update the best results stored in obj if it beats all previous trials
-                out = obj.objective((lr, one_minus_beta1, one_minus_beta2, one_minus_beta3, one_minus_shampoo_beta, weight_decay))
-                loss = min(obj.current_losses.copy()) if hasattr(obj, 'current_losses') else float('inf')
-                print(obj.current_losses.copy() if hasattr(obj, 'current_losses') else float('inf'))
-                # Store this trial's results
+            
+            out = obj.objective(full_params)
+            loss = min(obj.current_losses.copy()) if hasattr(obj, 'current_losses') else float('inf')
+            
+            # Create params dict for logging
+            params_dict = {f"param_{i}_{param_names[i]}": val for i, val in zip(tuned_indices, tuned_values)}
+            
+            trial_result = {
+            'tuned_indices': tuned_indices,
+            'params': params_dict,
+            'full_params': full_params,
+            'losses': obj.current_losses.copy() if hasattr(obj, 'current_losses') else [],
+            'loss': loss,
+            'test_accuracies': obj.test_accuracies.copy() if hasattr(obj, 'test_accuracies') else [],
+            'grad_variances': obj.grad_variances.copy() if hasattr(obj, 'grad_variances') else [],
+            'condition_numbers': obj.condition_numbers.copy() if hasattr(obj, 'condition_numbers') else [],
+            'runtime': obj.runtime if hasattr(obj, 'runtime') else [],
+            }
+            all_trial_results.append(trial_result)
+                
+           
+            return loss
+        
+        set_seed()
+        study.optimize(_optuna_objective, n_trials=1)
+       
+    elif use_fixed_hyperparams:
+        hyperparam_counter = 0
+        print("using fixed hypers")
+        with open(f'benchmark/hyperparams/{opt_name}_hyperparams.json', 'r') as f:
+            fixed_hyperparams_list = json.load(f)
+
+        tuned_indices = []
+        sampler = AutoSampler(
+            seed=0x123125,
+            search_space={
+                f"param_{i}": optuna.distributions.FloatDistribution(1e-3, 1e-3) if i in [1,2,3,4] 
+                            else optuna.distributions.FloatDistribution(0, 0) if i == 5
+                            else optuna.distributions.FloatDistribution(1e-3, 1e-3)
+                for i in tuned_indices
+            },
+        )
+        study = optuna.create_study(direction="minimize", sampler=sampler)
+        winning_params = {}
+        all_trial_results = []
+        
+        def _optuna_objective(trial):
+            nonlocal hyperparam_counter
+            set_seed(0x12312)
+            if hyperparam_counter < len(fixed_hyperparams_list):
+                hyperparams = fixed_hyperparams_list[hyperparam_counter]
+                hyperparam_counter += 1
+            
+                
+                # Convert named hyperparams to indexed format
+                indexed_hyperparams = {}
+                name_to_index = {v: k for k, v in param_names.items()}
+                
+                for param_name, value in hyperparams.items():
+                    if param_name in name_to_index:
+                        indexed_hyperparams[name_to_index[param_name]] = value
+                
+                # Get tuned indices and values
+                tuned_indices = list(indexed_hyperparams.keys())
+                tuned_values = [indexed_hyperparams[i] for i in tuned_indices]
+                
+                # Create full params tuple
+                full_params = create_full_params_tuple(tuned_values, tuned_indices)
+                params_dict = create_params_dict(tuned_values, tuned_indices)
+                
+                loss = float("inf")
+                
+                out = obj.objective(full_params)
+                loss = min(obj.test_accuracies.copy()) if hasattr(obj, 'test_accuracies') else float('inf')
                 trial_result = {
-                    'params': {
-                        "lr": lr,
-                        "1mbeta1": one_minus_beta1,
-                        "1mbeta2": one_minus_beta2,
-                        "1mbeta3": one_minus_beta3,
-                        "1mshampoo_beta": one_minus_shampoo_beta,
-                        "weight_decay": weight_decay, 
-                    },
-                  
+                    'trial_number': hyperparam_counter,
+                    'tuned_indices': tuned_indices,
+                    'original_json_params': hyperparams.copy(),
+                    'params': params_dict,
                     'losses': obj.current_losses.copy() if hasattr(obj, 'current_losses') else [],
                     'loss': loss,
                     'test_accuracies': obj.test_accuracies.copy() if hasattr(obj, 'test_accuracies') else [],
                     'grad_variances': obj.grad_variances.copy() if hasattr(obj, 'grad_variances') else [],
                     'condition_numbers': obj.condition_numbers.copy() if hasattr(obj, 'condition_numbers') else [],
+                    'runtime': obj.runtime if hasattr(obj, 'runtime') else 0,
                 }
                 all_trial_results.append(trial_result)
+                return loss
+            else:
+                return
+            
+        set_seed()
+        study.optimize(_optuna_objective, n_trials=5)
+    else:
+        # Specify exactly which parameter indices to tune - you can change this list
+        tuned_indices = [0, 1, 2, 5]  # Example: tune learning_rate, one_minus_beta3, one_minus_shampoo_beta
+        
+        # Define search ranges for each parameter index
+        search_ranges = {
+            0: (1e-5, 1e-1, True),   # learning_rate (log scale)
+            1: (1e-5, 0.1, True),    # one_minus_beta1 (log scale)
+            2: (1e-5, 0.1, True),    # one_minus_beta2 (log scale)
+            3: (1e-5, 0.1, True),    # one_minus_beta3 (log scale)
+            4: (1e-5, 1, True),      # one_minus_shampoo_beta (log scale)
+            5: (1e-6, 1e-1, True),   # weight_decay (log scale)
+        }
+        
+        sampler = AutoSampler(
+            seed=0x123125,
+            search_space={
+                f"param_{i}": optuna.distributions.FloatDistribution(
+                    search_ranges[i][0], search_ranges[i][1], log=search_ranges[i][2]
+                ) for i in tuned_indices if i in search_ranges
+            },
+        )
+        study = optuna.create_study(direction="minimize", sampler=sampler)
+        winning_params = {}
+        all_trial_results = []
+        
+        def _optuna_objective(trial):
+            set_seed(0x12312)
+            
+            # Get tuned parameter values
+            tuned_values = []
+            for i in tuned_indices:
+                if i in search_ranges:
+                    low, high, log_scale = search_ranges[i]
+                    value = trial.suggest_float(f"param_{i}", low, high, log=log_scale)
+                else:
+                    value = default_hyperparams[i]  # fallback to default
+                tuned_values.append(value)
+            
+            # Create full params tuple
+            full_params = create_full_params_tuple(tuned_values, tuned_indices)
+            
+            loss = float("inf")
+            try:
+                out = obj.objective(full_params)
+                loss = min(obj.test_accuracies.copy()) if hasattr(obj, 'test_accuracies') else float('inf')
+                print(obj.current_losses.copy() if hasattr(obj, 'current_losses') else float('inf'))
                 
+                # Create params dict for logging
+                params_dict = {f"param_{i}_{param_names[i]}": val for i, val in zip(tuned_indices, tuned_values)}
+                
+                trial_result = {
+                    'tuned_indices': tuned_indices,
+                    'params': params_dict,
+                    'full_params': full_params,
+                    'losses': obj.current_losses.copy() if hasattr(obj, 'current_losses') else [],
+                    'loss': loss,
+                    'test_accuracies': obj.test_accuracies.copy() if hasattr(obj, 'test_accuracies') else [],
+                    'grad_variances': obj.grad_variances.copy() if hasattr(obj, 'grad_variances') else [],
+                    'condition_numbers': obj.condition_numbers.copy() if hasattr(obj, 'condition_numbers') else [],
+                    'runtime': obj.runtime if hasattr(obj, 'runtime') else [],
+                }
+                all_trial_results.append(trial_result)   
             except Stop:
                 pass
-                # Don't raise WinConditionMet - let all trials complete
             return loss
-        
-        # Run ALL trials without early stopping
         set_seed()
         study.optimize(_optuna_objective, n_trials=trials)
-        
-        # After all trials complete, find the best one
-        if all_trial_results:
-            #best_trial = min(all_trial_results, key=lambda x: x['losses'][-1])
-            best_trial = min(all_trial_results, key=lambda x: x['loss'])
-            winning_params = best_trial['params']
-            
-            # Use the best trial's metrics
-            final_losses = best_trial['losses']
-            final_test_accuracies = best_trial['test_accuracies']
-            final_grad_variances = best_trial['grad_variances']
-            final_condition_numbers = best_trial['condition_numbers']
-            
-            print("Successfully found the minimum.")
-        else:
-            # Fallback if no trials succeeded
-            winning_params = {"lr": base_lr, "1mbeta1": 0.9, "1mbeta2": 0.999, "1mshampoo_beta": 0.999, "1mbeta3": 0.999, "weight_decay": 0.999}
-            final_losses = []
-            final_test_accuracies = []
-            final_grad_variances = []
-            final_condition_numbers = []
-        
-        # Calculate condition number stats
-        mean_cond = np.mean(final_condition_numbers) if final_condition_numbers else 0
-        std_err_cond = np.std(final_condition_numbers) / np.sqrt(len(final_condition_numbers)) if final_condition_numbers else 0
-        torch.cuda.synchronize() 
-        end_time = time.time()
-        print(all_trial_results)
-        print(
-            f"Took: {end_time - start_time} | Attempt: {obj.attempt} | "
-            f"{opt.__name__}(lr={winning_params['lr']:.5f}, betas=({1 - winning_params['1mbeta1']:.3f}, {1 - winning_params['1mbeta2']:.4f}, {1 - winning_params['1mbeta3']:.4f}), "
-            f"shampoo_beta={1 - winning_params['1mshampoo_beta']:.3f}), weight_decay={winning_params['weight_decay']:.7f})| "
-            f"Best Loss: {best_trial['loss'] if all_trial_results else 'N/A'} | "
-            f"loss_trajectory: {final_losses} | test_accuracies: {final_test_accuracies} | "
-            f"grad_variances: {final_grad_variances} | mean_cond: {mean_cond} | std_err_cond: {std_err_cond}"
-        )
-        
-        loss_trajectory = obj.best_losses
-        if return_best:
-        # Get the best model
-            best_model, _ = obj.get_best()
-            # Add the loss trajectory to the model as an attribute
-            best_model.loss_trajectory = loss_trajectory
-            return best_model
-    except:
-        return None
     
-   
+    # After all trials complete, find the best one
+    if all_trial_results:
+        #best_trial = min(all_trial_results, key=lambda x: x['losses'][-1])
+        best_trial = min(all_trial_results, key=lambda x: x['loss'])
+        winning_params = best_trial['params']
+        
+        # Use the best trial's metrics
+        final_losses = best_trial['losses']
+        final_test_accuracies = best_trial['test_accuracies']
+        final_grad_variances = best_trial['grad_variances']
+        final_condition_numbers = best_trial['condition_numbers']
+        
+        print("Successfully found the minimum.")
+    else:
+        # Fallback if no trials succeeded
+        winning_params = {"lr": base_lr, "1mbeta1": 0.9, "1mbeta2": 0.999, "1mshampoo_beta": 0.999, "1mbeta3": 0.999, "weight_decay": 0.999}
+        final_losses = []
+        final_test_accuracies = []
+        final_grad_variances = []
+        final_condition_numbers = []
+    
+    # Calculate condition number stats
+    mean_cond = np.mean(final_condition_numbers) if final_condition_numbers else 0
+    std_err_cond = np.std(final_condition_numbers) / np.sqrt(len(final_condition_numbers)) if final_condition_numbers else 0
+    torch.cuda.synchronize() 
+    end_time = time.time()
+    print(all_trial_results)
+    print(
+        f"Took: {end_time - start_time} | Attempt: {obj.attempt} | "
+        f"{opt.__name__}_{winning_params} "
+        f"Best Loss: {best_trial['loss'] if all_trial_results else 'N/A'} | "
+        f"loss_trajectory: {final_losses} | test_accuracies: {final_test_accuracies} | "
+        f"grad_variances: {final_grad_variances} | mean_cond: {mean_cond} | std_err_cond: {std_err_cond} | steps_taken: {obj.step_counter}"
+    )
+    
+    loss_trajectory = obj.best_losses
+    if return_best:
+    # Get the best model
+        best_model, _ = obj.get_best()
+        # Add the loss trajectory to the model as an attribute
+        best_model.loss_trajectory = loss_trajectory
+        return best_model
 
     
-def evaluate_model(model, test_loader):
+    
+def evaluate_test_accuracy(model, test_loader):
     # Save the current training state
     was_training = model.training
     
@@ -826,6 +1082,32 @@ def evaluate_model(model, test_loader):
     model.train(was_training)
     
     return 100. * correct / total
+
+def to_device(obj, device):
+    """Recursively move tensors to device"""
+    if isinstance(obj, torch.Tensor):
+        return obj.to(device)
+    elif isinstance(obj, (list, tuple)):
+        return type(obj)(to_device(item, device) for item in obj)
+    elif isinstance(obj, dict):
+        return {key: to_device(value, device) for key, value in obj.items()}
+    else:
+        return obj
+    
+def evaluate_model(model, test_loader, loss_fn=torch.nn.functional.cross_entropy):
+    # Save the current training state
+    was_training = model.training
+    model.eval()
+    with torch.no_grad():
+        for data, target in test_loader:
+            if torch.cuda.is_available():
+                data, target = data.cuda(), to_device(target,'cuda')
+            
+            output = model(data)
+            loss = loss_fn(output, target).item()
+     
+    model.train(was_training)
+    return loss
 
 def get_gpu_memory_usage():
     """Returns the current GPU memory usage in bytes"""

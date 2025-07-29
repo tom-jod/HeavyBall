@@ -85,11 +85,16 @@ def main(
     dtype: List[str] = typer.Option(["float32"], help="Data type to use"),
     num_classes: int = 100,
     batch: int = 128,
-    steps: int = 1000,
+    steps: int = 0,
     weight_decay: float = 5e-4,
     opt: List[str] = typer.Option(["ForeachSOAP"], help="Optimizers to use"),
     win_condition_multiplier: float = 1.0,
     trials: int = 10,
+    estimate_condition_number: bool = False,
+    test_loader: bool = None,
+    track_variance: bool = False,
+    runtime_limit: int = 3600 * 24,
+    step_hint: int = 67000
 ):
     dtype = [getattr(torch, d) for d in dtype]
     model = Model(num_classes).cuda()
@@ -120,7 +125,7 @@ def main(
     testset = torchvision.datasets.CIFAR100(
         root='./data', train=False, download=True, transform=transform_test
     )
-    testloader = DataLoader(testset, batch_size=batch, shuffle=False, num_workers=4, pin_memory=True)
+    test_loader = DataLoader(testset, batch_size=batch, shuffle=False, num_workers=4, pin_memory=True)
 
     # Create data iterator that matches the expected format
     train_iter = iter(trainloader)
@@ -151,9 +156,11 @@ def main(
         failure_threshold=10,
         base_lr=1e-3,
         trials=trials,
-        estimate_condition_number = False,
-        test_loader=testloader,
-        track_variance=True
+        estimate_condition_number=estimate_condition_number,
+        test_loader=test_loader,
+        track_variance=track_variance,
+        runtime_limit=runtime_limit,
+        step_hint=step_hint
     )
 
 

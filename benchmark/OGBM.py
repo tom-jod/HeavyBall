@@ -30,6 +30,18 @@ class GraphsTuple:
         self.n_node = n_node
         self.n_edge = n_edge
     
+    def cuda(self):
+        """Move all tensors in the GraphsTuple to CUDA"""
+        return GraphsTuple(
+            nodes=self.nodes.cuda() if self.nodes is not None else None,
+            edges=self.edges.cuda() if self.edges is not None else None,
+            receivers=self.receivers.cuda() if self.receivers is not None else None,
+            senders=self.senders.cuda() if self.senders is not None else None,
+            globals=self.globals.cuda() if self.globals is not None else None,
+            n_node=self.n_node.cuda() if self.n_node is not None else None,
+            n_edge=self.n_edge.cuda() if self.n_edge is not None else None
+        )
+    
     def _replace(self, **kwargs):
         new_dict = {
             'nodes': self.nodes,
@@ -428,7 +440,7 @@ def main(
     hidden_dims: Tuple[int] = (256,),
     num_message_passing_steps: int = 5,
     batch: int = 32,
-    steps: int = 100,
+    steps: int = 0,
     weight_decay: float = 0,
     opt: List[str] = typer.Option(["ForeachSOAP"], help="Optimizers to use"),
     win_condition_multiplier: float = 1.0,
@@ -437,6 +449,11 @@ def main(
     activation_fn_name: str = "relu",
     dropout_rate: float = 0.1,
     num_outputs: int = 128,
+    estimate_condition_number: bool = False,
+    test_loader: bool = None,
+    track_variance: bool = False,
+    runtime_limit: int = 3600 * 24,
+    step_hint: int = 67000
 ):
     """
     OGBG-MolPCBA benchmark using algoperf GNN implementation.
@@ -547,9 +564,11 @@ def main(
         failure_threshold=10,
         base_lr=1e-3,
         trials=trials,
-        estimate_condition_number=False,
-        test_loader=None,
-        track_variance=True,
+        estimate_condition_number=estimate_condition_number,
+        test_loader=test_loader,
+        track_variance=track_variance,
+        runtime_limit=runtime_limit,
+        step_hint=step_hint
     )
 
 if __name__ == "__main__":

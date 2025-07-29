@@ -712,7 +712,7 @@ class AutoSampler(BaseSampler):
     ) -> None:
         assert constraints_func is None
         if samplers is None:
-            samplers = ((0, init_hebo), (100, init_nsgaii))
+            samplers = ((0, init_halton), (100, init_nsgaii))
         self.sampler_indices = np.sort(np.array([x[0] for x in samplers], dtype=np.int32))
         self.samplers = [x[1] for x in sorted(samplers, key=lambda x: x[0])]
         self.search_space = search_space
@@ -802,3 +802,569 @@ class AutoSampler(BaseSampler):
     ) -> None:
         assert state in [TrialState.COMPLETE, TrialState.FAIL, TrialState.PRUNED]
         self._sampler.after_trial(study, trial, state, values)
+
+
+"""Hyperparameter sweeps with Halton sequences of quasi-random numbers.
+Based off the algorithms described in https://arxiv.org/abs/1706.03200. Inspired
+by the code in
+https://github.com/google/uncertainty-baselines/blob/master/uncertainty_baselines/halton.py
+written by the same authors.
+"""
+import collections
+import functools
+import itertools
+import math
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple, Union
+import numpy as np
+from numpy import random
+from optuna.samplers import BaseSampler
+from optuna.distributions import BaseDistribution, FloatDistribution, IntDistribution, CategoricalDistribution
+from optuna.trial import FrozenTrial
+from optuna.study import Study
+
+_SweepSequence = List[Dict[str, Any]]
+_GeneratorFn = Callable[[float], Tuple[str, float]]
+
+def generate_primes(n: int) -> List[int]:
+    """Generate primes less than `n` (except 2) using the Sieve of Sundaram."""
+    half_m1 = int((n - 2) / 2)
+    sieve = [0] * (half_m1 + 1)
+    for outer in range(1, half_m1 + 1):
+        inner = outer
+        while outer + inner + 2 * outer * inner <= half_m1:
+            sieve[outer + inner + (2 * outer * inner)] = 1
+            inner += 1
+    return [2 * i + 1 for i in range(1, half_m1 + 1) if sieve[i] == 0]
+
+def _is_prime(n: int) -> bool:
+    """Check if `n` is a prime number."""
+    if n < 2:
+        return False
+    return all(n % i != 0 for i in range(2, int(n**0.5) + 1))
+
+def _generate_dim(num_samples: int,
+                  base: int,
+                  per_dim_shift: bool,
+                  shuffled_seed_sequence: List[int]) -> List[float]:
+    """Generate `num_samples` from a Van der Corput sequence with base `base`.
+    Args:
+        num_samples: int, the number of samples to generate.
+        base: int, the base for the Van der Corput sequence. Must be prime.
+        per_dim_shift: boolean, if true then each dim in the sequence is shifted by
+            a random float (and then passed through fmod(n, 1.0) to keep in the range
+            [0, 1)).
+        shuffled_seed_sequence: An optional list of length `base`, used as the input
+            sequence to generate samples. Useful for deterministic testing.
+    Returns:
+        A shuffled Van der Corput sequence of length `num_samples`, and optionally a
+        shift added to each dimension.
+    Raises:
+        ValueError: if `base` is negative or not prime.
+    """
+    if base < 0 or not _is_prime(base):
+        raise ValueError('Each Van der Corput sequence requires a prime `base`, '
+                         f'received {base}.')
+    rng = random.RandomState(base)
+    if shuffled_seed_sequence is None:
+        shuffled_seed_sequence = list(range(1, base))
+        # np.random.RandomState uses MT19937 (see
+        # https://numpy.org/devdocs/reference/random/legacy.html#numpy.random.RandomState).
+        rng.shuffle(shuffled_seed_sequence)
+        shuffled_seed_sequence = [0] + shuffled_seed_sequence
+    
+    # Optionally generate a random float in the range [0, 1) to shift this
+    # dimension by.
+    dim_shift = rng.random_sample() if per_dim_shift else None
+    dim_sequence = []
+    for i in range(1, num_samples + 1):
+        num = 0.
+        denominator = base
+        temp_i = i
+        while temp_i:
+            num += shuffled_seed_sequence[temp_i % base] / denominator
+            denominator *= base
+            temp_i //= base
+        if per_dim_shift:
+            num = math.fmod(num + dim_shift, 1.0)
+        dim_sequence.append(num)
+    return dim_sequence
+
+Matrix = List[List[int]]
+
+def generate_sequence(num_samples: int,
+                      num_dims: int,
+                      skip: int = 100,
+                      per_dim_shift: bool = True,
+                      shuffle_sequence: bool = True,
+                      primes: Sequence[int] = None,
+                      shuffled_seed_sequence: Matrix = None) -> Matrix:
+    """Generate `num_samples` from a Halton sequence of dimension `num_dims`.
+    Each dimension is generated independently from a shuffled Van der Corput
+    sequence with a different base prime, and an optional shift added. The
+    generated points are, by default, shuffled before returning.
+    Args:
+        num_samples: int, the number of samples to generate.
+        num_dims: int, the number of dimensions per generated sample.
+        skip: non-negative int, if positive then a sequence is generated and the
+            first `skip` samples are discarded in order to avoid unwanted
+            correlations.
+        per_dim_shift: boolean, if true then each dim in the sequence is shifted by
+            a random float (and then passed through fmod(n, 1.0) to keep in the range
+            [0, 1)).
+        shuffle_sequence: boolean, if true then shuffle the sequence before
+            returning.
+        primes: An optional sequence (of length `num_dims`) of prime numbers to use
+            as the base for the Van der Corput sequence for each dimension. Useful for
+            deterministic testing.
+        shuffled_seed_sequence: An optional list of length `num_dims`, with each
+            element being a sequence of length `primes[d]`, used as the input sequence
+            to the Van der Corput sequence for each dimension. Useful for
+            deterministic testing.
+    Returns:
+        A shuffled Halton sequence of length `num_samples`, where each sample has
+        `num_dims` dimensions, and optionally a shift added to each dimension.
+    Raises:
+        ValueError: if `skip` is negative.
+        ValueError: if `primes` is provided and not of length `num_dims`.
+        ValueError: if `shuffled_seed_sequence` is provided and not of length
+            `num_dims`.
+        ValueError: if `shuffled_seed_sequence[d]` is provided and not of length
+            `primes[d]` for any d in range(num_dims).
+    """
+    if skip < 0:
+        raise ValueError(f'Skip must be non-negative, received: {skip}.')
+    if primes is not None and len(primes) != num_dims:
+        raise ValueError(
+            'If passing in a sequence of primes it must be the same length as '
+            f'num_dims={num_dims}, received {primes} (len {len(primes)}).')
+    if shuffled_seed_sequence is not None:
+        if len(shuffled_seed_sequence) != num_dims:
+            raise ValueError(
+                'If passing in `shuffled_seed_sequence` it must be the same length '
+                f'as num_dims={num_dims}, received {shuffled_seed_sequence} '
+                f'(len {len(shuffled_seed_sequence)}).')
+        for d in range(num_dims):
+            if len(shuffled_seed_sequence[d]) != primes[d]:
+                raise ValueError(
+                    'If passing in `shuffled_seed_sequence` it must have element `{d}` '
+                    'be a sequence of length `primes[{d}]`={expected}, received '
+                    '{actual} (len {length})'.format(
+                        d=d,
+                        expected=primes[d],
+                        actual=shuffled_seed_sequence[d],
+                        length=len(shuffled_seed_sequence[d])))
+    
+    if primes is None:
+        primes = []
+        prime_attempts = 1
+        while len(primes) < num_dims + 1:
+            primes = generate_primes(1000 * prime_attempts)
+            prime_attempts += 1
+        primes = primes[-num_dims - 1:-1]
+    
+    # Skip the first `skip` points in the sequence because they can have unwanted
+    # correlations.
+    num_samples += skip
+    halton_sequence = []
+    for d in range(num_dims):
+        if shuffled_seed_sequence is None:
+            dim_shuffled_seed_sequence = None
+        else:
+            dim_shuffled_seed_sequence = shuffled_seed_sequence[d]
+        dim_sequence = _generate_dim(
+            num_samples=num_samples,
+            base=primes[d],
+            shuffled_seed_sequence=dim_shuffled_seed_sequence,
+            per_dim_shift=per_dim_shift)
+        dim_sequence = dim_sequence[skip:]
+        halton_sequence.append(dim_sequence)
+    
+    # Transpose the 2-D list to be shape [num_samples, num_dims].
+    halton_sequence = list(zip(*halton_sequence))
+    
+    # Shuffle the sequence.
+    if shuffle_sequence:
+        random.shuffle(halton_sequence)
+    
+    return halton_sequence
+
+def _generate_double_point(name: str,
+                           min_val: float,
+                           max_val: float,
+                           scaling: str,
+                           halton_point: float) -> Tuple[str, float]:
+    """Generate a float hyperparameter value from a Halton sequence point."""
+    if scaling not in ['linear', 'log']:
+        raise ValueError(
+            'Only log or linear scaling is supported for floating point '
+            f'parameters. Received {scaling}.')
+    if scaling == 'log':
+        # To transform from [0, 1] to [min_val, max_val] on a log scale we do:
+        # min_val * exp(x * log(max_val / min_val)).
+        rescaled_value = (
+            min_val * math.exp(halton_point * math.log(max_val / min_val)))
+    else:
+        rescaled_value = halton_point * (max_val - min_val) + min_val
+    return name, rescaled_value
+
+def _generate_discrete_point(name: str,
+                             feasible_points: Sequence[Any],
+                             halton_point: float) -> Any:
+    """Generate a discrete hyperparameter value from a Halton sequence point."""
+    index = int(math.floor(halton_point * len(feasible_points)))
+    # Ensure index is within bounds
+    index = min(index, len(feasible_points) - 1)
+    return name, feasible_points[index]
+
+_DiscretePoints = collections.namedtuple('_DiscretePoints', 'feasible_points')
+
+def discrete(feasible_points: Sequence[Any]) -> _DiscretePoints:
+    return _DiscretePoints(feasible_points)
+
+def interval(start: Union[int, float], end: Union[int, float]) -> Tuple[Union[int, float], Union[int, float]]:
+    return start, end
+
+def loguniform(name: str, range_endpoints: Tuple[Union[int, float], Union[int, float]]) -> _GeneratorFn:
+    min_val, max_val = range_endpoints
+    return functools.partial(_generate_double_point,
+                             name,
+                             float(min_val),
+                             float(max_val),
+                             'log')
+
+def uniform(name: str, search_points: Union[_DiscretePoints, Tuple[Union[int, float], Union[int, float]]]) -> _GeneratorFn:
+    if isinstance(search_points, _DiscretePoints):
+        return functools.partial(_generate_discrete_point,
+                                 name,
+                                 search_points.feasible_points)
+    min_val, max_val = search_points
+    return functools.partial(_generate_double_point,
+                             name,
+                             float(min_val),
+                             float(max_val),
+                             'linear')
+
+def product(sweeps: Sequence[_SweepSequence]) -> _SweepSequence:
+    """Cartesian product of a list of hyperparameter generators."""
+    # A List[Dict] of hyperparameter names to sweep values.
+    hyperparameter_sweep = []
+    for hyperparameter_index in range(len(sweeps)):
+        hyperparameter_sweep.append([])
+        # Keep iterating until the iterator in sweep() ends.
+        sweep_i = sweeps[hyperparameter_index]
+        for point_index in range(len(sweep_i)):
+            hyperparameter_name, value = list(sweep_i[point_index].items())[0]
+            hyperparameter_sweep[-1].append((hyperparameter_name, value))
+    return list(map(dict, itertools.product(*hyperparameter_sweep)))
+
+def sweep(name, feasible_points: Sequence[Any]) -> _SweepSequence:
+    return [{name: x} for x in feasible_points.feasible_points]
+
+def zipit(generator_fns_or_sweeps: Sequence[Union[_GeneratorFn, _SweepSequence]],
+          length: int) -> _SweepSequence:
+    """Zip together a list of hyperparameter generators.
+    Args:
+        generator_fns_or_sweeps: A sequence of either:
+            - Generator functions that accept a Halton sequence point and return a
+            quasi-ranom sample, such as those returned by halton.uniform() or
+            halton.loguniform()
+            - Lists of dicts with one key/value such as those returned by
+            halton.sweep()
+            We need to support both of these (instead of having halton.sweep() return
+            a list of generator functions) so that halton.sweep() can be used directly
+            as a list.
+        length: the number of hyperparameter points to generate. If any of the
+            elements in generator_fns_or_sweeps are sweep lists, and their length is
+            less than `length`, the sweep generation will be terminated and will be
+            the same length as the shortest sweep sequence.
+    Returns:
+        A list of dictionaries, one for each trial, with a key for each unique
+        hyperparameter name from generator_fns_or_sweeps.
+    """
+    halton_sequence = generate_sequence(
+        num_samples=length, num_dims=len(generator_fns_or_sweeps))
+    
+    # A List[Dict] of hyperparameter names to sweep values.
+    hyperparameter_sweep = []
+    for trial_index in range(length):
+        hyperparameter_sweep.append({})
+        for hyperparameter_index in range(len(generator_fns_or_sweeps)):
+            halton_point = halton_sequence[trial_index][hyperparameter_index]
+            if callable(generator_fns_or_sweeps[hyperparameter_index]):
+                generator_fn = generator_fns_or_sweeps[hyperparameter_index]
+                hyperparameter_name, value = generator_fn(halton_point)
+            else:
+                sweep_list = generator_fns_or_sweeps[hyperparameter_index]
+                if trial_index >= len(sweep_list):
+                    break
+                hyperparameter_point = sweep_list[trial_index]
+                hyperparameter_name, value = list(hyperparameter_point.items())[0]
+            hyperparameter_sweep[trial_index][hyperparameter_name] = value
+    return hyperparameter_sweep
+
+_DictSearchSpace = Dict[str, Dict[str, Union[str, float, Sequence]]]
+_ListSearchSpace = List[Dict[str, Union[str, float, Sequence]]]
+
+
+def generate_search(search_space: Union[_DictSearchSpace, _ListSearchSpace],
+                    num_trials: int) -> List[collections.namedtuple]:
+    """Generate a random search with the given bounds and scaling.
+    Args:
+        search_space: A dict where the keys are the hyperparameter names, and the
+            values are a dict of:
+                - {"min": x, "max": y, "scaling": z} where x and y are floats and z is
+                one of "linear" or "log"
+                - {"feasible_points": [...]} for discrete hyperparameters.
+            Alternatively, it can be a list of dict where keys are the hyperparameter
+            names, and the values are hyperparameters.
+        num_trials: the number of hyperparameter points to generate.
+    Returns:
+        A list of length `num_trials` of namedtuples, each of which has attributes
+        corresponding to the given hyperparameters, and values randomly sampled.
+    """
+    if isinstance(search_space, dict):
+        all_hyperparameter_names = list(search_space.keys())
+    elif isinstance(search_space, list):
+        assert len(search_space) > 0
+        all_hyperparameter_names = list(search_space[0].keys())
+    else:
+        raise AttributeError('tuning_search_space should either be a dict or list.')
+    
+    named_tuple_class = collections.namedtuple('Hyperparameters',
+                                               all_hyperparameter_names)
+    
+    if isinstance(search_space, dict):
+        hyperparameter_generators = []
+        for name, space in search_space.items():
+            if 'feasible_points' in space:  # Discrete search space.
+                generator_fn = uniform(name, discrete(space['feasible_points']))
+            else:  # Continuous space.
+                if space['scaling'] == 'log':
+                    generator_fn = loguniform(name, interval(space['min'], space['max']))
+                else:
+                    generator_fn = uniform(name, interval(space['min'], space['max']))
+            hyperparameter_generators.append(generator_fn)
+        return [
+            named_tuple_class(**p)
+            for p in zipit(hyperparameter_generators, num_trials)
+        ]
+    else:
+        hyperparameters = []
+        updated_num_trials = min(num_trials, len(search_space))
+        if num_trials != len(search_space):
+            print(f'num_trials was set to {num_trials}, but '
+                  f'{len(search_space)} trial(s) found in the search space. '
+                  f'Updating num_trials to {updated_num_trials}.')
+        for trial in search_space:
+            hyperparameters.append(named_tuple_class(**trial))
+        return hyperparameters[:updated_num_trials]
+
+
+class HaltonSampler(BaseSampler):
+    """
+    High-quality Halton quasi-random sampler using Google's implementation
+    from "Critical Hyper-Parameters: No Random, No Cry"
+    """
+    
+    def __init__(
+        self,
+        search_space: Dict[str, BaseDistribution],
+        *,
+        seed: Optional[int] = None,
+        skip: int = 100,
+        per_dim_shift: bool = True,
+        shuffle_sequence: bool = True,
+        batch_size: int = 1000,
+    ) -> None:
+        self.search_space = search_space
+        self._seed = seed
+        self._skip = skip
+        self._per_dim_shift = per_dim_shift
+        self._shuffle_sequence = shuffle_sequence
+        self._batch_size = batch_size
+        
+        # Pre-generate parameter configurations
+        self._param_configs = []
+        self._current_batch = []
+        self._batch_index = 0
+        self._total_generated = 0
+        self._initialize_generators()
+    
+    def _initialize_generators(self) -> None:
+        """Convert Optuna distributions to Halton generators."""
+        if not self.search_space:
+            return
+            
+        # Filter valid parameters
+        valid_params = {name: dist for name, dist in self.search_space.items() 
+                       if not dist.single()}
+        
+        if not valid_params:
+            return
+            
+        generators = []
+        for name, dist in valid_params.items():
+            if isinstance(dist, FloatDistribution):
+                if dist.log:
+                    gen = loguniform(name, interval(dist.low, dist.high))
+                else:
+                    gen = uniform(name, interval(dist.low, dist.high))
+            elif isinstance(dist, IntDistribution):
+                if dist.log:
+                    gen = loguniform(name, interval(dist.low, dist.high))
+                else:
+                    # For integers, create discrete points
+                    points = list(range(dist.low, dist.high + 1, dist.step or 1))
+                    gen = uniform(name, discrete(points))
+            elif isinstance(dist, CategoricalDistribution):
+                gen = uniform(name, discrete(dist.choices))
+            else:
+                continue
+                
+            generators.append(gen)
+        
+        self._generators = generators
+        self._generate_next_batch()
+    
+    def _generate_next_batch(self) -> None:
+        """Generate next batch of samples."""
+        if not self._generators:
+            return
+            
+        # Set random seed for reproducibility
+        if self._seed is not None:
+            original_state = random.get_state()
+            random.seed(self._seed + self._total_generated // self._batch_size)
+        
+        try:
+            batch = zipit(self._generators, self._batch_size)
+            self._current_batch = batch
+            self._batch_index = 0
+            self._total_generated += len(batch)
+        finally:
+            if self._seed is not None:
+                random.set_state(original_state)
+    
+    def _get_next_sample(self) -> Dict[str, Any]:
+        """Get next sample from current batch."""
+        if self._batch_index >= len(self._current_batch):
+            self._generate_next_batch()
+        
+        if not self._current_batch:
+            return {}
+            
+        sample = self._current_batch[self._batch_index]
+        self._batch_index += 1
+        
+        # Post-process for Optuna compatibility
+        processed_sample = {}
+        for name, value in sample.items():
+            if name not in self.search_space:
+                continue
+                
+            dist = self.search_space[name]
+            
+            if isinstance(dist, IntDistribution):
+                if isinstance(value, float):
+                    # Convert float to int and apply constraints
+                    if dist.log:
+                        value = int(round(value))
+                    else:
+                        value = int(round(value))
+                    value = max(dist.low, min(dist.high, value))
+                processed_sample[name] = int(value)
+            elif isinstance(dist, FloatDistribution):
+                if dist.step is not None:
+                    # Apply step constraint
+                    steps = round((value - dist.low) / dist.step)
+                    value = dist.low + steps * dist.step
+                value = max(dist.low, min(dist.high, value))
+                processed_sample[name] = float(value)
+            else:
+                processed_sample[name] = value
+                
+        return processed_sample
+    
+    def infer_relative_search_space(
+        self, study: Study, trial: FrozenTrial
+    ) -> Dict[str, BaseDistribution]:
+        return self.search_space
+    
+    def sample_relative(
+        self, study: Study, trial: FrozenTrial, search_space: Dict[str, BaseDistribution]
+    ) -> Dict[str, Any]:
+        return self._get_next_sample()
+    
+    def sample_independent(
+        self,
+        study: Study,
+        trial: FrozenTrial,
+        param_name: str,
+        param_distribution: BaseDistribution,
+    ) -> Any:
+        """Fallback to random sampling for independent parameters."""
+        if self._seed is not None:
+            rng = np.random.RandomState(self._seed + trial.number)
+        else:
+            rng = np.random.RandomState()
+        
+        if isinstance(param_distribution, FloatDistribution):
+            if param_distribution.log:
+                return float(np.exp(rng.uniform(
+                    np.log(param_distribution.low), 
+                    np.log(param_distribution.high)
+                )))
+            else:
+                value = rng.uniform(param_distribution.low, param_distribution.high)
+                if param_distribution.step is not None:
+                    value = param_distribution.low + np.round(
+                        (value - param_distribution.low) / param_distribution.step
+                    ) * param_distribution.step
+                return float(np.clip(value, param_distribution.low, param_distribution.high))
+        
+        elif isinstance(param_distribution, IntDistribution):
+            if param_distribution.log:
+                return int(np.exp(rng.uniform(
+                    np.log(param_distribution.low), 
+                    np.log(param_distribution.high + 1)
+                )))
+            else:
+                return int(rng.randint(param_distribution.low, param_distribution.high + 1))
+        
+        elif isinstance(param_distribution, CategoricalDistribution):
+            return rng.choice(param_distribution.choices)
+        
+        raise NotImplementedError(f"Unsupported distribution: {param_distribution}")
+
+    def reseed_rng(self) -> None:
+        """Reseed the random number generator."""
+        if self._seed is not None:
+            self._seed = np.random.randint(0, 2**31 - 1)
+            self._initialize_generators()
+
+    def before_trial(self, study: Study, trial: FrozenTrial) -> None:
+        """Called before each trial starts."""
+        pass
+
+    def after_trial(
+        self,
+        study: Study,
+        trial: FrozenTrial,
+        state,
+        values: Optional[Sequence[float]],
+    ) -> None:
+        """Called after each trial completes."""
+        pass
+
+
+# Integration function for AutoSampler
+def init_halton(study, seed, trials, search_space):
+    """Initialize Halton sampler for use with AutoSampler."""
+    return HaltonSampler(
+        search_space=search_space,
+        seed=seed,
+        skip=100,  # Important for quality - skips first 100 correlated points
+        per_dim_shift=True,  # Improves uniformity
+        shuffle_sequence=True,  # Reduces correlations
+        batch_size=1000  # Generate samples in batches for efficiency
+    )

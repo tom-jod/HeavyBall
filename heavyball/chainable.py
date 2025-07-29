@@ -1334,7 +1334,7 @@ def create_step_schedule_fn(total_steps, decay_points=[0.5, 0.75], gamma=0.1):
 def create_warmup_cosine_schedule_fn(total_steps, warmup_ratio=0.05, min_lr_ratio=0.0):
     """Creates a function that returns LR multiplier for linear warmup + cosine annealing schedule"""
     warmup_steps = int(warmup_ratio * total_steps)
-    
+ 
     def get_lr_multiplier(step):
         if step <= warmup_steps:
             # Linear warmup: scale from 0 to 1
@@ -1360,15 +1360,15 @@ class ChainOpt(utils.StatefulOptimizer):
         
         # Initialize step decay function with defaults
         # Get total_steps from defaults, use a reasonable default if not provided
-        total_steps = defaults.get("total_steps", 100000)
+        self.total_steps = defaults.get("total_steps", 100000)
         decay_points = defaults.get("decay_points", [0.5, 0.75])
         decay_gamma = defaults.get("decay_gamma", 0.1)
-        warmup_ratio = defaults.get("warmup_ratio", 0.05)  # 5% warmup by default
-        min_lr_ratio = defaults.get("min_lr_ratio", 0.0)   # Minimum LR as ratio of base LR
+        self.warmup_ratio = defaults.get("warmup_ratio", 0.05)  # 5% warmup by default
+        self.min_lr_ratio = defaults.get("min_lr_ratio", 0.0)   # Minimum LR as ratio of base LR
         
         # Create the warmup + cosine schedule function
         self._lr_schedule_fn = create_warmup_cosine_schedule_fn(
-            total_steps, warmup_ratio, min_lr_ratio
+            self.total_steps, self.warmup_ratio, self.min_lr_ratio
         )
         #self._step_decay_fn = create_step_schedule_fn(total_steps, decay_points, decay_gamma)
         # Keep existing scheduler initialization for backward compatibility
@@ -1380,6 +1380,7 @@ class ChainOpt(utils.StatefulOptimizer):
         self._param_to_optimizer_map = {}  # Track which optimizer handles which param
 
     def _step(self, group):
+        
         if "base_lr" not in group:
             group["base_lr"] = group["lr"]
             
@@ -1422,35 +1423,39 @@ class ChainOpt(utils.StatefulOptimizer):
         
         # Handle learning rate scheduling
         current_lr = group["base_lr"]
+        external_optimizer_type = group.get("external_optimizer", None)
         
         # Check if we should use the new warmup + cosine schedule
         use_warmup_cosine = group.get("use_warmup_cosine", True)  # Default to True
-        """
+        
         if use_warmup_cosine:
+            
             # Use warmup + cosine annealing schedule
             lr_multiplier = self._lr_schedule_fn(step)
             current_lr = group["base_lr"] * lr_multiplier
         else:
             # Fall back to existing logic for backward compatibility
             # Apply warmup if specified
-            warmup_steps = group.get("warmup_steps", 0)
+            warmup_steps = self.warmup_ratio * self.total_steps
+            
             if warmup_steps > 0 and step <= warmup_steps:
                 warmup_factor = step / warmup_steps
                 current_lr = group["base_lr"] * warmup_factor
             
             # Apply other LR schedules if explicitly enabled
             if group.get("lr_schedule", False):
+                
                 self._initialize_lr_scheduler()
                 if self.lr_scheduler is not None:
                     self.lr_scheduler.step()
                     current_lr = self.lr_scheduler.get_last_lr()[0]
-        """
+        
         if step%1000==0:
             print(current_lr)    
         group["lr"] = current_lr
         group["prev_lr"] = current_lr
         # Apply optimization step
-        external_optimizer_type = group.get("external_optimizer", None)
+        
         
         if external_optimizer_type is not None:
             # For external optimizers, we need to extract the actual parameter tensors

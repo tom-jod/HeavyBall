@@ -13,7 +13,7 @@ import datetime
 
 app = typer.Typer()
 
-def run_single_benchmark(script_path, optimizer, steps, trials, seed, output_dir):
+def run_single_benchmark(script_path, optimizer, steps, trials, seed, output_dir, runtime_limit, step_hint):
     """Run a single benchmark instance and capture output."""
     print(f"running {optimizer}")
     # Create a unique output file for this run
@@ -27,6 +27,8 @@ def run_single_benchmark(script_path, optimizer, steps, trials, seed, output_dir
         "--opt", optimizer,
         "--steps", str(steps),
         "--trials", str(trials),
+        "--runtime-limit", str(runtime_limit),
+        "--step-hint", str(step_hint)
     ]
     
     print(f"Running: {' '.join(cmd)}")
@@ -38,7 +40,7 @@ def run_single_benchmark(script_path, optimizer, steps, trials, seed, output_dir
             capture_output=True,
             text=True,
             timeout=24*3600,  # 24 hour timeout
-            env={**os.environ, "CUDA_VISIBLE_DEVICES": "2"}  # Ensure single GPU
+            env={**os.environ, "CUDA_VISIBLE_DEVICES": "1"}  # Ensure single GPU
         )
         
         # Save the full output
@@ -226,7 +228,6 @@ def aggregate_and_plot(results, benchmark_name, output_dir):
     
     plt.xlabel('Iteration (x1000)')
     plt.ylabel('Loss')
-    plt.title(f'{benchmark_name} - Loss Trajectories')
     plt.legend()
     plt.grid(True, alpha=0.3)
     plt.yscale('log')  # Often helpful for loss curves
@@ -261,8 +262,7 @@ def aggregate_and_plot(results, benchmark_name, output_dir):
             plt.fill_between(x, mean_traj - se_traj, mean_traj + se_traj, alpha=0.3)
     
     plt.xlabel('Iteration')
-    plt.ylabel('Loss')
-    plt.title(f'{benchmark_name} - Gradient Variances')
+    plt.ylabel('Gradient Variance')
     plt.legend()
     plt.grid(True, alpha=0.3)
     plt.yscale('log')  # Often helpful for loss curves
@@ -298,11 +298,11 @@ def aggregate_and_plot(results, benchmark_name, output_dir):
             plt.fill_between(x, mean_acc - se_acc, mean_acc + se_acc, alpha=0.3)
     
     plt.xlabel('Epoch')
-    plt.ylabel('Test Accuracy (%)')
-    plt.title(f'{benchmark_name} - Test Accuracy')
+    plt.ylabel('Test loss')
     plt.legend()
     plt.grid(True, alpha=0.3)
-    plt.savefig(f"{output_dir}/{benchmark_name}_test_accuracy.png", dpi=300, bbox_inches='tight')
+    plt.yscale('log')
+    plt.savefig(f"{output_dir}/{benchmark_name}_test_loss.png", dpi=300, bbox_inches='tight')
     plt.close()
     
     # Save detailed results
@@ -317,6 +317,8 @@ def main(
     steps: int = typer.Option(1000, help="Steps per run"),
     trials: int = typer.Option(100, help="Optuna trials per run"),
     output_dir: str = typer.Option("comparison_results", help="Output directory"),
+    runtime_limit: int = typer.Option(3600 * 24, help="Timeout in seconds"),
+    step_hint: int = typer.Option(1000, help="Step hint per run"),
 ):
     """
     Run optimizer comparison using subprocess calls.
@@ -353,7 +355,7 @@ def main(
             
             # Run the benchmark
             result = run_single_benchmark(
-                benchmark_path, optimizer, steps, trials, seed, output_dir
+                benchmark_path, optimizer, steps, trials, seed, output_dir, runtime_limit, step_hint
             )
             
             all_results.append(result)

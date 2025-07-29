@@ -134,13 +134,18 @@ def main(
     dtype: List[str] = typer.Option(["float32"], help="Data type to use"),
     hidden_size: int = 128,
     batch: int = 50,
-    steps: int = 1000,
+    steps: int = 0,
     weight_decay: float = 0,
     opt: List[str] = typer.Option(["ForeachSOAP"], help="Optimizers to use"),
     win_condition_multiplier: float = 1.0,
     trials: int = 10,
     seq_length: int = 50,
-):
+    estimate_condition_number: bool = False,
+    test_loader: bool = None,
+    track_variance: bool = False,
+    runtime_limit: int = 3600 * 24,
+    step_hint: int = 67000
+):  
     dtype = [getattr(torch, d) for d in dtype]
     
     # Download and prepare data
@@ -229,9 +234,11 @@ def main(
         failure_threshold=10,
         base_lr=1e-3,
         trials=trials,
-        estimate_condition_number = False,
+        estimate_condition_number=estimate_condition_number,
         test_loader=test_loader,
-        track_variance=True
+        track_variance=track_variance,
+        runtime_limit=runtime_limit,
+        step_hint=step_hint
     )
 
 if __name__ == "__main__":
