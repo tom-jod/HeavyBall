@@ -13,6 +13,11 @@ import datetime
 
 app = typer.Typer()
 
+def ensure_str(data):
+    if data is None:
+        return ""
+    return data.decode() if isinstance(data, bytes) else data
+
 def run_single_benchmark(script_path, optimizer, steps, trials, seed, output_dir, runtime_limit, step_hint):
     """Run a single benchmark instance and capture output."""
     print(f"running {optimizer}")
@@ -39,8 +44,9 @@ def run_single_benchmark(script_path, optimizer, steps, trials, seed, output_dir
             cmd,
             capture_output=True,
             text=True,
-            timeout=24*3600,  # 24 hour timeout
-            env={**os.environ, "CUDA_VISIBLE_DEVICES": "1"}  # Ensure single GPU
+            #timeout=72*3600,  # 24 hour timeout
+            timeout=60,  # 24 hour timeout
+            env={**os.environ, "CUDA_VISIBLE_DEVICES": "3"}  # Ensure single GPU
         )
         
         # Save the full output
@@ -62,18 +68,23 @@ def run_single_benchmark(script_path, optimizer, steps, trials, seed, output_dir
         })
         
         return parsed_result
-        
-    except subprocess.TimeoutExpired:
+    except subprocess.TimeoutExpired as e:
+        with open(log_file, 'w') as f:
+            f.write("STDOUT:\n")
+            f.write(ensure_str(e.stdout))
+            f.write("\nSTDERR:\n")
+            f.write(ensure_str(e.stderr))
         return {
-            "optimizer": optimizer,
-            "seed": seed,
-            "steps": steps,
-            "trials": trials,
-            "success": False,
-            "error": "Timeout",
-            "log_file": log_file
-        }
+            "status": "timeout",
+            "log_file": log_file,
+        }    
+  
     except Exception as e:
+        with open(log_file, 'w') as f:
+            f.write("STDOUT:\n")
+            f.write(result.stdout)
+            f.write("\nSTDERR:\n")
+            f.write(result.stderr)
         return {
             "optimizer": optimizer,
             "seed": seed,

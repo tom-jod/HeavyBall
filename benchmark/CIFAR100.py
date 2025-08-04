@@ -143,7 +143,7 @@ def main(
         model,
         data,
         F.cross_entropy,
-        loss_win_condition(win_condition_multiplier * 0.0),  # Adjusted for CIFAR-10 difficulty
+        loss_win_condition(win_condition_multiplier * 0.5576767921447754),  # Adjusted for CIFAR-10 difficulty
         steps,
         opt[0],
         dtype[0],

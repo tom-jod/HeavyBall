@@ -453,7 +453,7 @@ def main(
     test_loader: bool = None,
     track_variance: bool = False,
     runtime_limit: int = 3600 * 24,
-    step_hint: int = 67000
+    step_hint: int = 71000
 ):
     """
     OGBG-MolPCBA benchmark using algoperf GNN implementation.

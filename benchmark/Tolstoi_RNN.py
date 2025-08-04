@@ -221,7 +221,7 @@ def main(
         model,
         data,
         loss_fn,
-        loss_win_condition(win_condition_multiplier * 0.0),  # Reasonable loss target for char-level modeling
+        loss_win_condition(win_condition_multiplier * 1.9673629999160767),  # Reasonable loss target for char-level modeling
         steps,
         opt[0],
         dtype[0],

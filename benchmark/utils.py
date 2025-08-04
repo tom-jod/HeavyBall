@@ -416,10 +416,11 @@ class Objective:
         self.condition_numbers = []
         self.current_losses = []
         prev_model_params = None
-        step_counter = 0
+        self.step_counter = 0
         timeout_reached = False
         self.start_time = time.time()
         self.end_time = self.runtime_limit + time.time() # was 3600 * 4
+        self._last_loss = float('inf')
         # iterate through each epoch
         for i in range(self.steps // self.group):
            
@@ -432,7 +433,7 @@ class Objective:
                 if self.win_condition(test_accuracy):
                     runtime = time.time() - self.start_time
                     print({"WIN"})
-                    return validator.ema_states.min().item(), self.m, torch_hist[-1].item(), self.current_losses, self.test_accuracies, self.grad_variances, self.condition_numbers, step_counter, runtime
+                    return validator.ema_states.min().item(), self.m, torch_hist[-1].item(), self.current_losses, self.test_accuracies, self.grad_variances, self.condition_numbers, self.step_counter, runtime
                 
             if self.estimate_condition_number: 
                 with torch.backends.cudnn.flags(enabled=False):
@@ -449,7 +450,7 @@ class Objective:
                 o.train()
             
             for j in range(self.group):
-                step_counter += 1
+                self.step_counter += 1
         
                 if self.requires_prev_minibatch(o):
                     print("HERE")
@@ -549,7 +550,7 @@ class Objective:
         # Get current memory usage before returning
         self.current_memory_usage = get_gpu_memory_usage()
         runtime = time.time() - self.start_time
-        return validator.ema_states.min().item(), self.m, torch_hist[-1].item(), self.current_losses, self.test_accuracies, self.grad_variances, self.condition_numbers, step_counter, runtime
+        return validator.ema_states.min().item(), self.m, torch_hist[-1].item(), self.current_losses, self.test_accuracies, self.grad_variances, self.condition_numbers, self.step_counter, runtime
     
     def objective(self, params):
         self.attempt += 1
@@ -572,6 +573,14 @@ class Objective:
         
         return target
     
+    def reset(self):
+        self._last_loss = None
+        self.test_accuracies = []
+        self.grad_variances = []
+        self.condition_numbers = []
+        self.current_losses = []
+        self.m = None
+
     def get_best(self):
         self.group = 1
         # Modified to return losses with the model
@@ -711,7 +720,8 @@ def trial(
         nonlocal did_win
         win_state, out = win_condition(*args)
         did_win |= win_state
-        return did_win, out
+        #return did_win, out
+        return win_state, out
     
     obj = Objective(
         failure_threshold,
@@ -825,6 +835,7 @@ def trial(
         all_trial_results = []
         
         def _optuna_objective(trial):
+            did_win = False
             set_seed(0x12312)
             
             # Get tuned parameter values
@@ -891,6 +902,7 @@ def trial(
         all_trial_results = []
         
         def _optuna_objective(trial):
+            did_win = False
             nonlocal hyperparam_counter
             set_seed(0x12312)
             if hyperparam_counter < len(fixed_hyperparams_list):
@@ -964,8 +976,26 @@ def trial(
         all_trial_results = []
         
         def _optuna_objective(trial):
+            did_win = False
             set_seed(0x12312)
-            
+            obj = Objective(
+                failure_threshold,
+                model,
+                opt,
+                steps,
+                group,
+                data,
+                loss_fn,
+                _win_condition,
+                weight_decay,
+                max(trials * warmup_trial_pct, 1 + random_trials),
+                estimate_condition_number,
+                test_loader,
+                track_variance,
+                runtime_limit,
+                step_hint,
+                **kwargs,
+            )
             # Get tuned parameter values
             tuned_values = []
             for i in tuned_indices:
@@ -1009,7 +1039,7 @@ def trial(
     # After all trials complete, find the best one
     if all_trial_results:
         #best_trial = min(all_trial_results, key=lambda x: x['losses'][-1])
-        best_trial = min(all_trial_results, key=lambda x: x['loss'])
+        best_trial = min(all_trial_results, key=lambda x: x['runtime'])
         winning_params = best_trial['params']
         
         # Use the best trial's metrics
@@ -1017,6 +1047,7 @@ def trial(
         final_test_accuracies = best_trial['test_accuracies']
         final_grad_variances = best_trial['grad_variances']
         final_condition_numbers = best_trial['condition_numbers']
+        final_runtime = best_trial['runtime']
         
         print("Successfully found the minimum.")
     else:
@@ -1034,11 +1065,11 @@ def trial(
     end_time = time.time()
     print(all_trial_results)
     print(
-        f"Took: {end_time - start_time} | Attempt: {obj.attempt} | "
+        f"Took: {end_time - start_time} | Trials: {obj.attempt} | "
         f"{opt.__name__}_{winning_params} "
         f"Best Loss: {best_trial['loss'] if all_trial_results else 'N/A'} | "
         f"loss_trajectory: {final_losses} | test_accuracies: {final_test_accuracies} | "
-        f"grad_variances: {final_grad_variances} | mean_cond: {mean_cond} | std_err_cond: {std_err_cond} | steps_taken: {obj.step_counter}"
+        f"grad_variances: {final_grad_variances} | mean_cond: {mean_cond} | std_err_cond: {std_err_cond} | winning_runtime: {final_runtime} "
     )
     
     loss_trajectory = obj.best_losses

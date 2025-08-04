@@ -1318,11 +1318,14 @@ def create_step_schedule_fn(total_steps, decay_points=[0.5, 0.75], gamma=0.1):
     
     return get_lr_multiplier
 
-def create_step_schedule_fn(total_steps, decay_points=[0.5, 0.75], gamma=0.1):
+def create_step_schedule_fn(total_steps, warmup_ratio=0.05, decay_points=[0.5, 0.75], gamma=0.1):
     """Creates a function that returns LR multiplier for step decay schedule"""
     milestones = [int(p * total_steps) for p in decay_points]
-    
+    warmup_steps = int(warmup_ratio * total_steps)
     def get_lr_multiplier(step):
+        if step <= warmup_steps:
+            # Linear warmup: scale from 0 to 1
+            return step / warmup_steps if warmup_steps > 0 else 1.0
         multiplier = 1.0
         for milestone in milestones:
             if step >= milestone:
@@ -1371,6 +1374,7 @@ class ChainOpt(utils.StatefulOptimizer):
             self.total_steps, self.warmup_ratio, self.min_lr_ratio
         )
         #self._step_decay_fn = create_step_schedule_fn(total_steps, decay_points, decay_gamma)
+        self._lr_schedule_fn = create_step_schedule_fn(self.total_steps, self.warmup_ratio, decay_points, decay_gamma)
         # Keep existing scheduler initialization for backward compatibility
         self.lr_scheduler = None
         self._scheduler_initialized = False
