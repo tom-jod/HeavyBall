@@ -44,9 +44,8 @@ def run_single_benchmark(script_path, optimizer, steps, trials, seed, output_dir
             cmd,
             capture_output=True,
             text=True,
-            #timeout=72*3600,  # 24 hour timeout
-            timeout=60,  # 24 hour timeout
-            env={**os.environ, "CUDA_VISIBLE_DEVICES": "3"}  # Ensure single GPU
+            timeout=72*3600,  # 24 hour timeout
+            env={**os.environ, "CUDA_VISIBLE_DEVICES": "2"}  # Ensure single GPU
         )
         
         # Save the full output
@@ -74,10 +73,17 @@ def run_single_benchmark(script_path, optimizer, steps, trials, seed, output_dir
             f.write(ensure_str(e.stdout))
             f.write("\nSTDERR:\n")
             f.write(ensure_str(e.stderr))
-        return {
-            "status": "timeout",
+
+        parsed_result = parse_benchmark_output(ensure_str(e.stdout), ensure_str(e.stderr))
+        parsed_result.update({
+            "optimizer": optimizer,
+            "seed": seed,
+            "steps": steps,
+            "trials": trials,
             "log_file": log_file,
-        }    
+            "success": False
+        })
+        return parsed_result
   
     except Exception as e:
         with open(log_file, 'w') as f:
@@ -272,7 +278,7 @@ def aggregate_and_plot(results, benchmark_name, output_dir):
             plt.plot(x, mean_traj, label=f"{optimizer} (n={len(truncated)})", linewidth=2)
             plt.fill_between(x, mean_traj - se_traj, mean_traj + se_traj, alpha=0.3)
     
-    plt.xlabel('Iteration')
+    plt.xlabel('Iteration (x1000)')
     plt.ylabel('Gradient Variance')
     plt.legend()
     plt.grid(True, alpha=0.3)
@@ -308,7 +314,7 @@ def aggregate_and_plot(results, benchmark_name, output_dir):
             plt.plot(x, mean_acc, label=f"{optimizer} (n={len(truncated)})", linewidth=2)
             plt.fill_between(x, mean_acc - se_acc, mean_acc + se_acc, alpha=0.3)
     
-    plt.xlabel('Epoch')
+    plt.xlabel('`Steps (x1000)')
     plt.ylabel('Test loss')
     plt.legend()
     plt.grid(True, alpha=0.3)

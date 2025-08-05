@@ -438,12 +438,13 @@ class Objective:
             if self.estimate_condition_number: 
                 with torch.backends.cudnn.flags(enabled=False):
                     #if i % int(self.steps // (self.group*5)) == 0:
-                    self.condition_numbers.append(estimate_condition_number_hvp(self.m, self.data, n_probes=20, n_samples=50, loss_fn=self.loss_fn))
+                    #self.condition_numbers.append(estimate_condition_number_hvp(self.m, self.data, n_probes=20, n_samples=50, loss_fn=self.loss_fn)[0])
+                    self.condition_numbers.append(estimate_condition_number_grid_search(self.m, self.data, loss_fn=self.loss_fn, timout=60))
     
             if self.track_variance:
                 # track variance at every 1000 steps through training
-
-                grad_variance = estimate_minibatch_variance_detailed(self.m, self.data, n_samples=10, loss_fn=self.loss_fn)
+                #grad_variance = estimate_minibatch_variance_detailed(self.m, self.data, n_samples=10, loss_fn=self.loss_fn)[0]
+                grad_variance = estimate_minibatch_variance_grid_search(self.m, self.data, loss_fn=self.loss_fn, timout=60)
                 self.grad_variances.append(grad_variance["gradient_variance"])
             
             if hasattr(o, "train"):
@@ -453,7 +454,6 @@ class Objective:
                 self.step_counter += 1
         
                 if self.requires_prev_minibatch(o):
-                    print("HERE")
                     # Get current batch
                     curr_inp, curr_tgt = self.data()
                     
@@ -650,7 +650,7 @@ def trial(
     depth,
     trials=10,
     failure_threshold=3,
-    group=10,
+    group=1000,
     base_lr: float = 1e-3,
     return_best: bool = False,
     warmup_trial_pct: int = 0.2,
@@ -1145,15 +1145,28 @@ def get_gpu_memory_usage():
     torch.cuda.synchronize()
     return torch.cuda.max_memory_allocated()
 
-def estimate_minibatch_variance_detailed(model, data_fn, n_samples=100, loss_fn=torch.nn.functional.cross_entropy, task_type='auto'):
+def estimate_minibatch_variance_grid_search(model, data_fn, loss_fn=torch.nn.functional.cross_entropy, task_type='auto', timout=3600):
+    n_samples = [5,10,20,50,100,1000]
+    results = []
+
+    for n in n_samples:
+        result, reached_timout = estimate_minibatch_variance_detailed(model, data_fn, n_samples=n, loss_fn=loss_fn, task_type='auto', timout=timout)
+        if reached_timout:
+            return results[-1]
+        else:
+            results.append(result)
+
+    return results[-1]
+
+def estimate_minibatch_variance_detailed(model, data_fn, n_samples=100, loss_fn=torch.nn.functional.cross_entropy, task_type='auto', timout=3600):
     """
     Enhanced minibatch variance estimation that works for both classification and regression
     """
     model.train()
     gradient_samples = []
     loss_samples = []
-
-    
+    reached_timeout = False
+    start_time = time.time()
     for sample_idx in range(n_samples):
         try:
             x, y = data_fn()
@@ -1166,12 +1179,21 @@ def estimate_minibatch_variance_detailed(model, data_fn, n_samples=100, loss_fn=
             flat_grad = torch.cat([g.flatten() for g in grads])
             gradient_samples.append(flat_grad.detach().cpu().numpy())
             loss_samples.append(loss.item())
-            
+
+            if time.time() - start_time > timout:
+                reached_timeout = True
+                raise TimeoutError
+
         except Exception as e:
             print(f"Error in sample {sample_idx}: {e}")
             import traceback
             traceback.print_exc()
             continue
+        except TimeoutError:
+            print(f"Timout Error in sample {sample_idx}")
+            import traceback
+            traceback.print_exc()
+            break
     
     if not gradient_samples:
         return _get_default_metrics(task_type)
@@ -1204,7 +1226,7 @@ def estimate_minibatch_variance_detailed(model, data_fn, n_samples=100, loss_fn=
         "task_type": task_type
     }
     
-    return result
+    return result, reached_timeout
 
 def _get_default_metrics(task_type):
     """Return default metrics when no samples are available"""
@@ -1219,9 +1241,25 @@ def _get_default_metrics(task_type):
     
     return base_metrics
 
-def estimate_condition_number_hvp(model, data_fn, n_probes=20, n_samples=50, loss_fn=None):
+
+def estimate_condition_number_grid_search(model, data_fn, loss_fn=torch.nn.functional.cross_entropy, timout=3600):
+    n_samples = [5,10,20,50,100,1000]
+    results = []
+
+    for n in n_samples:
+        result, reached_timout = estimate_condition_number_hvp(model, data_fn, n_probes=int(n/2), n_samples=n, loss_fn=loss_fn, timout=timout)
+        if reached_timout:
+            return results[-1]
+        else:
+            results.append(result)
+
+    return results[-1]
+
+
+def estimate_condition_number_hvp(model, data_fn, n_probes=20, n_samples=50, loss_fn=None, timout=3600):
     """Estimate condition number using Hessian-vector products - works for any loss function"""
-    
+    start_time = time.time()
+    reached_timout = False
     # Auto-detect loss function if not provided
     if loss_fn is None:
         try:
@@ -1266,6 +1304,11 @@ def estimate_condition_number_hvp(model, data_fn, n_probes=20, n_samples=50, los
                 # Rayleigh quotient: v^T H v / v^T v = v^T H v (since v normalized)
                 eigenval = sum(torch.sum(hv * v_i) for hv, v_i in zip(hvp, v))
                 eigenvals.append(eigenval.item())
+
+            if time.time() - start_time > timout:
+                reached_timout = True
+                break
+
                 
         except Exception as e:
             print(f"Error in condition number estimation: {e}")
@@ -1285,4 +1328,4 @@ def estimate_condition_number_hvp(model, data_fn, n_probes=20, n_samples=50, los
     if min_eig <= 0:
         return float('inf')  # Indefinite Hessian
         
-    return max_eig / (min_eig + 1e-8)
+    return max_eig / (min_eig + 1e-8), reached_timout
