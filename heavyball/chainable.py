@@ -1373,8 +1373,8 @@ class ChainOpt(utils.StatefulOptimizer):
         self._lr_schedule_fn = create_warmup_cosine_schedule_fn(
             self.total_steps, self.warmup_ratio, self.min_lr_ratio
         )
-        #self._step_decay_fn = create_step_schedule_fn(total_steps, decay_points, decay_gamma)
-        self._lr_schedule_fn = create_step_schedule_fn(self.total_steps, self.warmup_ratio, decay_points, decay_gamma)
+        # Step decay
+        #self._lr_schedule_fn = create_step_schedule_fn(self.total_steps, self.warmup_ratio, decay_points, decay_gamma)
         # Keep existing scheduler initialization for backward compatibility
         self.lr_scheduler = None
         self._scheduler_initialized = False
@@ -1586,7 +1586,7 @@ class ChainOpt(utils.StatefulOptimizer):
                 # Large parameters - RWS AdaGrad mode
                 max_preconditioner_dim = 524_288  # AlgoPerf's value for large params
                 start_preconditioning_step = torch.inf  # Disable Shampoo, use only grafting
-            
+            print(f'momentum: {group.get("momentum", 0.0)}')
             optimizer = DistributedShampoo(
                 params,
                 lr=lr,
@@ -1607,11 +1607,11 @@ class ChainOpt(utils.StatefulOptimizer):
                 use_normalized_grafting=group.get("use_normalized_grafting", False),
                 use_merge_dims=True,
                 use_pytorch_compile=False,
-                distributed_config=DDPShampooConfig(
-                    communication_dtype=CommunicationDType.FP32,
-                    num_trainers_per_group=8,
-                    communicate_params=False,
-                ),
+            #    distributed_config=DDPShampooConfig(
+            #        communication_dtype=CommunicationDType.FP32,
+            #        num_trainers_per_group=1,
+            #        communicate_params=False,
+            #    ),
                 preconditioner_dtype=torch.float32,
                 use_protected_eigh=True,
                 track_root_inv_residuals=False,

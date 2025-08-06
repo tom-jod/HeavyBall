@@ -17,10 +17,10 @@ torch._dynamo.config.disable = True
 
 # Import AlgoPerf fastMRI workload utilities
 from benchmark.algoperf.input_pipeline import load_fastmri_split  # Updated import
-# from benchmark.algoperf.model import UNet  # assuming such exists
+from benchmark.algoperf.model import UNet  # assuming such exists
 
 app = typer.Typer(pretty_exceptions_enable=False)
-
+"""
 # Simple U-Net implementation (you'll need to replace this with the actual AlgoPerf UNet)
 class UNet(nn.Module):
     def __init__(self):
@@ -45,38 +45,58 @@ class Model(nn.Module):
     def forward(self, x, y=None, mask=None):
         # x should be the input image, returns output image
         return self.unet(x, mask)
-
+"""
 def tf_to_torch_batch(tf_batch):
-    """Convert TensorFlow batch to PyTorch tensors."""
-    # tf_batch contains: {'inputs': ..., 'targets': ..., 'mean': ..., 'std': ..., 'volume_max': ...}
-    inputs = torch.from_numpy(tf_batch['inputs'].numpy()).float()
-    targets = torch.from_numpy(tf_batch['targets'].numpy()).float()
+    """Convert TensorFlow or NumPy batch to PyTorch tensors."""
+    def convert(tensor):
+        # Convert TensorFlow tensor or NumPy array to torch.Tensor
+        if hasattr(tensor, 'numpy') and callable(getattr(tensor, 'numpy')):  # TF tensor
+            array = tensor.numpy()
+        elif isinstance(tensor, np.ndarray):  # Already NumPy array
+            array = tensor
+        else:
+            # Handle other cases (maybe already a torch tensor?)
+            try:
+                array = np.array(tensor)
+            except:
+                raise ValueError(f"Cannot convert tensor of type {type(tensor)}")
+        
+        return torch.from_numpy(array).float()
     
+    inputs = convert(tf_batch['inputs'])
+    targets = convert(tf_batch['targets'])
+    print(inputs.size())
     # Add channel dimension if needed (fastMRI outputs are single channel)
-    if len(inputs.shape) == 3:  # [batch, height, width]
+    if inputs.ndim == 3:  # [batch, height, width]
         inputs = inputs.unsqueeze(1)   # [batch, 1, height, width]
-    if len(targets.shape) == 3:
+    if targets.ndim == 3:
         targets = targets.unsqueeze(1)
-    
+    print(f'after: {inputs.size()}')
     return inputs, targets
 
 @app.command()
 def main(
-    batch: int = 32,
-    steps: int = 1000,
-    weight_decay: float = 0.0,
-    opt: List[str] = typer.Option(["Adam"], help="Optimizer(s)"),
-    dtype: List[str] = typer.Option(["float32"], help="dtype"),
-    win_mult: float = 1.0,
-    trials: int = 3,
+    method: List[str] = typer.Option(["qr"], help="Eigenvector method to use (for SOAP)"),
+    dtype: List[str] = typer.Option(["float32"], help="Data type to use"),
+    hidden_size: int = 32,
+    batch: int = 1,
+    steps: int = 0,
+    weight_decay: float = 0,
+    opt: List[str] = typer.Option(["ForeachSOAP"], help="Optimizers to use"),
+    win_condition_multiplier: float = 1.0,
+    trials: int = 10,
+    estimate_condition_number: bool = True,
+    test_loader: bool = None,
+    track_variance: bool = True,
+    runtime_limit: int = 3600 * 24,
+    step_hint: int = 317000
 ):
-    # Setup
     dtype = [getattr(torch, d) for d in dtype]
-    model = Model().cuda().to(dtype[0])
+    model = UNet().cuda().to(dtype[0])
     
     # Load fastMRI dataset using the actual function
-    data_dir = Path(__file__).parent / "data" / "fastmri"
-    
+    #data_dir = Path(__file__).parent / "data" / "fastmri"
+    data_dir = '/mnt/storage01/home/tomjodrell/'
     # Create JAX RNG for shuffling
     shuffle_rng = jax.random.PRNGKey(42)
     
@@ -86,22 +106,56 @@ def main(
         split="train",
         data_dir=str(data_dir),
         shuffle_rng=shuffle_rng,
-        num_batches=None,  # None for infinite training
+        num_batches=batch,  # None for infinite training
         repeat_final_eval_dataset=False
     )
-    
+    test_iterator = load_fastmri_split(
+        global_batch_size=batch,
+        split="test",
+        data_dir=str(data_dir),
+        shuffle_rng=shuffle_rng,
+        num_batches=batch,  # None for infinite training
+        repeat_final_eval_dataset=False
+    )
     print(f"Created FastMRI dataset iterator with batch size {batch}")
     
     def data():
-        """Get next batch from the dataset."""
-        try:
-            tf_batch = next(dataset_iterator)
-            inputs, targets = tf_to_torch_batch(tf_batch)
-            return inputs.cuda(), targets.cuda(), None  # No mask needed for this simple case
-        except StopIteration:
-            # This shouldn't happen with infinite training dataset, but just in case
-            print("Dataset exhausted - this shouldn't happen with training split")
-            raise
+        batch = next(dataset_iterator)
+        
+        # Extract tensors from TensorFlow dataset structure
+        if isinstance(batch, dict):
+            inp = batch['inputs']
+            tgt = batch.get('targets', None)
+            
+            # Convert to numpy if they're TF tensors
+            if hasattr(inp, 'numpy'):
+                inp = inp.numpy()
+            if tgt is not None and hasattr(tgt, 'numpy'):
+                tgt = tgt.numpy()
+                
+            # Convert to PyTorch tensors
+            inp = torch.from_numpy(inp).float() if isinstance(inp, np.ndarray) else inp
+            tgt = torch.from_numpy(tgt).float() if isinstance(tgt, np.ndarray) and tgt is not None else tgt
+            
+            if inp.ndim == 3:  # [batch, height, width]
+                inp = inp.unsqueeze(1)   # [batch, 1, height, width]
+            if tgt is not None and tgt.ndim == 3:
+                tgt = tgt.unsqueeze(1)
+                
+            
+        else:
+            # Handle case where batch is not a dict
+            inp = batch
+            tgt = None
+            if hasattr(inp, 'numpy'):
+                inp = inp.numpy()
+            inp = torch.from_numpy(inp).float() if isinstance(inp, np.ndarray) else inp
+            
+            # Add channel dimension here too
+            if inp.ndim == 3:
+                inp = inp.unsqueeze(1)
+        
+        return inp, tgt
     
     def loss_fn(output, target):
         # AlgoPerf uses L1 loss for training
@@ -111,22 +165,24 @@ def main(
         model,
         data,
         loss_fn,
-        loss_win_condition(win_mult * 0.723653),  # fastMRI validation target SSIM
+        loss_win_condition(win_condition_multiplier * 0.0),
         steps,
         opt[0],
         dtype[0],
-        0,  # hidden features unused
+        hidden_size, 
         batch,
         weight_decay,
-        "none",  # no eigenvector method
-        0,  # sequence length N/A
-        0,  # extra param
+        method[0],
+        128,  # sequence parameter (not really applicable for MNIST, but required)
+        1,    # some other parameter
         failure_threshold=10,
         base_lr=1e-3,
         trials=trials,
-        estimate_condition_number=False,
-        test_loader=None,
-        track_variance=False
+        estimate_condition_number=estimate_condition_number,
+        test_loader=test_iterator,
+        track_variance=track_variance,
+        runtime_limit=runtime_limit,
+        step_hint=step_hint
     )
 
 if __name__ == "__main__":

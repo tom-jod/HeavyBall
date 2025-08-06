@@ -45,7 +45,7 @@ def run_single_benchmark(script_path, optimizer, steps, trials, seed, output_dir
             capture_output=True,
             text=True,
             timeout=72*3600,  # 24 hour timeout
-            env={**os.environ, "CUDA_VISIBLE_DEVICES": "2"}  # Ensure single GPU
+            env={**os.environ, "CUDA_VISIBLE_DEVICES": "3"}  # Ensure single GPU
         )
         
         # Save the full output
@@ -331,11 +331,11 @@ def main(
     benchmark: str = typer.Argument(..., help="Path to benchmark script"),
     optimizers: str = typer.Argument(..., help="Comma-separated optimizers"),
     runs_per_optimizer: int = typer.Option(5, help="Number of runs per optimizer"),
-    steps: int = typer.Option(1000, help="Steps per run"),
-    trials: int = typer.Option(100, help="Optuna trials per run"),
+    steps: int = typer.Option(0, help="Steps per run"),
+    trials: int = typer.Option(5, help="Optuna trials per run"),
     output_dir: str = typer.Option("comparison_results", help="Output directory"),
     runtime_limit: int = typer.Option(3600 * 24, help="Timeout in seconds"),
-    step_hint: int = typer.Option(1000, help="Step hint per run"),
+    step_hint: int = typer.Option(67000, help="Step hint per run"),
 ):
     """
     Run optimizer comparison using subprocess calls.

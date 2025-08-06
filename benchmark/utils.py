@@ -402,6 +402,9 @@ class Objective:
             "use_nadam": params[23],                   # use_nadam
             "step_hint_factor": params[24],            # step_hint_factor
         }
+        if params["use_momentum"] == False:
+            params["momentum"] = 0.0
+
         self.kwargs["warmup_ratio"] = params["warmup_factor"]
         
         torch.cuda.reset_peak_memory_stats()
@@ -439,12 +442,12 @@ class Objective:
                 with torch.backends.cudnn.flags(enabled=False):
                     #if i % int(self.steps // (self.group*5)) == 0:
                     #self.condition_numbers.append(estimate_condition_number_hvp(self.m, self.data, n_probes=20, n_samples=50, loss_fn=self.loss_fn)[0])
-                    self.condition_numbers.append(estimate_condition_number_grid_search(self.m, self.data, loss_fn=self.loss_fn, timout=60))
+                    self.condition_numbers.append(estimate_condition_number_grid_search(self.m, self.data, loss_fn=self.loss_fn, timout=30))
     
             if self.track_variance:
                 # track variance at every 1000 steps through training
                 #grad_variance = estimate_minibatch_variance_detailed(self.m, self.data, n_samples=10, loss_fn=self.loss_fn)[0]
-                grad_variance = estimate_minibatch_variance_grid_search(self.m, self.data, loss_fn=self.loss_fn, timout=60)
+                grad_variance = estimate_minibatch_variance_grid_search(self.m, self.data, loss_fn=self.loss_fn, timout=30)
                 self.grad_variances.append(grad_variance["gradient_variance"])
             
             if hasattr(o, "train"):
@@ -483,11 +486,30 @@ class Objective:
 
                 
                 def _closure():
+                    # Move BOTH input and target to GPU
+                    if inp is not None:
+                        gpu_inp = inp.cuda() if not inp.is_cuda else inp
+                    else:
+                        gpu_inp = None
                     
-                    loss = self.m() if inp is None else self.m(inp)
+                    if tgt is not None:
+                        gpu_tgt = tgt.cuda() if not tgt.is_cuda else tgt  
+                    else:
+                        gpu_tgt = None
+                    
+                    # Now both are on GPU
+                    loss = self.m() if gpu_inp is None else self.m(gpu_inp)
+                    
                     if self.loss_fn is not None:
-                        loss = self.loss_fn(loss, tgt)
+                        loss = self.loss_fn(loss, gpu_tgt)  # Use gpu_tgt instead of tgt
+                    
                     loss.backward()
+                    
+                    # Clean up GPU tensors
+                    del gpu_inp
+                    if gpu_tgt is not None:
+                        del gpu_tgt
+                    
                     return loss
                 
                 # Later, when you need previous model:
@@ -537,7 +559,18 @@ class Objective:
                 o.zero_grad()
                 with torch.no_grad():
                     torch_hist[j] = loss.detach()
-
+                if 'inp' in locals() and inp is not None:
+                    if isinstance(inp, dict):
+                        # Handle the prev_minibatch case
+                        for key, (data, target) in inp.items():
+                            if hasattr(data, 'cpu'):
+                                del data, target
+                else:
+                    # Handle normal case
+                    if hasattr(inp, 'cpu'):
+                        del inp
+                    if 'tgt' in locals() and tgt is not None and hasattr(tgt, 'cpu'):
+                        del tgt
                 # Add loss to step_losses and current_losses (once per epoch: outer loop)
                 if j == 0:
                     self.current_losses.append(float(torch_hist[j]))
@@ -1130,13 +1163,61 @@ def evaluate_model(model, test_loader, loss_fn=torch.nn.functional.cross_entropy
     was_training = model.training
     model.eval()
     with torch.no_grad():
-        for data, target in test_loader:
-            if torch.cuda.is_available():
-                data, target = data.cuda(), to_device(target,'cuda')
+        #FastMRI handling
+        batch = next(test_loader)
+        if isinstance(batch, dict):
             
-            output = model(data)
-            loss = loss_fn(output, target).item()
-     
+            
+            # Extract tensors from TensorFlow dataset structure
+            if isinstance(batch, dict):
+                inp = batch['inputs']
+                tgt = batch.get('targets', None)
+                
+                # Convert to numpy if they're TF tensors
+                if hasattr(inp, 'numpy'):
+                    inp = inp.numpy()
+                if tgt is not None and hasattr(tgt, 'numpy'):
+                    tgt = tgt.numpy()
+                    
+                # Convert to PyTorch tensors
+                inp = torch.from_numpy(inp).float() if isinstance(inp, np.ndarray) else inp
+                tgt = torch.from_numpy(tgt).float() if isinstance(tgt, np.ndarray) and tgt is not None else tgt
+               
+                if inp.ndim == 3:  # [batch, height, width]
+                    inp = inp.unsqueeze(1)   # [batch, 1, height, width]
+                if tgt is not None and tgt.ndim == 3:
+                    tgt = tgt.unsqueeze(1)
+                    
+                print(f"Input shape after processing: {inp.shape}")
+                
+            else:
+                # Handle case where batch is not a dict
+                inp = batch
+                tgt = None
+                if hasattr(inp, 'numpy'):
+                    inp = inp.numpy()
+                inp = torch.from_numpy(inp).float() if isinstance(inp, np.ndarray) else inp
+                
+                # Add channel dimension here too
+                if inp.ndim == 3:
+                    inp = inp.unsqueeze(1)
+            target = tgt
+            model.zero_grad()
+            gpu_target = target.cuda() if hasattr(target, 'cuda') else torch.from_numpy(target).cuda()
+            gpu_inp = inp.cuda() if hasattr(inp, 'cuda') else torch.from_numpy(inp).cuda()
+            loss = model(gpu_inp)
+            
+            if loss_fn is not None:
+                loss = loss_fn(loss, gpu_target).item()
+
+        else:        
+            for data, target in test_loader:
+                if torch.cuda.is_available():
+                    data, target = data.cuda(), to_device(target,'cuda')
+                
+                output = model(data)
+                loss = loss_fn(output, target).item()
+        
     model.train(was_training)
     return loss
 
@@ -1147,7 +1228,7 @@ def get_gpu_memory_usage():
 
 def estimate_minibatch_variance_grid_search(model, data_fn, loss_fn=torch.nn.functional.cross_entropy, task_type='auto', timout=3600):
     n_samples = [5,10,20,50,100,1000]
-    results = []
+    results = [0]
 
     for n in n_samples:
         result, reached_timout = estimate_minibatch_variance_detailed(model, data_fn, n_samples=n, loss_fn=loss_fn, task_type='auto', timout=timout)
@@ -1168,35 +1249,28 @@ def estimate_minibatch_variance_detailed(model, data_fn, n_samples=100, loss_fn=
     reached_timeout = False
     start_time = time.time()
     for sample_idx in range(n_samples):
-        try:
-            x, y = data_fn()
-            model.zero_grad()
-            output = model(x)
-            loss = loss_fn(output, y)
-            
-            # Compute gradients
-            grads = torch.autograd.grad(loss, model.parameters(), create_graph=False)
-            flat_grad = torch.cat([g.flatten() for g in grads])
-            gradient_samples.append(flat_grad.detach().cpu().numpy())
-            loss_samples.append(loss.item())
+       
+        inp, target = data_fn()
+        model.zero_grad()
+        gpu_target = target.cuda() if hasattr(target, 'cuda') else torch.from_numpy(target).cuda()
+        gpu_inp = inp.cuda() if hasattr(inp, 'cuda') else torch.from_numpy(inp).cuda()
+        loss = model(gpu_inp)
+        
+        if loss_fn is not None:
+            loss = loss_fn(loss, gpu_target)
+        
+        # Compute gradients
+        grads = torch.autograd.grad(loss, model.parameters(), create_graph=False)
+        flat_grad = torch.cat([g.flatten() for g in grads])
+        gradient_samples.append(flat_grad.detach().cpu().numpy())
+        loss_samples.append(loss.item())
 
-            if time.time() - start_time > timout:
-                reached_timeout = True
-                raise TimeoutError
-
-        except Exception as e:
-            print(f"Error in sample {sample_idx}: {e}")
-            import traceback
-            traceback.print_exc()
-            continue
-        except TimeoutError:
-            print(f"Timout Error in sample {sample_idx}")
-            import traceback
-            traceback.print_exc()
+        if time.time() - start_time > timout:
+            reached_timeout = True
             break
     
     if not gradient_samples:
-        return _get_default_metrics(task_type)
+        return _get_default_metrics(task_type), reached_timeout
     
     # Convert to numpy
     gradients = np.array(gradient_samples)
@@ -1225,7 +1299,7 @@ def estimate_minibatch_variance_detailed(model, data_fn, n_samples=100, loss_fn=
         "mean_loss": np.mean(loss_samples),
         "task_type": task_type
     }
-    
+  
     return result, reached_timeout
 
 def _get_default_metrics(task_type):
@@ -1243,8 +1317,8 @@ def _get_default_metrics(task_type):
 
 
 def estimate_condition_number_grid_search(model, data_fn, loss_fn=torch.nn.functional.cross_entropy, timout=3600):
-    n_samples = [5,10,20,50,100,1000]
-    results = []
+    n_samples = [5,10,20,50,100,300,1000]
+    results = [0]
 
     for n in n_samples:
         result, reached_timout = estimate_condition_number_hvp(model, data_fn, n_probes=int(n/2), n_samples=n, loss_fn=loss_fn, timout=timout)
@@ -1261,10 +1335,16 @@ def estimate_condition_number_hvp(model, data_fn, n_probes=20, n_samples=50, los
     start_time = time.time()
     reached_timout = False
     # Auto-detect loss function if not provided
+    inp, target = data_fn()
+    model.zero_grad()
+    gpu_target = target.cuda() if hasattr(target, 'cuda') else torch.from_numpy(target).cuda()
+    gpu_inp = inp.cuda() if hasattr(inp, 'cuda') else torch.from_numpy(inp).cuda()
+    loss = model(gpu_inp)
+
+    output, y = gpu_inp, gpu_target
+    
     if loss_fn is None:
         try:
-            x, y = data_fn()
-            output = model(x)
             if output.dim() > 2 or (y.dim() == output.dim() and y.shape == output.shape):
                 loss_fn = torch.nn.functional.mse_loss
             else:
@@ -1282,13 +1362,14 @@ def estimate_condition_number_hvp(model, data_fn, n_probes=20, n_samples=50, los
     eigenvals = []
     for _ in range(n_samples):
         try:
-            # Get loss at random point near initialization
-            if data_fn()[0] is not None:
-                x, y = data_fn()
-                loss = loss_fn(model(x), y)
-            else:
-                loss = model()
-                
+            inp, target = data_fn()
+            model.zero_grad()
+            gpu_target = target.cuda() if hasattr(target, 'cuda') else torch.from_numpy(target).cuda()
+            gpu_inp = inp.cuda() if hasattr(inp, 'cuda') else torch.from_numpy(inp).cuda()
+            loss = model(gpu_inp)
+            
+            if loss_fn is not None:
+                loss = loss_fn(loss, gpu_target)
             params = list(model.parameters())
             
             # Probe with random vectors
@@ -1318,7 +1399,7 @@ def estimate_condition_number_hvp(model, data_fn, n_probes=20, n_samples=50, los
     eigenvals = eigenvals[np.isfinite(eigenvals)]  # Remove NaN/inf
     
     if len(eigenvals) == 0:
-        return float('inf')
+        return float('inf'), False
     
     # Condition number approximation
     abs_eigenvals = np.abs(eigenvals)
@@ -1326,6 +1407,6 @@ def estimate_condition_number_hvp(model, data_fn, n_probes=20, n_samples=50, los
     min_eig = np.min(abs_eigenvals)
     
     if min_eig <= 0:
-        return float('inf')  # Indefinite Hessian
+        return float('inf'), False  # Indefinite Hessian
         
     return max_eig / (min_eig + 1e-8), reached_timout

@@ -58,29 +58,22 @@ def main(
     method: List[str] = typer.Option(["qr"], help="Eigenvector method to use (for SOAP)"),
     dtype: List[str] = typer.Option(["float32"], help="Data type to use"),
     hidden_size: int = 128,
-    batch: int = 64,
+    batch: int = 128,
     steps: int = 0,
     weight_decay: float = 0,
     opt: List[str] = typer.Option(["ForeachSOAP"], help="Optimizers to use"),
     win_condition_multiplier: float = 1.0,
     trials: int = 10,
-    estimate_condition_number: bool = False,
+    estimate_condition_number: bool = True,
     test_loader: bool = None,
-    track_variance: bool = False,
+    track_variance: bool = True,
     runtime_limit: int = 3600 * 24,
-    step_hint: int = 67000
+    step_hint: int = 317000
 ):
     dtype = [getattr(torch, d) for d in dtype]
     
     # Usage in your script:
     model = Model(hidden_size).cuda()
-    model = set_deterministic_weights(model, seed=42)
-    def debug_model_weights(model, script_name):
-        print(f"{script_name} - Model weight checksums:")
-        for name, param in model.named_parameters():
-            print(f"  {name}: {param.sum().item():.6f} (shape: {param.shape})")
-
-    debug_model_weights(model, "HeavyBall")  # or "Simple"
     # Load MNIST data
     transform = transforms.Compose([
         transforms.ToTensor(),
