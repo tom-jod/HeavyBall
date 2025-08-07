@@ -12,7 +12,7 @@ from sklearn.preprocessing import StandardScaler
 
 from benchmark.utils import loss_win_condition, trial
 from heavyball.utils import set_torch
-
+from benchmark.transolver_layers.transolver import TransolverReg
 app = typer.Typer(pretty_exceptions_enable=False)
 set_torch()
 import torch._dynamo
@@ -48,10 +48,6 @@ class CarCFDDataset(Dataset):
         self.data = torch.FloatTensor(self.data)
         self.targets = torch.FloatTensor(self.targets)
         
-        print(f"Loaded {len(self.data)} samples")
-        print(f"Data shape: {self.data.shape}")  # Should be [N, num_vertices, 6]
-        print(f"Target shape: {self.targets.shape}")  # Should be [N, num_vertices, 1] or [N, num_vertices]
-    
     def _load_data(self):
         """Load surface data from h5 files."""
         h5_files = list(self.dataset_path.glob("*.h5"))
@@ -65,14 +61,6 @@ class CarCFDDataset(Dataset):
             try:
                 with h5py.File(h5_file, 'r') as f:
                     # Print structure for first file
-                    if i == 0:
-                        print(f"H5 file structure: {list(f.keys())}")
-                        if 'surface.verts' in f.keys():
-                            print(f"surface.verts shape: {f['surface.verts'].shape}")
-                        if 'surface.verts_normals' in f.keys():
-                            print(f"surface.verts_normals shape: {f['surface.verts_normals'].shape}")
-                        if 'surface.pressure' in f.keys():
-                            print(f"surface.pressure shape: {f['surface.pressure'].shape}")
                     
                     # Extract surface data - note the keys use dots, not groups
                     verts = None
@@ -82,7 +70,7 @@ class CarCFDDataset(Dataset):
                     # Get vertices (3D coordinates)
                     if 'surface.verts' in f.keys():
                         verts = f['surface.verts'][:]  # Shape: [num_vertices, 3]
-                        print(f"File {i}: Loaded verts with shape {verts.shape}")
+                        
                     else:
                         print(f"Warning: 'surface.verts' not found in {h5_file}")
                         print(f"Available keys: {[k for k in f.keys() if 'verts' in k]}")
@@ -91,7 +79,7 @@ class CarCFDDataset(Dataset):
                     # Get vertex normals (3D normal vectors)
                     if 'surface.verts_normals' in f.keys():
                         normals = f['surface.verts_normals'][:]  # Shape: [num_vertices, 3]
-                        print(f"File {i}: Loaded normals with shape {normals.shape}")
+                        
                     else:
                         print(f"Warning: 'surface.verts_normals' not found in {h5_file}")
                         print(f"Available keys: {[k for k in f.keys() if 'normal' in k]}")
@@ -100,7 +88,7 @@ class CarCFDDataset(Dataset):
                     # Get pressure values (scalar per vertex)
                     if 'surface.pressure' in f.keys():
                         pressure = f['surface.pressure'][:]  # Shape: [num_vertices,] or [num_vertices, 1]
-                        print(f"File {i}: Loaded pressure with shape {pressure.shape}")
+                        
                     else:
                         print(f"Warning: 'surface.pressure' not found in {h5_file}")
                         print(f"Available keys: {[k for k in f.keys() if 'pressure' in k]}")
@@ -128,14 +116,6 @@ class CarCFDDataset(Dataset):
                     
                     self.data.append(features)
                     self.targets.append(pressure.squeeze(-1))  # Remove last dimension for pressure
-                    
-                    if i == 0:  # Print info for first sample
-                        print(f"Sample shapes - Features: {features.shape}, Pressure: {pressure.squeeze(-1).shape}")
-                        print(f"Verts range: [{verts.min():.3f}, {verts.max():.3f}]")
-                        print(f"Normals range: [{normals.min():.3f}, {normals.max():.3f}]")
-                        print(f"Pressure range: [{pressure.min():.3f}, {pressure.max():.3f}]")
-                    
-                    print(f"Successfully loaded sample {len(self.data)} from {h5_file.name}")
                         
             except Exception as e:
                 print(f"Error loading {h5_file}: {e}")
@@ -213,51 +193,20 @@ class CarCFDDataset(Dataset):
 class TransolverWrapper(nn.Module):
     """Wrapper for Transolver to handle CFD surface data."""
     
-    def __init__(self, 
-                 feature_dim: int = 6,  # 3 for verts + 3 for normals
-                 n_layers: int = 5,
-                 n_hidden: int = 256,
-                 dropout: float = 0.1,
-                 n_head: int = 8,
-                 act: str = "gelu",
-                 mlp_ratio: float = 1,
-                 function_dim: int = 1,
-                 out_dim: int = 1,  # Pressure is scalar
-                 slice_num: int = 32,
-                 ref: int = 8):
+        
+    def __init__(self, feature_dim=6, hidden_dim=256):
         super().__init__()
-        
-        # Import your actual TransolverReg here
-        # For now, let's create a simple placeholder that matches the interface
-        self.feature_dim = feature_dim
-        self.n_hidden = n_hidden
-        
-        # Simple MLP as placeholder - replace with actual TransolverReg
-        self.model = nn.Sequential(
-            nn.Linear(feature_dim, n_hidden),
+        self.net = nn.Sequential(
+            nn.Linear(feature_dim, hidden_dim),
             nn.ReLU(),
-            nn.Dropout(dropout),
-            nn.Linear(n_hidden, n_hidden),
+            nn.Linear(hidden_dim, hidden_dim),
             nn.ReLU(),
-            nn.Dropout(dropout),
-            nn.Linear(n_hidden, out_dim)
+            nn.Linear(hidden_dim, 1)
         )
     
     def forward(self, x):
-        # Input x: [batch_size, num_vertices, 6]
-        # Simple approach: apply model to each vertex independently
-        batch_size, num_vertices, feature_dim = x.shape
-        
-        # Reshape to [batch_size * num_vertices, feature_dim]
-        x_flat = x.view(-1, feature_dim)
-        
-        # Apply model
-        output_flat = self.model(x_flat)  # [batch_size * num_vertices, 1]
-        
-        # Reshape back to [batch_size, num_vertices]
-        output = output_flat.view(batch_size, num_vertices, -1).squeeze(-1)
-        
-        return output
+        # x: [batch, num_vertices, 6]
+        return self.net(x).squeeze(-1)  # [batch, num_vertices]
 
 @app.command()
 def main(
@@ -266,7 +215,9 @@ def main(
     feature_dim: int = 6,  # 3 verts + 3 normals
     n_hidden: int = 256,
     n_layers: int = 5,
-    batch: int = 4,  
+    n_head: int = 8,  
+    slice_num: int = 32, 
+    batch: int = 1,  
     steps: int = 10,
     weight_decay: float = 1e-4,
     opt: List[str] = typer.Option(["ForeachSOAP"], help="Optimizers to use"),
@@ -297,10 +248,10 @@ def main(
         train_dataset,
         batch_size=batch,
         shuffle=True,
-        num_workers=0,  # Set to 0 for debugging
+        num_workers=2,  # Set to 0 for debugging
         pin_memory=True
     )
-
+    
     test_loader = DataLoader(
         test_dataset,
         batch_size=batch,  # Can use larger batch for testing
@@ -309,20 +260,10 @@ def main(
         pin_memory=True
     )
     
-    # Test data loading
-    print("Testing data loading...")
     batch_data, batch_targets = next(iter(train_loader))
-    print(f"Batch data shape: {batch_data.shape}")
-    print(f"Batch targets shape: {batch_targets.shape}")
     
-    # Create model
-    model = TransolverWrapper(
-        feature_dim=feature_dim,
-        n_hidden=n_hidden,
-        n_layers=n_layers,
-        dropout=0.1,
-        out_dim=1  # Scalar pressure prediction
-    ).cuda()
+    # Create model with TransolverReg
+    model = TransolverWrapper().cuda()
     
     print(f"Model created with {sum(p.numel() for p in model.parameters())} parameters")
     
@@ -331,6 +272,7 @@ def main(
     with torch.no_grad():
         test_output = model(batch_data.cuda())
         print(f"Test output shape: {test_output.shape}")
+        print(f"Test output range: [{test_output.min():.4f}, {test_output.max():.4f}]")
     
     # Create data iterator that matches heavyball format
     data_iter = iter(train_loader)
@@ -354,23 +296,23 @@ def main(
         model,
         data,
         loss_fn,
-        loss_win_condition(win_condition_multiplier * 0.01),  # Adjust threshold for regression
+        loss_win_condition(win_condition_multiplier * 0.00),  
         steps,
         opt[0],
         dtype[0],
-        n_hidden,  # features parameter
+        n_hidden,  
         batch,
         weight_decay,
         method[0],
-        feature_dim,  # sequence parameter
-        1,  # some other parameter
+        feature_dim,  
+        1,  
         failure_threshold=10,
-        base_lr=1e-4,  # Lower learning rate for regression
+        base_lr=1e-4,
         trials=trials,
         estimate_condition_number=False,
         test_loader=None,
-        track_variance=True
+        track_variance=False
     )
 
 if __name__ == "__main__":
-    app() 
+    app()

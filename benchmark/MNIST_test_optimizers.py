@@ -58,7 +58,7 @@ def main(
     method: List[str] = typer.Option(["qr"], help="Eigenvector method to use (for SOAP)"),
     dtype: List[str] = typer.Option(["float32"], help="Data type to use"),
     hidden_size: int = 128,
-    batch: int = 64,
+    batch: int = 128,
     steps: int = 100,
     weight_decay: float = 0,
     opt: List[str] = typer.Option(["ForeachSOAP"], help="Optimizers to use"),

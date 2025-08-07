@@ -10,9 +10,8 @@ import jax
 import tensorflow as tf
 
 from benchmark.algoperf import data_utils
-
-_TRAIN_DIR = 'knee_singlecoil_train'
-_VAL_DIR = 'knee_singlecoil_val'
+_TRAIN_DIR = 'singlecoil_train'
+_VAL_DIR = 'singlecoil_val'
 _EVAL_SEED = 0
 
 
@@ -220,16 +219,17 @@ def load_fastmri_split(global_batch_size,
   ds = ds.batch(global_batch_size, drop_remainder=is_train)
 
   if is_train:
-    ds = ds.prefetch(10)
+    #ds = ds.prefetch(10)
     iterator = map(data_utils.shard_and_maybe_pad_np, ds)
-    return iterator
+    return iter(ds) #iterator
   else:
     if num_batches:
       ds = ds.take(num_batches)
     ds = ds.cache()
     if repeat_final_eval_dataset:
       ds = ds.repeat()
-    ds = ds.prefetch(10)
+    #ds = ds.prefetch(10)
+    return iter(ds)
     return map(
         functools.partial(
             data_utils.shard_and_maybe_pad_np,

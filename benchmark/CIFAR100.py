@@ -139,11 +139,14 @@ def main(
             inputs, targets = next(train_iter)
         return inputs.cuda(), targets.cuda()
 
+
+    #0.5576767921447754
+
     trial(
         model,
         data,
         F.cross_entropy,
-        loss_win_condition(win_condition_multiplier * 0.5576767921447754),  # Adjusted for CIFAR-10 difficulty
+        loss_win_condition(win_condition_multiplier * 0.0),  
         steps,
         opt[0],
         dtype[0],

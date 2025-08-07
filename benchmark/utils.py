@@ -13,7 +13,10 @@ import optuna
 import torch
 from torch import nn
 from torch._dynamo import config
-
+import functools
+import torch
+import torch.nn.functional as F
+from torchvision.transforms.functional import pad as pad_fn
 import heavyball.utils
 from heavyball import chainable as C
 from heavyball.helpers import AutoSampler
@@ -430,10 +433,10 @@ class Objective:
             if not hasattr(self, 'test_accuracies'):
                 self.test_accuracies = []
             if self.test_loader != None:
-                test_accuracy = evaluate_model(self.m, self.test_loader, self.loss_fn)
+                test_accuracy = evaluate_test_accuracy(self.m, self.test_loader)
                 self.test_accuracies.append(test_accuracy)
                 
-                if self.win_condition(test_accuracy):
+                if self.win_condition(1 - test_accuracy):
                     runtime = time.time() - self.start_time
                     print({"WIN"})
                     return validator.ema_states.min().item(), self.m, torch_hist[-1].item(), self.current_losses, self.test_accuracies, self.grad_variances, self.condition_numbers, self.step_counter, runtime
@@ -454,6 +457,7 @@ class Objective:
                 o.train()
             
             for j in range(self.group):
+               
                 self.step_counter += 1
         
                 if self.requires_prev_minibatch(o):
@@ -890,7 +894,6 @@ def trial(
             loss = float("inf")
             
             out = obj.objective(full_params)
-            loss = min(obj.current_losses.copy()) if hasattr(obj, 'current_losses') else float('inf')
             
             # Create params dict for logging
             params_dict = {f"param_{i}_{param_names[i]}": val for i, val in zip(tuned_indices, tuned_values)}
@@ -900,7 +903,6 @@ def trial(
             'params': params_dict,
             'full_params': full_params,
             'losses': obj.current_losses.copy() if hasattr(obj, 'current_losses') else [],
-            'loss': loss,
             'test_accuracies': obj.test_accuracies.copy() if hasattr(obj, 'test_accuracies') else [],
             'grad_variances': obj.grad_variances.copy() if hasattr(obj, 'grad_variances') else [],
             'condition_numbers': obj.condition_numbers.copy() if hasattr(obj, 'condition_numbers') else [],
@@ -909,7 +911,7 @@ def trial(
             all_trial_results.append(trial_result)
                 
            
-            return loss
+            return obj.runtime if hasattr(obj, 'runtime') else float('inf')
         
         set_seed()
         study.optimize(_optuna_objective, n_trials=1)
@@ -938,7 +940,7 @@ def trial(
             did_win = False
             nonlocal hyperparam_counter
             set_seed(0x12312)
-            if hyperparam_counter < len(fixed_hyperparams_list):
+            if hyperparam_counter < len(fixed_hyperparams_list) and hyperparam_counter < trials:
                 hyperparams = fixed_hyperparams_list[hyperparam_counter]
                 hyperparam_counter += 1
             
@@ -962,21 +964,20 @@ def trial(
                 loss = float("inf")
                 
                 out = obj.objective(full_params)
-                loss = min(obj.test_accuracies.copy()) if hasattr(obj, 'test_accuracies') else float('inf')
+                
                 trial_result = {
                     'trial_number': hyperparam_counter,
                     'tuned_indices': tuned_indices,
                     'original_json_params': hyperparams.copy(),
                     'params': params_dict,
                     'losses': obj.current_losses.copy() if hasattr(obj, 'current_losses') else [],
-                    'loss': loss,
                     'test_accuracies': obj.test_accuracies.copy() if hasattr(obj, 'test_accuracies') else [],
                     'grad_variances': obj.grad_variances.copy() if hasattr(obj, 'grad_variances') else [],
                     'condition_numbers': obj.condition_numbers.copy() if hasattr(obj, 'condition_numbers') else [],
                     'runtime': obj.runtime if hasattr(obj, 'runtime') else 0,
                 }
                 all_trial_results.append(trial_result)
-                return loss
+                return obj.runtime if hasattr(obj, 'runtime') else float('inf')
             else:
                 return
             
@@ -1045,8 +1046,6 @@ def trial(
             loss = float("inf")
             try:
                 out = obj.objective(full_params)
-                loss = min(obj.test_accuracies.copy()) if hasattr(obj, 'test_accuracies') else float('inf')
-                print(obj.current_losses.copy() if hasattr(obj, 'current_losses') else float('inf'))
                 
                 # Create params dict for logging
                 params_dict = {f"param_{i}_{param_names[i]}": val for i, val in zip(tuned_indices, tuned_values)}
@@ -1056,16 +1055,16 @@ def trial(
                     'params': params_dict,
                     'full_params': full_params,
                     'losses': obj.current_losses.copy() if hasattr(obj, 'current_losses') else [],
-                    'loss': loss,
                     'test_accuracies': obj.test_accuracies.copy() if hasattr(obj, 'test_accuracies') else [],
                     'grad_variances': obj.grad_variances.copy() if hasattr(obj, 'grad_variances') else [],
                     'condition_numbers': obj.condition_numbers.copy() if hasattr(obj, 'condition_numbers') else [],
                     'runtime': obj.runtime if hasattr(obj, 'runtime') else [],
                 }
+                print(trial_result)
                 all_trial_results.append(trial_result)   
             except Stop:
                 pass
-            return loss
+            return obj.runtime if hasattr(obj, 'runtime') else float('inf')
         set_seed()
         study.optimize(_optuna_objective, n_trials=trials)
     
@@ -1098,11 +1097,10 @@ def trial(
     end_time = time.time()
     print(all_trial_results)
     print(
-        f"Took: {end_time - start_time} | Trials: {obj.attempt} | "
-        f"{opt.__name__}_{winning_params} "
-        f"Best Loss: {best_trial['loss'] if all_trial_results else 'N/A'} | "
+        f"Took: {end_time - start_time} | Winning_runtime: {final_runtime} | Trials: {obj.attempt} | "
+        f"{opt.__name__}_{winning_params} | "
         f"loss_trajectory: {final_losses} | test_accuracies: {final_test_accuracies} | "
-        f"grad_variances: {final_grad_variances} | mean_cond: {mean_cond} | std_err_cond: {std_err_cond} | winning_runtime: {final_runtime} "
+        f"grad_variances: {final_grad_variances} | mean_cond: {mean_cond} | std_err_cond: {std_err_cond} "
     )
     
     loss_trajectory = obj.best_losses
@@ -1145,7 +1143,7 @@ def evaluate_test_accuracy(model, test_loader):
     # Restore the original training state
     model.train(was_training)
     
-    return 100. * correct / total
+    return correct / total
 
 def to_device(obj, device):
     """Recursively move tensors to device"""
@@ -1163,8 +1161,15 @@ def evaluate_model(model, test_loader, loss_fn=torch.nn.functional.cross_entropy
     was_training = model.training
     model.eval()
     with torch.no_grad():
+        # Try to get an iterator from the test_loader
+        if hasattr(test_loader, '__iter__') and not hasattr(test_loader, '__next__'):
+            # This is likely a PyTorch DataLoader or similar
+            test_iterator = iter(test_loader)
+            batch = next(test_iterator)
+        else:
+            # This is already an iterator or TF dataset
+            batch = next(test_loader)
         #FastMRI handling
-        batch = next(test_loader)
         if isinstance(batch, dict):
             
             
@@ -1327,7 +1332,7 @@ def estimate_condition_number_grid_search(model, data_fn, loss_fn=torch.nn.funct
         else:
             results.append(result)
 
-    return results[-1]
+    return float(results[-1])
 
 
 def estimate_condition_number_hvp(model, data_fn, n_probes=20, n_samples=50, loss_fn=None, timout=3600):
@@ -1410,3 +1415,220 @@ def estimate_condition_number_hvp(model, data_fn, n_probes=20, n_samples=50, los
         return float('inf'), False  # Indefinite Hessian
         
     return max_eig / (min_eig + 1e-8), reached_timout
+
+
+def evaluate_test_accuracy(model, test_loader):
+    """Evaluate model performance with automatic task detection"""
+    # Save the current training state
+    was_training = model.training
+    model.eval()
+    
+    # Try to get a sample batch to determine task type
+    try:
+        sample_data, sample_target = next(iter(test_loader))
+        if torch.cuda.is_available():
+            sample_data, sample_target = sample_data.cuda(), sample_target.cuda()
+        
+        with torch.no_grad():
+            sample_output = model(sample_data)
+        
+        # Detect task type based on output characteristics
+        task_type = detect_task_type(sample_output, sample_target, model)
+        
+        if task_type == 'fastmri':
+            result = evaluate_fastmri_ssim_internal(model, test_loader)
+        else:
+            result = evaluate_classification_accuracy(model, test_loader)
+            
+    except Exception as e:
+        print(f"Error in evaluation: {e}")
+        result = 0.0
+    
+    # Restore the original training state
+    model.train(was_training)
+    return result
+
+def detect_task_type(output, target, model):
+    """Detect whether this is a FastMRI reconstruction task or classification"""
+    
+    # Check 1: If model is a UNet (common for FastMRI)
+    model_name = model.__class__.__name__.lower()
+    if 'unet' in model_name:
+        return 'fastmri'
+    
+    # Check 2: If output and target are both 2D images (after removing batch/channel dims)
+    output_spatial_dims = len([d for d in output.shape[2:] if d > 1])  # Skip batch and channel
+    target_spatial_dims = len([d for d in target.shape[2:] if d > 1])
+    
+    if output_spatial_dims == 2 and target_spatial_dims == 2:
+        # Both are 2D images
+        if output.shape[-2:] == target.shape[-2:]:  # Same spatial dimensions
+            return 'fastmri'
+    
+    # Check 3: If output is continuous values (not logits) and target is also continuous
+    if output.dtype == torch.float32 and target.dtype == torch.float32:
+        # Check if output values are in a reasonable range for images (not logits)
+        output_range = output.max() - output.min()
+        target_range = target.max() - target.min()
+        
+        # If both have reasonable image-like ranges and similar scales
+        if (0.1 < output_range < 100) and (0.1 < target_range < 100):
+            # Check if target has image-like statistics (not one-hot encoded)
+            if target.numel() > 1000 and len(target.unique()) > 10:
+                return 'fastmri'
+    
+    # Check 4: Spatial dimensions suggest image reconstruction
+    if len(output.shape) == 4 and len(target.shape) == 4:  # [B, C, H, W]
+        if output.shape[2] > 64 and output.shape[3] > 64:  # Large spatial dimensions
+            if output.shape == target.shape:  # Same shape (reconstruction task)
+                return 'fastmri'
+    
+    # Default to classification
+    return 'classification'
+
+def evaluate_classification_accuracy(model, test_loader):
+    """Original classification evaluation logic"""
+    correct = 0
+    total = 0
+    
+    with torch.no_grad():
+        for data, target in test_loader:
+            if torch.cuda.is_available():
+                data, target = data.cuda(), target.cuda()
+            
+            output = model(data)
+            
+            # Handle different output shapes
+            if output.dim() > 2:
+                # Sequence modeling: [batch, seq_len, vocab_size]
+                pred = output.argmax(dim=-1)  # [batch, seq_len]
+                pred_flat = pred.view(-1)
+                target_flat = target.view(-1)
+                correct += pred_flat.eq(target_flat).sum().item()
+                total += target_flat.numel()
+            else:
+                # Regular classification: [batch, num_classes]
+                pred = output.argmax(dim=1, keepdim=True)
+                correct += pred.eq(target.view_as(pred)).sum().item()
+                total += target.numel()
+    
+    return correct / total
+
+def evaluate_fastmri_ssim_internal(model, test_loader):
+    """SSIM evaluation for FastMRI tasks"""
+    total_ssim = 0.0
+    total_samples = 0
+    
+    with torch.no_grad():
+        for i, (data, target) in enumerate(test_loader):
+            if i >= 10:  # Limit evaluation to prevent memory issues
+                break
+            
+            if torch.cuda.is_available():
+                data, target = data.cuda(), target.cuda()
+            
+            output = model(data)
+            
+            # Ensure output and target have the same shape
+            if output.shape != target.shape:
+                if len(output.shape) == 4 and len(target.shape) == 4:
+                    output = F.interpolate(output, size=target.shape[-2:], 
+                                         mode='bilinear', align_corners=False)
+            
+            try:
+                # Compute SSIM for each example in the batch
+                batch_ssim = 0.0
+                batch_size = output.shape[0]
+                
+                for j in range(batch_size):
+                    # Remove batch and channel dimensions for SSIM computation
+                    pred_img = output[j].squeeze()
+                    target_img = target[j].squeeze()
+                    
+                    # Simple SSIM computation (you can use your more complex version)
+                    ssim_val = structural_similarity(pred_img, target_img, data_range=1.0)
+                    batch_ssim += ssim_val.item()
+                
+                total_ssim += batch_ssim
+                total_samples += batch_size
+                
+            except Exception as e:
+                print(f"SSIM computation error: {e}")
+                # Fallback to MSE-based metric
+                mse = F.mse_loss(output, target)
+                # Convert MSE to a "higher is better" metric
+                total_ssim += max(0, 1.0 - mse.item())
+                total_samples += output.shape[0]
+    
+    if total_samples == 0:
+        return 0.0
+    
+    avg_ssim = total_ssim / total_samples
+    print(f"FastMRI SSIM evaluation: {avg_ssim:.4f}")
+    return avg_ssim
+
+# Add the SSIM functions from before
+def structural_similarity(im1, im2, data_range=1.0, win_size=7, k1=0.01, k2=0.03):
+    """Compute the mean structural similarity index between two images."""
+    # Add a simple fallback for very small images or errors
+    try:
+        if im1.numel() < win_size * win_size or im2.numel() < win_size * win_size:
+            # Fallback to normalized correlation for very small images
+            im1_flat = im1.flatten()
+            im2_flat = im2.flatten()
+            correlation = F.cosine_similarity(im1_flat.unsqueeze(0), im2_flat.unsqueeze(0))
+            return correlation.squeeze()
+        
+        filter_func = functools.partial(_uniform_filter, size=win_size)
+        num_points = win_size ** len(im1.shape)
+        cov_norm = num_points / (num_points - 1)
+        
+        # compute (weighted) means
+        ux = filter_func(im1)
+        uy = filter_func(im2)
+        
+        # compute (weighted) variances and covariances
+        uxx = filter_func(im1 * im1)
+        uyy = filter_func(im2 * im2)
+        uxy = filter_func(im1 * im2)
+        vx = cov_norm * (uxx - ux * ux)
+        vy = cov_norm * (uyy - uy * uy)
+        vxy = cov_norm * (uxy - ux * uy)
+        
+        c1 = (k1 * data_range) ** 2
+        c2 = (k2 * data_range) ** 2
+        a1 = 2 * ux * uy + c1
+        a2 = 2 * vxy + c2
+        b1 = ux**2 + uy**2 + c1
+        b2 = vx + vy + c2
+        d = b1 * b2
+        s = (a1 * a2) / d
+        
+        # to avoid edge effects will ignore filter radius strip around edges
+        pad = (win_size - 1) // 2
+        if s.shape[0] > 2*pad and s.shape[1] > 2*pad:
+            return torch.mean(s[pad:-pad, pad:-pad])
+        else:
+            return torch.mean(s)
+            
+    except Exception as e:
+        print(f"SSIM computation failed: {e}, using fallback")
+        # Fallback to simple correlation
+        return F.cosine_similarity(im1.flatten().unsqueeze(0), im2.flatten().unsqueeze(0)).squeeze()
+
+def _uniform_filter(im, size=7):
+    """Uniform filter for SSIM computation"""
+    try:
+        pad_size = size // 2
+        def conv(im):
+            padded_im = pad_fn(im.unsqueeze(0), pad_size, padding_mode='symmetric')
+            padded_im = padded_im[0, pad_size:-pad_size]
+            filters = torch.ones(1, 1, size, dtype=padded_im.dtype, device=im.device)
+            return F.conv1d(padded_im.unsqueeze(1), filters).squeeze(1) / size
+        
+        im = conv(im)
+        im = conv(im.T)
+        return im.T
+    except Exception:
+        # Fallback to simple averaging
+        return im

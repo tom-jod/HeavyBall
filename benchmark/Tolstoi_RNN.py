@@ -144,7 +144,7 @@ def main(
     test_loader: bool = None,
     track_variance: bool = False,
     runtime_limit: int = 3600 * 24,
-    step_hint: int = 67000
+    step_hint: int = 123000
 ):  
     dtype = [getattr(torch, d) for d in dtype]
     
@@ -216,12 +216,13 @@ def main(
         target = target.view(-1)  # (batch_size * seq_length,)
         return F.cross_entropy(output, target)
     
+    #1.9673629999160767
     
     trial(
         model,
         data,
         loss_fn,
-        loss_win_condition(win_condition_multiplier * 1.9673629999160767),  # Reasonable loss target for char-level modeling
+        loss_win_condition(win_condition_multiplier * 0.0),  # Reasonable loss target for char-level modeling
         steps,
         opt[0],
         dtype[0],

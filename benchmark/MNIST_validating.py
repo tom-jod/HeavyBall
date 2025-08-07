@@ -323,7 +323,7 @@ def set_deterministic_weights(model, seed=42):
 @app.command()
 def main(
     hidden_size: int = 128,
-    batch: int = 64,
+    batch: int = 128,
     steps: int = 100,
     weight_decay: float = 0.0,
     lr: float = 0.001,

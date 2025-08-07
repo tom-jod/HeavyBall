@@ -64,9 +64,9 @@ def main(
     opt: List[str] = typer.Option(["ForeachSOAP"], help="Optimizers to use"),
     win_condition_multiplier: float = 1.0,
     trials: int = 10,
-    estimate_condition_number: bool = True,
+    estimate_condition_number: bool = False,
     test_loader: bool = None,
-    track_variance: bool = True,
+    track_variance: bool = False,
     runtime_limit: int = 3600 * 24,
     step_hint: int = 317000
 ):
@@ -98,6 +98,7 @@ def main(
 
     test_dataset = datasets.MNIST(
     data_dir, train=False, download=True, transform=transform)
+
     test_loader = torch.utils.data.DataLoader(
         test_dataset,
         batch_size=batch,

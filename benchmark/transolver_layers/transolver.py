@@ -118,7 +118,6 @@ class TransolverReg(nn.Module):
                          or [B, N] if output_dim is 1
         """
         fx = None
-        x = x[None, :, :]
 
         if len(x.shape) == 4:
             x = x.squeeze(1)  # Remove dimension if it's [1, 1, N, C]

@@ -25,40 +25,45 @@ class WideBasicBlock(nn.Module):
     def __init__(self, in_planes, planes, dropout_rate, stride=1):
         super(WideBasicBlock, self).__init__()
         self.bn1 = nn.BatchNorm2d(in_planes)
-        self.conv1 = nn.Conv2d(in_planes, planes, kernel_size=3, padding=1, bias=False)
-        self.dropout = nn.Dropout(p=dropout_rate)
+        self.conv1 = nn.Conv2d(in_planes, planes, kernel_size=3, stride=stride, padding=1, bias=False)
         self.bn2 = nn.BatchNorm2d(planes)
-        self.conv2 = nn.Conv2d(planes, planes, kernel_size=3, stride=stride, padding=1, bias=False)
-
+        self.conv2 = nn.Conv2d(planes, planes, kernel_size=3, stride=1, padding=1, bias=False)
+        self.dropout = nn.Dropout(p=dropout_rate)
+        
         self.shortcut = nn.Sequential()
         if stride != 1 or in_planes != planes:
-            self.shortcut = nn.Sequential(
-                nn.Conv2d(in_planes, planes, kernel_size=1, stride=stride, bias=False),
-            )
+            self.shortcut = nn.Conv2d(in_planes, planes, kernel_size=1, stride=stride, bias=False)
 
     def forward(self, x):
-        out = self.dropout(self.conv1(F.relu(self.bn1(x))))
-        out = self.conv2(F.relu(self.bn2(out)))
+        # Pre-activation: BN → ReLU → Conv (following Lua version exactly)
+        out = F.relu(self.bn1(x))
+        out = self.conv1(out)
+        out = F.relu(self.bn2(out))
+        if self.dropout.p > 0:  # Only apply dropout if rate > 0
+            out = self.dropout(out)
+        out = self.conv2(out)
+        
+        # Residual connection
         out += self.shortcut(x)
         return out
-
-
+    
 class Model(nn.Module):
-    def __init__(self, depth: int = 28, widen_factor: int = 10, dropout_rate: float = 0.3, num_classes: int = 100):
+    def __init__(self, depth: int = 16, widen_factor: int = 8, dropout_rate: float = 0.0, num_classes: int = 10):
         super(Model, self).__init__()
         self.in_planes = 16
 
         assert ((depth-4) % 6 == 0), 'Wide-resnet depth should be 6n+4'
-        n = (depth-4) / 6
+        n = int((depth-4) / 6)  # For depth=16: n=2
         k = widen_factor
 
-        nStages = [16, 16*k, 32*k, 64*k]
+        # Channel progression matching Lua version
+        nStages = [16, 16*k, 32*k, 64*k]  # [16, 128, 256, 512] for k=8
 
         self.conv1 = nn.Conv2d(3, nStages[0], kernel_size=3, stride=1, padding=1, bias=False)
         self.layer1 = self._wide_layer(WideBasicBlock, nStages[1], n, dropout_rate, stride=1)
         self.layer2 = self._wide_layer(WideBasicBlock, nStages[2], n, dropout_rate, stride=2)
         self.layer3 = self._wide_layer(WideBasicBlock, nStages[3], n, dropout_rate, stride=2)
-        self.bn1 = nn.BatchNorm2d(nStages[3], momentum=0.9)
+        self.bn1 = nn.BatchNorm2d(nStages[3])
         self.linear = nn.Linear(nStages[3], num_classes)
 
     def _wide_layer(self, block, planes, num_blocks, dropout_rate, stride):
@@ -87,16 +92,21 @@ class Model(nn.Module):
 def main(
     method: List[str] = typer.Option(["qr"], help="Eigenvector method to use (for SOAP)"),
     dtype: List[str] = typer.Option(["float32"], help="Data type to use"),
-    depth: int = 28,
-    widen_factor: int = 10,
-    dropout_rate: float = 0.3,
-    num_classes: int = 100,
+    depth: int = 16,
+    widen_factor: int = 8,
+    dropout_rate: float = 0.0,
+    num_classes: int = 10,
     batch: int = 128,
     steps: int = 2000,
     weight_decay: float = 5e-4,
     opt: List[str] = typer.Option(["ForeachSOAP"], help="Optimizers to use"),
     win_condition_multiplier: float = 1.0,
     trials: int = 10,
+    estimate_condition_number: bool = False,
+    test_loader: bool = None,
+    track_variance: bool = False,
+    runtime_limit: int = 3600 * 24,
+    step_hint: int = 67000
 ):
     dtype = [getattr(torch, d) for d in dtype]
     model = Model(depth, widen_factor, dropout_rate, num_classes).cuda()
@@ -118,15 +128,15 @@ def main(
     ])
 
     # Load datasets
-    trainset = torchvision.datasets.CIFAR100(
+    trainset = torchvision.datasets.CIFAR10(
         root='./data', train=True, download=True, transform=transform_train
     )
     trainloader = DataLoader(trainset, batch_size=batch, shuffle=True, num_workers=4, pin_memory=True)
     
-    testset = torchvision.datasets.CIFAR100(
+    testset = torchvision.datasets.CIFAR10(
         root='./data', train=False, download=True, transform=transform_test
     )
-    testloader = DataLoader(testset, batch_size=batch, shuffle=False, num_workers=4, pin_memory=True)
+    test_loader = DataLoader(testset, batch_size=batch, shuffle=False, num_workers=4, pin_memory=True)
 
     # Create data iterator that matches the expected format
     train_iter = iter(trainloader)
@@ -144,7 +154,7 @@ def main(
         model,
         data,
         F.cross_entropy,
-        loss_win_condition(win_condition_multiplier * 1.5),  # Adjusted for CIFAR-100 difficulty
+        loss_win_condition(win_condition_multiplier * 0.0),  # Adjusted for CIFAR-100 difficulty
         steps,
         opt[0],
         dtype[0],
@@ -157,7 +167,12 @@ def main(
         failure_threshold=10,
         base_lr=1e-3,
         trials=trials,
-        estimate_condition_number = True
+        estimate_condition_number=estimate_condition_number,
+        test_loader=test_loader,
+        track_variance=track_variance,
+        runtime_limit=runtime_limit,
+        step_hint=step_hint,
+        group=10
     )
 
 

@@ -119,7 +119,7 @@ def main(
         model,
         data,
         loss_fn,
-        loss_win_condition(win_condition_multiplier * 0.001),  # Lower target for convergence
+        loss_win_condition(win_condition_multiplier * 0.000),  # Lower target for convergence
         steps,
         opt[0],
         dtype[0],
@@ -132,7 +132,7 @@ def main(
         failure_threshold=10,
         base_lr=1e-4,  # Lower learning rate for stability
         trials=trials,
-        estimate_condition_number=False,
+        estimate_condition_number=True,
         test_loader=None,
         track_variance=True
     )

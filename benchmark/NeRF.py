@@ -166,7 +166,7 @@ def main(
         model,
         data,
         loss_fn,
-        loss_win_condition(win_condition_multiplier * 0.01),  # Target loss
+        loss_win_condition(win_condition_multiplier * 0.0),  # Target loss
         steps,
         opt[0],
         dtype[0],
@@ -179,7 +179,7 @@ def main(
         failure_threshold=10,
         base_lr=5e-4,  # Good learning rate for NeRF
         trials=trials,
-        estimate_condition_number=False,
+        estimate_condition_number=True,
         test_loader=None,
         track_variance=True
     )
