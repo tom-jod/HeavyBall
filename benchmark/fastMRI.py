@@ -432,7 +432,6 @@ def main(
         track_variance=track_variance,
         runtime_limit=runtime_limit,
         step_hint=step_hint,
-        group=10
     )
     
 if __name__ == "__main__":

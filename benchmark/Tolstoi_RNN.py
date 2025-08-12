@@ -193,7 +193,7 @@ def main(
         num_workers=0,
         pin_memory=True
     )
-    
+    print(len(train_dataset))
     # Create data iterator
     data_iter = iter(train_loader)
     
@@ -216,13 +216,14 @@ def main(
         target = target.view(-1)  # (batch_size * seq_length,)
         return F.cross_entropy(output, target)
     
-    #1.9673629999160767
     
+    test_target = 1 - 0.6056 # 1 - target_test_accuracy as loss_win_condition checks if we are below a threshold
+
     trial(
         model,
         data,
         loss_fn,
-        loss_win_condition(win_condition_multiplier * 0.0),  # Reasonable loss target for char-level modeling
+        loss_win_condition(win_condition_multiplier * test_target),
         steps,
         opt[0],
         dtype[0],

@@ -120,12 +120,12 @@ def main(
     trainset = torchvision.datasets.CIFAR100(
         root='./data', train=True, download=True, transform=transform_train
     )
-    trainloader = DataLoader(trainset, batch_size=batch, shuffle=True, num_workers=4, pin_memory=True)
+    trainloader = DataLoader(trainset, batch_size=batch, shuffle=True, num_workers=0, pin_memory=True)
     
     testset = torchvision.datasets.CIFAR100(
         root='./data', train=False, download=True, transform=transform_test
     )
-    test_loader = DataLoader(testset, batch_size=batch, shuffle=False, num_workers=4, pin_memory=True)
+    test_loader = DataLoader(testset, batch_size=batch, shuffle=False, num_workers=0, pin_memory=True)
 
     # Create data iterator that matches the expected format
     train_iter = iter(trainloader)
@@ -141,12 +141,13 @@ def main(
 
 
     #0.5576767921447754
-
+    test_target = 1 - 0.7415 # 1 - target_test_accuracy as loss_win_condition checks if we are below a threshold
+    # line 952 of CIFAR target setting
     trial(
         model,
         data,
         F.cross_entropy,
-        loss_win_condition(win_condition_multiplier * 0.0),  
+        loss_win_condition(win_condition_multiplier * test_target), 
         steps,
         opt[0],
         dtype[0],
