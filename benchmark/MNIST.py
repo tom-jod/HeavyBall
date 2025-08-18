@@ -131,7 +131,7 @@ def main(
         model,
         data,
         loss_fn,
-        loss_win_condition(win_condition_multiplier * 0.0),
+        loss_win_condition(win_condition_multiplier * win_target),
         steps,
         opt[0],
         dtype[0],

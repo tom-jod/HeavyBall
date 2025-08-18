@@ -121,10 +121,12 @@ def main(
         root='./data', train=True, download=True, transform=transform_train
     )
     trainloader = DataLoader(trainset, batch_size=batch, shuffle=True, num_workers=0, pin_memory=True)
+    trainloader = DataLoader(trainset, batch_size=batch, shuffle=True, num_workers=0, pin_memory=True)
     
     testset = torchvision.datasets.CIFAR100(
         root='./data', train=False, download=True, transform=transform_test
     )
+    test_loader = DataLoader(testset, batch_size=batch, shuffle=False, num_workers=0, pin_memory=True)
     test_loader = DataLoader(testset, batch_size=batch, shuffle=False, num_workers=0, pin_memory=True)
 
     # Create data iterator that matches the expected format
@@ -141,6 +143,8 @@ def main(
 
 
     #0.5576767921447754
+    test_target = 1 - 0.7415 # 1 - target_test_accuracy as loss_win_condition checks if we are below a threshold
+    # line 952 of CIFAR target setting
     test_target = 1 - 0.7415 # 1 - target_test_accuracy as loss_win_condition checks if we are below a threshold
     # line 952 of CIFAR target setting
     trial(

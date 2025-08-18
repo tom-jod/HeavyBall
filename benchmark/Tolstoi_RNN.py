@@ -194,6 +194,7 @@ def main(
         pin_memory=True
     )
     print(len(train_dataset))
+    print(len(train_dataset))
     # Create data iterator
     data_iter = iter(train_loader)
     
@@ -216,6 +217,9 @@ def main(
         target = target.view(-1)  # (batch_size * seq_length,)
         return F.cross_entropy(output, target)
     
+    
+    test_target = 1 - 0.6056 # 1 - target_test_accuracy as loss_win_condition checks if we are below a threshold
+
     
     test_target = 1 - 0.6056 # 1 - target_test_accuracy as loss_win_condition checks if we are below a threshold
 

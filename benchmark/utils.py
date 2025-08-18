@@ -380,6 +380,7 @@ class Objective:
         # Set total_steps for lr schedules
         self.kwargs["total_steps"] = step_hint
         self.step_counter = 0
+        self.step_counter = 0
 
     def win_condition(self, loss=None):
         if loss is not None:
@@ -441,6 +442,10 @@ class Objective:
             params["precond_init_scale"] = 0.1
         self.m = copy.deepcopy(self.model)
         o = get_optim(self.opt, self.m.parameters(), **params, **self.kwargs)
+        is_lbfgs = hasattr(o, 'external_optimizers') and any(
+            isinstance(opt, torch.optim.LBFGS) 
+            for opt in o.external_optimizers.values()
+            )
         is_lbfgs = hasattr(o, 'external_optimizers') and any(
             isinstance(opt, torch.optim.LBFGS) 
             for opt in o.external_optimizers.values()
@@ -536,6 +541,7 @@ class Objective:
                     
                     if self.loss_fn is not None:
                         loss = self.loss_fn(loss, gpu_tgt)  
+                        loss = self.loss_fn(loss, gpu_tgt)  
                     
                     loss.backward()
                     
@@ -546,6 +552,50 @@ class Objective:
                     
                     return loss
                 
+                # Later, when you need previous model:
+                def _prev_closure():
+                    nonlocal prev_model_params
+                    
+                    if prev_model_params is None:
+                        # First step: no previous model, use current closure
+                        prev_model_params = {name: param.data.clone().detach() 
+                                        for name, param in self.m.named_parameters()}
+                        return _closure()
+                    
+                    # Save current state
+                    current_state = {name: param.clone() for name, param in self.m.named_parameters()}
+                    
+                    try:
+                        # Restore previous model state
+                        for name, param in self.m.named_parameters():
+                            if name in prev_model_params:
+                                param.data.copy_(prev_model_params[name])
+                        
+                        # Compute loss with previous model
+                        loss = self.m() if inp is None else self.m(inp)
+                        if self.loss_fn is not None:
+                            loss = self.loss_fn(loss, tgt)
+                        loss.backward()
+                        return loss
+                    finally:
+                        # Restore current state
+                        for name, param in self.m.named_parameters():
+                            if name in current_state:
+                                param.data.copy_(current_state[name])
+                        # Update prev_model_params
+                        prev_model_params = {name: param.data.clone().detach() 
+                                        for name, param in self.m.named_parameters()}
+                
+                try:
+                    if is_lbfgs:
+                        # Store closure on the chainable optimizer for L-BFGS
+                        o._lbfgs_closure = _closure
+                        
+                    # Always use the same step methods
+                    if self.requires_prev_model(o):
+                        loss = o.step_with_prev(_closure, _prev_closure)
+                    else:
+                        loss = o.step(_closure)
                
                 
                 try:
@@ -906,6 +956,7 @@ def trial(
             'condition_numbers': obj.condition_numbers.copy() if hasattr(obj, 'condition_numbers') else [],
             'runtime': obj.runtime if hasattr(obj, 'runtime') else [],
             'steps': obj.step_counter if hasattr(obj, 'step_counter') else steps
+            'steps': obj.step_counter if hasattr(obj, 'step_counter') else steps
             }
             all_trial_results.append(trial_result)
                 
@@ -939,6 +990,7 @@ def trial(
             did_win = False
             nonlocal hyperparam_counter
             set_seed(0x12312)
+            if hyperparam_counter < len(fixed_hyperparams_list):
             if hyperparam_counter < len(fixed_hyperparams_list):
                 hyperparams = fixed_hyperparams_list[hyperparam_counter]
                 hyperparam_counter += 1
@@ -992,12 +1044,22 @@ def trial(
                     'condition_numbers': obj.condition_numbers.copy() if hasattr(obj, 'condition_numbers') else [],
                     'runtime': obj.runtime if hasattr(obj, 'runtime') else 0,
                     'steps': obj.step_counter if hasattr(obj, 'step_counter') else steps,
+                    'steps': obj.step_counter if hasattr(obj, 'step_counter') else steps,
                 }
+                print(trial_result)
+                all_trial_results.append(trial_result)   
                 print(trial_result)
                 all_trial_results.append(trial_result)   
                 return obj.runtime if hasattr(obj, 'runtime') else float('inf')
             
         set_seed()
+        n_trials = 5
+        # If trials is less than 5, only do trials many runs
+        if trials < n_trials:
+            n_trials = trials
+
+        study.optimize(_optuna_objective, n_trials)
+           
         n_trials = 5
         # If trials is less than 5, only do trials many runs
         if trials < n_trials:
@@ -1083,6 +1145,7 @@ def trial(
                     'condition_numbers': obj.condition_numbers.copy() if hasattr(obj, 'condition_numbers') else [],
                     'runtime': obj.runtime if hasattr(obj, 'runtime') else [],
                     'steps': obj.step_counter if hasattr(obj, 'step_counter') else steps,
+                    'steps': obj.step_counter if hasattr(obj, 'step_counter') else steps,
                 }
                 print(trial_result)
                 all_trial_results.append(trial_result)   
@@ -1105,6 +1168,7 @@ def trial(
         final_grad_variances = best_trial['grad_variances']
         final_condition_numbers = best_trial['condition_numbers']
         final_runtime = best_trial['runtime']
+        final_steps = best_trial['steps']
         final_steps = best_trial['steps']
         
         print("Successfully found the minimum runtime")
@@ -1133,10 +1197,14 @@ def trial(
     torch.cuda.synchronize() 
     end_time = time.time()
     print(best_test_accuracy)
+    print(best_test_accuracy)
     print(
         f"Took: {end_time - start_time} | Highest_accuracy: {best_test_accuracy} | Winning_runtime: {final_runtime} | Trials: {obj.attempt + 1} | "
         f"Params: {opt.__name__}_{winning_params} | "
+        f"Took: {end_time - start_time} | Highest_accuracy: {best_test_accuracy} | Winning_runtime: {final_runtime} | Trials: {obj.attempt + 1} | "
+        f"Params: {opt.__name__}_{winning_params} | "
         f"loss_trajectory: {final_losses} | test_accuracies: {final_test_accuracies} | "
+        f"grad_variances: {final_grad_variances} | mean_cond: {mean_cond} | std_err_cond: {std_err_cond} | steps: {final_steps} "
         f"grad_variances: {final_grad_variances} | mean_cond: {mean_cond} | std_err_cond: {std_err_cond} | steps: {final_steps} "
     )
     
