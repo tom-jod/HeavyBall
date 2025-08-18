@@ -1607,33 +1607,55 @@ class StatefulOptimizer(torch.optim.Optimizer):
         
         loss = self._handle_closure(closure)
         
-        # we assume that parameters are constant and that there are no excessive recompiles
+        # Track if we have any DistributedShampoo groups
+        has_shampoo_groups = False
+        
         with torch.no_grad(), torch._dynamo.utils.disable_cache_limit():
             for group in self.param_groups:
                 if "param_count" not in group:
                     group["param_count"] = sum(p.numel() for p in group["params"])
                 group["is_preconditioning"] = self._is_preconditioning
-                
+                external_optimizer_type = group.get("external_optimizer", None)
                 # Check if this group uses an external optimizer
-                if "optimizer_type" in group:
-                    # Handle external optimizer
-                    param_tensors = [p for p in group['params'] if p.grad is not None]
-                    grads = [p.grad for p in param_tensors]
+                if external_optimizer_type is not None:
                     
-                    if param_tensors:
-                        self._use_external_optimizer(group, group["optimizer_type"], param_tensors, grads)
+                    if external_optimizer_type.lower() == "distributedshampoo":
+                        
+                        has_shampoo_groups = True
+                        # For Shampoo: just assign gradients, don't step yet
+                        param_tensors = [p for p in group['params'] if p.grad is not None]
+                        grads = [p.grad for p in param_tensors]
+                        
+                        if param_tensors:
+                            # Ensure global optimizers are created
+                            self._create_global_shampoo_optimizers()
+                            # Just assign gradients
+                            for param, grad in zip(param_tensors, grads):
+                                param.grad = grad
+                    else:
+                        # Handle other external optimizers normally
+                        param_tensors = [p for p in group['params'] if p.grad is not None]
+                        grads = [p.grad for p in param_tensors]
+                        
+                        if param_tensors:
+                            self._use_external_optimizer(group, external_optimizer_type, param_tensors, grads, closure)
                 else:
                     # Use your existing chain-based approach
-                    self._step(group)
+                    self._step(group, closure)
             
-            if self.use_ema:
-                self.ema_update()
-            
-            for real, views in self.mapping.items():
-                for tensor in (real, *views):
-                    for key in ("grad", "vector", "hessian_vector", "orig"):
-                        if hasattr(tensor, key):
-                            setattr(tensor, key, None)
+            # Step global Shampoo optimizers once after all groups are processed
+            if has_shampoo_groups:
+                self._step_global_shampoo_optimizers()
+                self._clear_shampoo_gradients()
+        
+        if self.use_ema:
+            self.ema_update()
+        
+        for real, views in self.mapping.items():
+            for tensor in (real, *views):
+                for key in ("grad", "vector", "hessian_vector", "orig"):
+                    if hasattr(tensor, key):
+                        setattr(tensor, key, None)
         
         return loss
     

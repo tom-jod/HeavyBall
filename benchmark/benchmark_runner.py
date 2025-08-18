@@ -45,7 +45,7 @@ def run_single_benchmark(script_path, optimizer, steps, trials, seed, output_dir
             capture_output=True,
             text=True,
             timeout=72*3600,  # 24 hour timeout
-            env={**os.environ, "CUDA_VISIBLE_DEVICES": "2"}  # Ensure single GPU
+            env={**os.environ, "CUDA_VISIBLE_DEVICES": "1"}  # Ensure single GPU
         )
         
         # Save the full output
@@ -113,7 +113,8 @@ def parse_benchmark_output(stdout, stderr):
         "config_str": "",
         "mean_cond": None,
         "std_err_cond": None,
-        "memory_usage": None
+        "memory_usage": None,
+        "steps": None
     }
     
     # Parse the final output line that contains all the metrics
@@ -122,19 +123,19 @@ def parse_benchmark_output(stdout, stderr):
     lines = stdout.split('\n')
     for line in lines:
         # Look for the summary line
-        if "Took:" in line and "Best Loss:" in line:
+        if "Took:" in line:
             # Extract runtime
             runtime_match = re.search(r"Took: ([0-9.]+)", line)
             if runtime_match:
                 result["runtime"] = float(runtime_match.group(1))
             
             # Extract attempts
-            attempts_match = re.search(r"Attempt: ([0-9]+)", line)
+            attempts_match = re.search(r"Trials: ([0-9]+)", line)
             if attempts_match:
                 result["attempts"] = int(attempts_match.group(1))
             
             # Extract best loss
-            loss_match = re.search(r"Best Loss: ([0-9.e\-+]+)", line)
+            loss_match = re.search(r"Highest_accuracy: ([0-9.e\-+]+)", line)
             if loss_match:
                 result["best_loss"] = float(loss_match.group(1))
             
@@ -156,6 +157,7 @@ def parse_benchmark_output(stdout, stderr):
                     result["test_accuracies"] = ast.literal_eval(acc_match.group(1))
                 except:
                     pass
+   
 
             # Extract gradient variances
             acc_match = re.search(r"grad_variances: (\[.*?\])", line)
@@ -175,6 +177,10 @@ def parse_benchmark_output(stdout, stderr):
             mem_match = re.search(r"memory_usage: ([0-9.e\-+]+)", line)
             if mem_match:
                 result["memory_usage"] = float(mem_match.group(1))
+
+            steps = re.search(r"steps: ([0-9.e\-+]+)", line)
+            if mem_match:
+                result["steps"] = float(steps.group(1))
     
     return result
 

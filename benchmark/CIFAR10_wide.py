@@ -131,12 +131,12 @@ def main(
     trainset = torchvision.datasets.CIFAR10(
         root='./data', train=True, download=True, transform=transform_train
     )
-    trainloader = DataLoader(trainset, batch_size=batch, shuffle=True, num_workers=4, pin_memory=True)
+    trainloader = DataLoader(trainset, batch_size=batch, shuffle=True, num_workers=0, pin_memory=True)
     
     testset = torchvision.datasets.CIFAR10(
         root='./data', train=False, download=True, transform=transform_test
     )
-    test_loader = DataLoader(testset, batch_size=batch, shuffle=False, num_workers=4, pin_memory=True)
+    test_loader = DataLoader(testset, batch_size=batch, shuffle=False, num_workers=0, pin_memory=True)
 
     # Create data iterator that matches the expected format
     train_iter = iter(trainloader)
@@ -172,7 +172,6 @@ def main(
         track_variance=track_variance,
         runtime_limit=runtime_limit,
         step_hint=step_hint,
-        group=10
     )
 
 

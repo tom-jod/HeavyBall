@@ -25,7 +25,6 @@ from benchmark.algoperf.model import UNet
 
 app = typer.Typer(pretty_exceptions_enable=False)
 
-# Add the missing functions from the original FastMRI pipeline
 def _process_example(kspace, kspace_shape, target, target_shape, volume_max, seed):
     """Generate a single example (slice from mri image)."""
     
@@ -134,95 +133,13 @@ def _create_generator(filename):
     return tf.data.Dataset.from_generator(
         _h5_to_examples, args=(filename,), output_signature=signature)
 
-def load_fastmri_split_memory_efficient(global_batch_size,
-                                      split,
-                                      data_dir,
-                                      shuffle_rng,
-                                      num_batches,
-                                      repeat_final_eval_dataset):
-    """Memory-efficient version of load_fastmri_split"""
-    
-    _TRAIN_DIR = 'singlecoil_train'
-    _VAL_DIR = 'singlecoil_val'
-    _EVAL_SEED = 0
-    
-    if split not in ['train', 'eval_train', 'validation', 'test']:
-        raise ValueError('Unrecognized split {}'.format(split))
-    
-    # Check if data directories exist
-    if not os.path.exists(os.path.join(data_dir, _TRAIN_DIR)):
-        raise NotADirectoryError('Directory not found: {}'.format(
-            os.path.join(data_dir, _TRAIN_DIR)))
-    if not os.path.exists(os.path.join(data_dir, _VAL_DIR)):
-        raise NotADirectoryError('Directory not found: {}'.format(
-            os.path.join(data_dir, _VAL_DIR)))
-    
-    if split in ['train', 'eval_train']:
-        file_pattern = os.path.join(data_dir, _TRAIN_DIR, '*.h5')
-        h5_paths = glob.glob(file_pattern)
-    elif split == 'validation':
-        file_pattern = os.path.join(data_dir, _VAL_DIR, '*.h5')
-        h5_paths = sorted(glob.glob(file_pattern))[:100]
-    elif split == 'test':
-        file_pattern = os.path.join(data_dir, _VAL_DIR, '*.h5')
-        h5_paths = sorted(glob.glob(file_pattern))[100:]
-    
-    is_train = split == 'train'
-    shuffle = is_train or split == 'eval_train'
-    
-    ds = tf.data.Dataset.from_tensor_slices(h5_paths)
-    
-    # Reduce interleave parameters to use less memory
-    ds = ds.interleave(
-        _create_generator,
-        cycle_length=4,  # Reduced from 32
-        block_length=8,   # Reduced from 64
-        num_parallel_calls=2  # Reduced from 16
-    )
-    
-    # REMOVE CACHING - This was the main memory hog!
-    # if is_train:
-    #     ds = ds.cache()
-    
-    def process_example(example_index, example):
-        if shuffle:
-            process_rng = tf.cast(jax.random.fold_in(shuffle_rng, 0), tf.int64)
-            process_rng = tf.random.experimental.stateless_fold_in(
-                process_rng, example_index)
-        else:
-            process_rng = tf.cast(jax.random.PRNGKey(_EVAL_SEED), tf.int64)
-        return _process_example(*example, process_rng)
-    
-    ds = ds.enumerate().map(process_example, num_parallel_calls=2)  # Reduced from 16
-    
-    if shuffle:
-        # Reduce shuffle buffer size significantly
-        ds = ds.shuffle(
-            2 * global_batch_size,  # Reduced from 16 * global_batch_size
-            seed=shuffle_rng[0],
-            reshuffle_each_iteration=True)
-    
-    if is_train:
-        ds = ds.repeat()
-    
-    ds = ds.batch(global_batch_size, drop_remainder=is_train)
-    
-    if not is_train:
-        if num_batches:
-            ds = ds.take(num_batches)
-        # Remove caching for eval too
-        # ds = ds.cache()
-        if repeat_final_eval_dataset:
-            ds = ds.repeat()
-    
-    return iter(ds)
 
 def load_fastmri_split_minimal_memory(global_batch_size, split, data_dir, shuffle_rng):
     """Minimal memory version - load one file at a time"""
-    
     _TRAIN_DIR = 'singlecoil_train'
     _VAL_DIR = 'singlecoil_val'
     
+    # FIX: Actually use the split parameter!
     if split in ['train', 'eval_train']:
         file_pattern = os.path.join(data_dir, _TRAIN_DIR, '*.h5')
         h5_paths = glob.glob(file_pattern)
@@ -232,30 +149,34 @@ def load_fastmri_split_minimal_memory(global_batch_size, split, data_dir, shuffl
     elif split == 'test':
         file_pattern = os.path.join(data_dir, _VAL_DIR, '*.h5')
         h5_paths = sorted(glob.glob(file_pattern))[100:]
+    else:
+        raise ValueError(f"Unknown split: {split}")
     
-    # Create a simple Python generator instead of TF dataset
+    print(f"Loading {split} split with {len(h5_paths)} files")  # Debug info
+    
     def simple_generator():
-        while True:  # Infinite loop for training
+        # FIX: Don't loop infinitely for test/validation
+        loop_count = 0 if split in ['test', 'validation'] else float('inf')
+        
+        while True:
             for h5_path in h5_paths:
                 for example in _h5_to_examples(h5_path):
-                    # Process example immediately
                     kspace, kspace_shape, target, target_shape, volume_max = example
                     
-                    # Convert to numpy immediately
-                    if hasattr(kspace, 'numpy'):
-                        kspace = kspace.numpy()
-                    if hasattr(target, 'numpy'):
-                        target = target.numpy()
-                    
-                    # Simple processing (skip the complex TF processing for now)
-                    processed = {
-                        'inputs': target,  # Use target as input for simplicity
-                        'targets': target,
-                    }
-                    
-                    yield processed
+                    # FIX: Actually process the data properly
+                    # This is a simplified version - you should implement proper masking
+                    processed_example = _process_example(
+                        kspace, kspace_shape, target, target_shape, 
+                        volume_max, shuffle_rng
+                    )
+                    yield processed_example
+            
+            if loop_count != float('inf'):
+                break
+            loop_count -= 1
     
     return simple_generator()
+
 
 def tf_to_torch_batch_efficient(tf_batch):
     """Memory-efficient conversion from TensorFlow to PyTorch tensors."""
@@ -293,40 +214,68 @@ def tf_to_torch_batch_efficient(tf_batch):
     return inputs, targets
 
 class FastMRITestDataset:
-    """Wrapper to make the test iterator compatible with the evaluation function"""
+    """Wrapper to make the test iterator compatible with the evaluation function - DEBUG VERSION"""
     def __init__(self, test_iterator):
         self.test_iterator = test_iterator
+        self.count = 0
+        print(f"DEBUG: FastMRITestDataset initialized with iterator type: {type(test_iterator)}")
     
     def __iter__(self):
+        print("DEBUG: FastMRITestDataset.__iter__ called")
+        self.count = 0
         return self
     
     def __next__(self):
+        self.count += 1
+        print(f"DEBUG: FastMRITestDataset.__next__ called (batch #{self.count})")
+        
         try:
             batch_data = next(self.test_iterator)
+            print(f"DEBUG: Got batch_data type: {type(batch_data)}")
+            
+            if isinstance(batch_data, dict):
+                print(f"DEBUG: batch_data keys: {batch_data.keys()}")
+            
         except StopIteration:
+            print("DEBUG: StopIteration in FastMRITestDataset")
             raise StopIteration
+        except Exception as e:
+            print(f"DEBUG: Error getting batch_data: {e}")
+            import traceback
+            traceback.print_exc()
+            raise
         
         # Convert efficiently
-        if isinstance(batch_data, dict):
-            inputs, targets = tf_to_torch_batch_efficient(batch_data)
-        else:
-            # Handle non-dict case
-            inputs = batch_data
-            if hasattr(inputs, 'numpy'):
-                inputs = torch.from_numpy(inputs.numpy()).float()
+        try:
+            if isinstance(batch_data, dict):
+                inputs, targets = tf_to_torch_batch_efficient(batch_data)
+                print(f"DEBUG: Converted dict - inputs: {inputs.shape}, targets: {targets.shape}")
+            else:
+                # Handle non-dict case
+                inputs = batch_data
+                if hasattr(inputs, 'numpy'):
+                    inputs = torch.from_numpy(inputs.numpy()).float()
+                
+                # Fix dimension handling here too
+                if inputs.ndim == 2:  # [H, W]
+                    inputs = inputs.unsqueeze(0).unsqueeze(0)  # [1, 1, H, W]
+                elif inputs.ndim == 3:  # [B, H, W] or [H, W, C]
+                    if inputs.shape[-1] == 1:  # [H, W, 1] -> [1, 1, H, W]
+                        inputs = inputs.squeeze(-1).unsqueeze(0).unsqueeze(0)
+                    else:  # [B, H, W] -> [B, 1, H, W]
+                        inputs = inputs.unsqueeze(1)
+                
+                targets = inputs.clone()  # For unsupervised case
+                print(f"DEBUG: Converted non-dict - inputs: {inputs.shape}")
             
-            # Fix dimension handling here too
-            if inputs.ndim == 2:  # [H, W]
-                inputs = inputs.unsqueeze(0).unsqueeze(0)  # [1, 1, H, W]
-            elif inputs.ndim == 3:  # [B, H, W] or [H, W, C]
-                if inputs.shape[-1] == 1:  # [H, W, 1] -> [1, 1, H, W]
-                    inputs = inputs.squeeze(-1).unsqueeze(0).unsqueeze(0)
-                else:  # [B, H, W] -> [B, 1, H, W]
-                    inputs = inputs.unsqueeze(1)
+            print(f"DEBUG: Returning batch - inputs: {inputs.shape}, targets: {targets.shape}")
+            return inputs, targets
             
-            targets = inputs.clone()  # For unsupervised case
-        
-        return inputs, targets
+        except Exception as e:
+            print(f"DEBUG: Error in data conversion: {e}")
+            import traceback
+            traceback.print_exc()
+            raise
     
 @app.command()
 def main(

@@ -1,4 +1,5 @@
 import copy
+import time
 import functools
 import math
 import random
@@ -1383,7 +1384,7 @@ class ChainOpt(utils.StatefulOptimizer):
         self._global_shampoo_optimizers = {}
         self._param_to_optimizer_map = {}  # Track which optimizer handles which param
 
-    def _step(self, group):
+    def _step(self, group, closure=None):
         
         if "base_lr" not in group:
             group["base_lr"] = group["lr"]
@@ -1411,20 +1412,25 @@ class ChainOpt(utils.StatefulOptimizer):
             
         p, g = zip(*vals)
         
-        # Get and update step count
+        # Get step count from first parameter (they should all be the same)
+        step = 0
         for param in p:
             state = self.state_(param)
             if "step" in state:
                 step = state["step"]
+                break
             elif self.compile_step:
                 step = utils.scalar_guard(0, param)
-            else:
-                step = 0
-            break
-            
-        # Increment step
-        group["step"] = state["step"] = step = step + 1
-        
+                break
+
+        # Increment step for ALL parameters
+        step = step + 1
+        for param in p:
+            state = self.state_(param)
+            state["step"] = step
+
+        group["step"] = step
+                
         # Handle learning rate scheduling
         current_lr = group["base_lr"]
         external_optimizer_type = group.get("external_optimizer", None)
@@ -1461,11 +1467,17 @@ class ChainOpt(utils.StatefulOptimizer):
         # Apply optimization step
         
         
+        
         if external_optimizer_type is not None:
-            # For external optimizers, we need to extract the actual parameter tensors
-            # p and g are tuples from zip(*vals), we need the actual tensors
-            param_tensors = [param for param, _ in vals]  # Extract just the parameters
-            self._use_external_optimizer(group, external_optimizer_type, param_tensors, g)
+            if external_optimizer_type.lower() == "distributedshampoo":
+                # Just assign gradients
+                for param, grad in zip([param for param, _ in vals], g):
+                    param.grad = grad
+            else:
+                # Handle other external optimizers as before
+                param_tensors = [param for param, _ in vals]
+                self._use_external_optimizer(group, external_optimizer_type, param_tensors, g, closure)
+            
         else:
             # Use your custom chain-based optimizers
             if not group["foreach"] or len(p) == 1:
@@ -1551,25 +1563,29 @@ class ChainOpt(utils.StatefulOptimizer):
 
     def _create_algoperf_shampoo(self, params, group, use_full_shampoo=True):
         """Create DistributedShampoo exactly like AlgoPerf"""
+        print(group)
+        lr = group["lr"]
         try:
+            weight_decay = group.get("weight_decay", 0.0)
+            eps = group.get("eps", 1e-8)
+       
             from optimizers.distributed_shampoo.distributed_shampoo import DistributedShampoo
             from optimizers.distributed_shampoo.shampoo_types import (
                 AdamGraftingConfig, DDPShampooConfig, CommunicationDType
             )
             import torch.distributed as dist
-            
             # Initialize distributed if needed
+            port_rng = random.Random()
+            port_rng.seed(time.time_ns())  # Seed with high-resolution timestamp
+            socket = port_rng.randint(20000, 65530)
+            
             if not dist.is_initialized():
                 dist.init_process_group(
                     backend='gloo',
-                    init_method='tcp://localhost:23456',
+                    init_method=f'tcp://localhost:{socket}',
                     rank=0,
                     world_size=1
                 )
-            
-            lr = group["lr"]
-            weight_decay = group.get("weight_decay", 0.0)
-            eps = group.get("eps", 1e-8)
             
             # Create grafting config (AlgoPerf always uses Adam for grafting)
             grafting_config = AdamGraftingConfig(
@@ -1586,7 +1602,7 @@ class ChainOpt(utils.StatefulOptimizer):
                 # Large parameters - RWS AdaGrad mode
                 max_preconditioner_dim = 524_288  # AlgoPerf's value for large params
                 start_preconditioning_step = torch.inf  # Disable Shampoo, use only grafting
-            print(f'momentum: {group.get("momentum", 0.0)}')
+                
             optimizer = DistributedShampoo(
                 params,
                 lr=lr,
@@ -1595,11 +1611,11 @@ class ChainOpt(utils.StatefulOptimizer):
                 momentum=group.get("momentum", 0.0),
                 weight_decay=weight_decay,
                 max_preconditioner_dim=max_preconditioner_dim,
-                precondition_frequency=group.get("precondition_frequency", 1),
+                precondition_frequency=group.get("precondition_frequency", 100),
                 start_preconditioning_step=start_preconditioning_step,
                 inv_root_override=group.get("inv_root_override", 0),
                 exponent_multiplier=group.get("exponent_multiplier", 1.0),
-                use_nadam=group.get("use_nadam", False),
+                use_nadam=group.get("use_nadam", True),
                 use_nesterov=True,
                 use_bias_correction=True,
                 use_decoupled_weight_decay=True,
@@ -1622,61 +1638,96 @@ class ChainOpt(utils.StatefulOptimizer):
         except Exception as e:
             print(f"Failed to create AlgoPerf-style DistributedShampoo: {e}")
             return torch.optim.AdamW(params, lr=lr, weight_decay=weight_decay, eps=eps)
-
-    def _use_external_optimizer(self, group, optimizer_type, param_tensors, grads):
+        
+    def step_lbfgs(self):
+        """Step method specifically for L-BFGS"""
+        if not hasattr(self, '_lbfgs_closure'):
+            raise ValueError("L-BFGS closure not set. Call from _inner method.")
+    
+        return self.step(self._lbfgs_closure)
+    
+    def _use_external_optimizer(self, group, optimizer_type, param_tensors, grads, closure=None):
         """Handle external PyTorch optimizers using AlgoPerf approach"""
         
         if optimizer_type.lower() == "distributedshampoo":
             # Ensure global optimizers are created
             self._create_global_shampoo_optimizers()
-            
             # Assign gradients to parameters
             for param, grad in zip(param_tensors, grads):
                 param.grad = grad
-            
-            # Step the appropriate optimizers
-            optimizers_to_step = set()
-            for param in param_tensors:
-                if id(param) in self._param_to_optimizer_map:
-                    optimizer_key = self._param_to_optimizer_map[id(param)]
-                    optimizers_to_step.add(optimizer_key)
-            
-            # Step each optimizer that has parameters with gradients
-            for optimizer_key in optimizers_to_step:
-                if optimizer_key in self._global_shampoo_optimizers:
-                    optimizer = self._global_shampoo_optimizers[optimizer_key]
-                    try:
-                        optimizer.step()
-                    except Exception as e:
-                        print(f"Error stepping {optimizer_key} DistributedShampoo: {e}")
-            
-            # Clear gradients
-            for param in param_tensors:
-                param.grad = None
+            return
                 
-        else:
-            # Get the global optimizer (created once with all parameters)
+        elif optimizer_type.lower() == "lbfgs":
             optimizer = self._get_or_create_global_external_optimizer(optimizer_type)
             
-            # Assign gradients to the specific parameters in this group
             for param, grad in zip(param_tensors, grads):
                 param.grad = grad
             
-            # Update hyperparameters for this step
             self._update_optimizer_params(optimizer, group)
             
-            # Step the optimizer (it will only update parameters that have gradients)
+            if closure is None:
+                raise ValueError("L-BFGS requires a closure function")
             
+            # L-BFGS calls closure multiple times - don't interfere with gradients
+            def lbfgs_closure():
+                # Don't zero gradients - L-BFGS manages this
+                loss = closure()
+                # Verify gradients exist
+                for param_group in optimizer.param_groups:
+                    for param in param_group['params']:
+                        if param.requires_grad and param.grad is None:
+                            print("Warning: Parameter missing gradient in L-BFGS closure")
+                            param.grad = torch.zeros_like(param)
+                
+                return loss
+            
+            try:
+                optimizer.step(lbfgs_closure)
+            except Exception as e:
+                print(f"Error in L-BFGS optimizer: {e}")
+                
+                # Complete state reset on any error
+                optimizer.state.clear()
+                
+                # Try once more with clean state
+                try:
+                    optimizer.step(lbfgs_closure)
+                except Exception as e2:
+                    print(f"L-BFGS failed after reset: {e2}")
+                    # Create entirely new optimizer
+                    if optimizer_type.lower() in self._global_external_optimizers:
+                        del self._global_external_optimizers[optimizer_type.lower()]
+                    
+                    # Get fresh optimizer and try once more
+                    optimizer = self._get_or_create_global_external_optimizer(optimizer_type)
+                    self._update_optimizer_params(optimizer, group)
+                    
+                    try:
+                        optimizer.step(lbfgs_closure)
+                    except Exception as e3:
+                        print(f"L-BFGS completely failed: {e3}")
+
+                for param in param_tensors:
+                    param.grad = None
+            
+        else:
+            # Get the global optimizer (created once with all parameters)
+            optimizer = self._get_or_create_global_external_optimizer(optimizer_type)
+            # Assign gradients to the specific parameters in this group
+            for param, grad in zip(param_tensors, grads):
+                param.grad = grad
+            # Update hyperparameters for this step
+            self._update_optimizer_params(optimizer, group)
+            # Step the optimizer (it will only update parameters that have gradients)
             if hasattr(optimizer, '_initialize_state'):
                 optimizer._initialize_state(param_tensors)
-           
             try:
                 optimizer.step()
             except KeyError as e:
                 print(f"KeyError in external optimizer {optimizer_type}: {e}")
                 # Try to initialize missing state and retry
                 self._fix_missing_state(optimizer, param_tensors, str(e))
-            #optimizer.step()
+                #optimizer.step()
             # Clear gradients for parameters in this group
             for param in param_tensors:
                 param.grad = None
@@ -1877,17 +1928,8 @@ class ChainOpt(utils.StatefulOptimizer):
                 grafting_config = None
             max_preconditioner_dim = group.get("max_preconditioner_dim", 1024)
             precondition_frequency = group.get("precondition_frequency", 1)
+            print(f'precondition_freq: {precondition_frequency}')
             start_preconditioning_step = group.get("start_preconditioning_step", 1)
-
-            param_groups = [{
-                "params": params,
-                "lr": lr,
-                "weight_decay": weight_decay,
-                "momentum": utils.get_beta1(group),
-                "beta1": utils.get_beta1(group),
-                "beta2": utils.get_beta2(group),
-            }]
-        
            
             # Create DistributedShampoo with minimal required parameters
             return DistributedShampoo(
@@ -1972,13 +2014,35 @@ class ChainOpt(utils.StatefulOptimizer):
                 eps=eps,
                 weight_decay=weight_decay
             )
-
+        
+        elif optimizer_type.lower() == "lbfgs":
+            # L-BFGS specific parameters with proper defaults
+            max_iter = group.get("max_iter", 20)
+            max_eval = group.get("max_eval", max_iter * 2)  
+            tolerance_grad = group.get("tolerance_grad", 1e-7)
+            tolerance_change = group.get("tolerance_change", 1e-9)
+            history_size = group.get("history_size", 100)
+            line_search_fn = group.get("line_search_fn", "strong_wolfe")
+            
+            # Ensure no None values that could cause comparison errors
+            if max_eval is None:
+                max_eval = max_iter * 2
+            
+            return torch.optim.LBFGS(
+                params,
+                lr=lr,
+                max_iter=max_iter,
+                max_eval=max_eval,  
+                tolerance_grad=tolerance_grad,
+                tolerance_change=tolerance_change,
+                history_size=history_size,
+                line_search_fn=line_search_fn
+            )
         else:
             raise ValueError(f"Unsupported external optimizer: {optimizer_type}")
 
     def _update_optimizer_params(self, optimizer, group):
         """Update optimizer hyperparameters to match current group settings"""
-
         for param_group in optimizer.param_groups:
             param_group['lr'] = group["lr"]
             param_group['weight_decay'] = group["weight_decay"]
@@ -1986,18 +2050,73 @@ class ChainOpt(utils.StatefulOptimizer):
             # Update optimizer-specific parameters
             if 'betas' in param_group:
                 param_group['betas'] = (utils.get_beta1(group), utils.get_beta2(group))
-            
             if 'eps' in param_group:
                 param_group['eps'] = group.get("eps", 1e-8)
-            
             if 'momentum' in param_group:
                 param_group['momentum'] = utils.get_beta1(group)
-            
             if 'alpha' in param_group:
                 param_group['alpha'] = group.get("alpha", 0.99)
-            
             if 'rho' in param_group:
                 param_group['rho'] = group.get("rho", 0.9)
+                
+            # L-BFGS specific parameters - ensure no None values
+            if 'max_iter' in param_group:
+                max_iter = group.get("max_iter", 20)
+                param_group['max_iter'] = max_iter
+            if 'max_eval' in param_group:
+                max_eval = group.get("max_eval", None)
+                if max_eval is None:
+                    max_eval = param_group.get('max_iter', 20) * 2
+                param_group['max_eval'] = max_eval
+            if 'tolerance_grad' in param_group:
+                param_group['tolerance_grad'] = group.get("tolerance_grad", 1e-7)
+            if 'tolerance_change' in param_group:
+                param_group['tolerance_change'] = group.get("tolerance_change", 1e-9)
+            if 'history_size' in param_group:
+                param_group['history_size'] = group.get("history_size", 100)
+            if 'line_search_fn' in param_group:
+                param_group['line_search_fn'] = group.get("line_search_fn", None)
+
+    def _step_global_shampoo_optimizers(self):
+        """Step all global Shampoo optimizers once per overall step"""
+        if not self._global_shampoo_optimizers:
+            return
+            
+        # Inside _step_global_shampoo_optimizers():
+        for k, opt in self._global_shampoo_optimizers.items():
+            for group in opt.param_groups:
+                for p in group['params']:
+                    if p.grad is not None:
+                        print(f"[{k}] grad norm before step: {p.grad.norm().item()}")
+            opt.step()
+
+
+    def _clear_all_gradients(self):
+        """Clear gradients for all parameters"""
+        for group in self.param_groups:
+            for param in group['params']:
+                if param.grad is not None:
+                    param.grad = None
+
+    def _step_global_shampoo_optimizers(self):
+        """Step all global Shampoo optimizers once per overall step"""
+        if not self._global_shampoo_optimizers:
+            return
+            
+        for optimizer_key, optimizer in self._global_shampoo_optimizers.items():
+            try:
+                optimizer.step()
+            except Exception as e:
+                print(f"Error stepping {optimizer_key} DistributedShampoo: {e}")
+
+    def _clear_shampoo_gradients(self):
+        """Clear gradients for all Shampoo parameters"""
+        for group in self.param_groups:
+            if group.get("optimizer_type", "").lower() == "distributedshampoo":
+                for param in group['params']:
+                    if param.grad is not None:
+                        param.grad = None
+
 
 class CosineSandwichSchedule:
     def __init__(self, total_steps, gamma, warmup_ratio=0.125, hold_ratio=0.5):

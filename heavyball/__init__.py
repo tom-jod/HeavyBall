@@ -342,6 +342,37 @@ class ExternalAdamW(C.BaseOpt):
         
         super().__init__(params, defaults, foreach, gradient_clipping, update_clipping, palm, C.update_by_adam)
 
+class ExternalLBFGS(C.BaseOpt):
+    def __init__(
+        self,
+        params,
+        lr=0.001,
+        betas=(0.9, 0.999),
+        eps=1e-8,
+        weight_decay=0,
+        warmup_steps=0,
+        foreach: bool = True,
+        storage_dtype: str = "float32",
+        mars: bool = False,
+        caution: bool = False,
+        mars_gamma: float = 0.0025,
+        gradient_clipping: C.str_or_fn = False,
+        update_clipping: C.str_or_fn = False,
+        palm: bool = False,
+        beta2_scale: float = 1.0,
+        mars_schedule: bool = False,
+        use_ema: bool = False,
+        **kwargs,
+    ):
+        defaults = locals()
+        defaults.pop("self")
+        params = defaults.pop("params")
+        defaults.update(defaults.pop("kwargs"))
+        
+        # Set external optimizer
+        defaults["external_optimizer"] = "lbfgs"
+        
+        super().__init__(params, defaults, foreach, gradient_clipping, update_clipping, palm, C.update_by_adam)
 
 class ExternalDistributedShampoo(C.BaseOpt):
     def __init__(
@@ -1802,4 +1833,5 @@ __all__ = [
     "ExternalAdamW",
     "ExternalNAdamW",
     "ExternalDistributedShampoo",
+    "ExternalLBFGS"
 ]

@@ -125,6 +125,8 @@ def main(
     def loss_fn(output, target):
         return F.nll_loss(output, target)
     
+    win_target = 1 - 0.9851
+
     trial(
         model,
         data,

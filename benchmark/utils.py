@@ -27,7 +27,7 @@ config.cache_size_limit = 2**16
 np.warnings = warnings
 
 base_args = {
-    "betas": (0.9, 0.999),
+    "betas": (0.9, 0.995, 0.995),
     "precondition_frequency": 16,
     "merge_dims": True,
     "warmup_steps": 100,
@@ -40,7 +40,28 @@ base_args = {
     "eps": 1e-8,
     "weight_decay": 0,
     "precond_update_power_iterations": 8,
-    "dampening": 2**-18,
+    "dampening": 2**-18,             
+    "shampoo_beta": 0.9,         
+    "warmup_factor": 0.05,            # warmup_factor
+    "dropout_rate": 0,             # dropout_rate
+    "label_smoothing": 0,         # label_smoothing
+    "momentum": 0,               # momentum (one_minus_momentum)
+    "one_minus_momentum": 1,   # one_minus_momentum
+    "use_momentum": True,          # use_momentum
+    "max_preconditioner_dim": 1024,    # max_preconditioner_dim
+    "precondition_frequency":  110,    # precondition_frequency
+    "start_preconditioning_step": -1,  # start_preconditioning_step
+    "inv_root_override":  0,         # inv_root_override
+    "exponent_multiplier": 1,        # exponent_multiplier
+    "grafting_type": "ADAM",         # grafting_type
+    "grafting_epsilon":  1e-8,        # grafting_epsilon
+    "use_normalized_grafting":  False,    # use_normalized_grafting
+    "communication_dtype":  "FP32",       # communication_dtype
+    "communicate_params": True,         # communicate_params
+    "use_cosine_decay": True,           # use_cosine_decay
+    "use_nadam":  True,               # use_nadam
+    "step_hint_factor": 1,          # step_hint_factor
+
 }
 
 
@@ -56,8 +77,13 @@ def get_optim(optim, params, **kwargs) -> C.BaseOpt:
         filtered_args['total_steps'] = kwargs['total_steps']
     if 'warmup_ratio' in kwargs:
         filtered_args['warmup_ratio'] = kwargs['warmup_ratio']
-    
-    o = optim(params, **filtered_args)
+
+    # Use all args not filtered args
+    if optim.__name__ == 'ExternalDistributedShampoo':
+        o = optim(params, **args)
+    else:
+        o = optim(params, **filtered_args)
+
     return o
 
 
@@ -353,7 +379,7 @@ class Objective:
         self.track_variance = track_variance
         # Set total_steps for lr schedules
         self.kwargs["total_steps"] = step_hint
-        
+        self.step_counter = 0
 
     def win_condition(self, loss=None):
         if loss is not None:
@@ -415,6 +441,10 @@ class Objective:
             params["precond_init_scale"] = 0.1
         self.m = copy.deepcopy(self.model)
         o = get_optim(self.opt, self.m.parameters(), **params, **self.kwargs)
+        is_lbfgs = hasattr(o, 'external_optimizers') and any(
+            isinstance(opt, torch.optim.LBFGS) 
+            for opt in o.external_optimizers.values()
+            )
         torch_hist = torch.empty(self.group, dtype=torch.float64, device="cuda")
         validator = self.validator.new()
         self.test_accuracies = []
@@ -505,7 +535,7 @@ class Objective:
                     loss = self.m() if gpu_inp is None else self.m(gpu_inp)
                     
                     if self.loss_fn is not None:
-                        loss = self.loss_fn(loss, gpu_tgt)  # Use gpu_tgt instead of tgt
+                        loss = self.loss_fn(loss, gpu_tgt)  
                     
                     loss.backward()
                     
@@ -516,46 +546,13 @@ class Objective:
                     
                     return loss
                 
-                # Later, when you need previous model:
-                def _prev_closure():
-                    nonlocal prev_model_params
-                    
-                    if prev_model_params is None:
-                        # First step: no previous model, use current closure
-                        prev_model_params = {name: param.data.clone().detach() 
-                                        for name, param in self.m.named_parameters()}
-                        return _closure()
-                    
-                    # Save current state
-                    current_state = {name: param.clone() for name, param in self.m.named_parameters()}
-                    
-                    try:
-                        # Restore previous model state
-                        for name, param in self.m.named_parameters():
-                            if name in prev_model_params:
-                                param.data.copy_(prev_model_params[name])
-                        
-                        # Compute loss with previous model
-                        loss = self.m() if inp is None else self.m(inp)
-                        if self.loss_fn is not None:
-                            loss = self.loss_fn(loss, tgt)
-                        loss.backward()
-                        return loss
-                    finally:
-                        # Restore current state
-                        for name, param in self.m.named_parameters():
-                            if name in current_state:
-                                param.data.copy_(current_state[name])
-                        # Update prev_model_params
-                        prev_model_params = {name: param.data.clone().detach() 
-                                        for name, param in self.m.named_parameters()}
+               
                 
                 try:
-                    if self.requires_prev_model(o):
-                        loss = o.step_with_prev(_closure, _prev_closure)
-                    else:
-                        
-                        loss = o.step(_closure)
+                    if is_lbfgs:
+                        # Store closure on the chainable optimizer for L-BFGS
+                        o._lbfgs_closure = _closure
+                    loss = o.step(_closure)
                       
                 except PrecondInitError:
                     self.set_precond_init_scale = True
@@ -700,6 +697,7 @@ def trial(
     step_hint: int = 0,
 ):
     use_fixed_hyperparams = False
+    #if opt in ["SFAdamW", "ExternalDistributedShampoo"]:
     if opt in ["SFAdamW", "ExternalDistributedShampoo"]:
         opt_name = opt
         print("using_list")
@@ -907,6 +905,7 @@ def trial(
             'grad_variances': obj.grad_variances.copy() if hasattr(obj, 'grad_variances') else [],
             'condition_numbers': obj.condition_numbers.copy() if hasattr(obj, 'condition_numbers') else [],
             'runtime': obj.runtime if hasattr(obj, 'runtime') else [],
+            'steps': obj.step_counter if hasattr(obj, 'step_counter') else steps
             }
             all_trial_results.append(trial_result)
                 
@@ -940,7 +939,7 @@ def trial(
             did_win = False
             nonlocal hyperparam_counter
             set_seed(0x12312)
-            if hyperparam_counter < len(fixed_hyperparams_list) and hyperparam_counter < trials:
+            if hyperparam_counter < len(fixed_hyperparams_list):
                 hyperparams = fixed_hyperparams_list[hyperparam_counter]
                 hyperparam_counter += 1
             
@@ -962,7 +961,24 @@ def trial(
                 params_dict = create_params_dict(tuned_values, tuned_indices)
                 
                 loss = float("inf")
-                
+                obj = Objective(
+                    failure_threshold,
+                    model,
+                    opt,
+                    steps,
+                    group,
+                    data,
+                    loss_fn,
+                    _win_condition,
+                    weight_decay,
+                    max(trials * warmup_trial_pct, 1 + random_trials),
+                    estimate_condition_number,
+                    test_loader,
+                    track_variance,
+                    runtime_limit,
+                    step_hint,
+                    **kwargs,
+                )
                 out = obj.objective(full_params)
                 
                 trial_result = {
@@ -975,26 +991,33 @@ def trial(
                     'grad_variances': obj.grad_variances.copy() if hasattr(obj, 'grad_variances') else [],
                     'condition_numbers': obj.condition_numbers.copy() if hasattr(obj, 'condition_numbers') else [],
                     'runtime': obj.runtime if hasattr(obj, 'runtime') else 0,
+                    'steps': obj.step_counter if hasattr(obj, 'step_counter') else steps,
                 }
-                all_trial_results.append(trial_result)
+                print(trial_result)
+                all_trial_results.append(trial_result)   
                 return obj.runtime if hasattr(obj, 'runtime') else float('inf')
-            else:
-                return
             
         set_seed()
-        study.optimize(_optuna_objective, n_trials=5)
+        n_trials = 5
+        # If trials is less than 5, only do trials many runs
+        if trials < n_trials:
+            n_trials = trials
+
+        study.optimize(_optuna_objective, n_trials)
+           
     else:
+        print("Using Quasi-random Sampling")
         # Specify exactly which parameter indices to tune - you can change this list
         tuned_indices = [0, 1, 2, 5]  # Example: tune learning_rate, one_minus_beta3, one_minus_shampoo_beta
         
         # Define search ranges for each parameter index
         search_ranges = {
-            0: (1e-5, 1e-1, True),   # learning_rate (log scale)
-            1: (1e-5, 0.1, True),    # one_minus_beta1 (log scale)
-            2: (1e-5, 0.1, True),    # one_minus_beta2 (log scale)
-            3: (1e-5, 0.1, True),    # one_minus_beta3 (log scale)
-            4: (1e-5, 1, True),      # one_minus_shampoo_beta (log scale)
-            5: (1e-6, 1e-1, True),   # weight_decay (log scale)
+            0: (1e-4, 1e-2, True),   # learning_rate (log scale)
+            1: (1e-3, 0.5, True),    # one_minus_beta1 (log scale)
+            2: (1e-3, 0.5, True),    # one_minus_beta2 (log scale)
+            3: (1e-3, 0.5, True),    # one_minus_beta3 (log scale)
+            4: (1e-3, 0.5, True),      # one_minus_shampoo_beta (log scale)
+            5: (1e-5, 1e-0, True),   # weight_decay (log scale)
         }
         
         sampler = AutoSampler(
@@ -1059,6 +1082,7 @@ def trial(
                     'grad_variances': obj.grad_variances.copy() if hasattr(obj, 'grad_variances') else [],
                     'condition_numbers': obj.condition_numbers.copy() if hasattr(obj, 'condition_numbers') else [],
                     'runtime': obj.runtime if hasattr(obj, 'runtime') else [],
+                    'steps': obj.step_counter if hasattr(obj, 'step_counter') else steps,
                 }
                 print(trial_result)
                 all_trial_results.append(trial_result)   
@@ -1071,7 +1095,8 @@ def trial(
     # After all trials complete, find the best one
     if all_trial_results:
         #best_trial = min(all_trial_results, key=lambda x: x['losses'][-1])
-        best_trial = min(all_trial_results, key=lambda x: x['runtime'])
+        #best_trial = min(all_trial_results, key=lambda x: x['runtime'])
+        best_trial = max(all_trial_results, key=lambda x: max(x['test_accuracies']) if x['test_accuracies'] else 0)
         winning_params = best_trial['params']
         
         # Use the best trial's metrics
@@ -1080,8 +1105,20 @@ def trial(
         final_grad_variances = best_trial['grad_variances']
         final_condition_numbers = best_trial['condition_numbers']
         final_runtime = best_trial['runtime']
+        final_steps = best_trial['steps']
         
-        print("Successfully found the minimum.")
+        print("Successfully found the minimum runtime")
+
+    if all_trial_results:
+        #best_trial = min(all_trial_results, key=lambda x: x['losses'][-1])
+        most_accurate_trial = max(all_trial_results, key=lambda x: max(x['test_accuracies']) if x['test_accuracies'] else 0)
+        
+        best_test_accuracies = most_accurate_trial['test_accuracies']
+        best_test_accuracy = max(best_test_accuracies)
+        
+        print("Successfully found the maximum test accuracy")
+
+    
     else:
         # Fallback if no trials succeeded
         winning_params = {"lr": base_lr, "1mbeta1": 0.9, "1mbeta2": 0.999, "1mshampoo_beta": 0.999, "1mbeta3": 0.999, "weight_decay": 0.999}
@@ -1095,12 +1132,12 @@ def trial(
     std_err_cond = np.std(final_condition_numbers) / np.sqrt(len(final_condition_numbers)) if final_condition_numbers else 0
     torch.cuda.synchronize() 
     end_time = time.time()
-    print(all_trial_results)
+    print(best_test_accuracy)
     print(
-        f"Took: {end_time - start_time} | Winning_runtime: {final_runtime} | Trials: {obj.attempt} | "
-        f"{opt.__name__}_{winning_params} | "
+        f"Took: {end_time - start_time} | Highest_accuracy: {best_test_accuracy} | Winning_runtime: {final_runtime} | Trials: {obj.attempt + 1} | "
+        f"Params: {opt.__name__}_{winning_params} | "
         f"loss_trajectory: {final_losses} | test_accuracies: {final_test_accuracies} | "
-        f"grad_variances: {final_grad_variances} | mean_cond: {mean_cond} | std_err_cond: {std_err_cond} "
+        f"grad_variances: {final_grad_variances} | mean_cond: {mean_cond} | std_err_cond: {std_err_cond} | steps: {final_steps} "
     )
     
     loss_trajectory = obj.best_losses
@@ -1111,7 +1148,6 @@ def trial(
         best_model.loss_trajectory = loss_trajectory
         return best_model
 
-    
     
 def evaluate_test_accuracy(model, test_loader):
     # Save the current training state
