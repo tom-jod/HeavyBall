@@ -321,9 +321,11 @@ class Objective:
         warmup_trials,
         estimate_condition_number,
         test_loader,
+        train_loader,
         track_variance,
         runtime_limit,
         step_hint,
+        best_test_accuracies = [],
         ema_index: int = 0,
         **kwargs,
     ):
@@ -344,7 +346,8 @@ class Objective:
         self.warmup_trials = int(warmup_trials)
         self.kwargs = kwargs
         self.ema_index = ema_index
-
+        self.best_test_accuracies = best_test_accuracies
+ 
         # up to 32768 consecutive times can the new loss be (1 - 1e-7)x larger than the preceding loss
         self.validator = Validator(
             {  # We can't check for improvement, as it's not guaranteed - "1% in 1k steps" may not happen
@@ -376,6 +379,7 @@ class Objective:
         self.current_losses = []
         self.estimate_condition_number = estimate_condition_number
         self.test_loader = test_loader
+        self.train_loader = train_loader
         self.track_variance = track_variance
         # Set total_steps for lr schedules
         self.kwargs["total_steps"] = step_hint
@@ -476,17 +480,28 @@ class Objective:
                     print({"WIN"})
                     return validator.ema_states.min().item(), self.m, torch_hist[-1].item(), self.current_losses, self.test_accuracies, self.grad_variances, self.condition_numbers, self.step_counter, runtime
                 
+                # Early stopping for trials that are out of the 5 percent test performance of current best trial
+                if self.best_test_accuracies != []:
+                    if test_accuracy < 0.95 * self.best_test_accuracies[i]:
+                        runtime = time.time() - self.start_time
+                        print({"STOPPING EARLY"})
+                        return validator.ema_states.min().item(), self.m, torch_hist[-1].item(), self.current_losses, self.test_accuracies, self.grad_variances, self.condition_numbers, self.step_counter, runtime
+                
             if self.estimate_condition_number: 
                 with torch.backends.cudnn.flags(enabled=False):
                     #if i % int(self.steps // (self.group*5)) == 0:
                     #self.condition_numbers.append(estimate_condition_number_hvp(self.m, self.data, n_probes=20, n_samples=50, loss_fn=self.loss_fn)[0])
-                    self.condition_numbers.append(estimate_condition_number_grid_search(self.m, self.data, loss_fn=self.loss_fn, timout=30))
+                    self.condition_numbers.append(estimate_condition_number_grid_search(self.m, self.data, loss_fn=self.loss_fn, timout=100))
+                   
+                
     
             if self.track_variance:
                 # track variance at every 1000 steps through training
                 #grad_variance = estimate_minibatch_variance_detailed(self.m, self.data, n_samples=10, loss_fn=self.loss_fn)[0]
-                grad_variance = estimate_minibatch_variance_grid_search(self.m, self.data, loss_fn=self.loss_fn, timout=30)
-                self.grad_variances.append(grad_variance["gradient_variance"])
+                #grad_variance = estimate_minibatch_variance_grid_search(self.m, self.data, loss_fn=self.loss_fn, timout=30)
+                #self.grad_variances.append(grad_variance["gradient_variance"])
+                grad_variance = compute_true_minibatch_variance(self.m, self.train_loader, loss_fn=self.loss_fn)
+                self.grad_variances.append(grad_variance)
             
             if hasattr(o, "train"):
                 o.train()
@@ -540,7 +555,6 @@ class Objective:
                     loss = self.m() if gpu_inp is None else self.m(gpu_inp)
                     
                     if self.loss_fn is not None:
-                        loss = self.loss_fn(loss, gpu_tgt)  
                         loss = self.loss_fn(loss, gpu_tgt)  
                     
                     loss.backward()
@@ -596,13 +610,6 @@ class Objective:
                         loss = o.step_with_prev(_closure, _prev_closure)
                     else:
                         loss = o.step(_closure)
-               
-                
-                try:
-                    if is_lbfgs:
-                        # Store closure on the chainable optimizer for L-BFGS
-                        o._lbfgs_closure = _closure
-                    loss = o.step(_closure)
                       
                 except PrecondInitError:
                     self.set_precond_init_scale = True
@@ -741,14 +748,15 @@ def trial(
     random_trials: int = 10,
     estimate_condition_number: bool = False,
     test_loader=None,
+    train_loader=None,
     track_variance=False,
     test_optimizer_implementation=False,
     runtime_limit: int = 3600 * 24, # Default runtime limit is a day
     step_hint: int = 0,
 ):
     use_fixed_hyperparams = False
-    #if opt in ["SFAdamW", "ExternalDistributedShampoo"]:
-    if opt in ["SFAdamW", "ExternalDistributedShampoo"]:
+    if opt in ["AdamW", "ExternalDistributedShampoo"]:
+    #if opt in [ "ExternalDistributedShampoo"]:
         opt_name = opt
         print("using_list")
         use_fixed_hyperparams = True
@@ -821,6 +829,7 @@ def trial(
         max(trials * warmup_trial_pct, 1 + random_trials),
         estimate_condition_number,
         test_loader,
+        train_loader,
         track_variance,
         runtime_limit,
         step_hint,
@@ -956,7 +965,7 @@ def trial(
             'condition_numbers': obj.condition_numbers.copy() if hasattr(obj, 'condition_numbers') else [],
             'runtime': obj.runtime if hasattr(obj, 'runtime') else [],
             'steps': obj.step_counter if hasattr(obj, 'step_counter') else steps
-            'steps': obj.step_counter if hasattr(obj, 'step_counter') else steps
+           
             }
             all_trial_results.append(trial_result)
                 
@@ -990,7 +999,7 @@ def trial(
             did_win = False
             nonlocal hyperparam_counter
             set_seed(0x12312)
-            if hyperparam_counter < len(fixed_hyperparams_list):
+            
             if hyperparam_counter < len(fixed_hyperparams_list):
                 hyperparams = fixed_hyperparams_list[hyperparam_counter]
                 hyperparam_counter += 1
@@ -1026,13 +1035,14 @@ def trial(
                     max(trials * warmup_trial_pct, 1 + random_trials),
                     estimate_condition_number,
                     test_loader,
+                    train_loader,
                     track_variance,
                     runtime_limit,
                     step_hint,
                     **kwargs,
                 )
                 out = obj.objective(full_params)
-                
+                best_test_accuracy = max(obj.test_accuracies.copy())
                 trial_result = {
                     'trial_number': hyperparam_counter,
                     'tuned_indices': tuned_indices,
@@ -1044,13 +1054,10 @@ def trial(
                     'condition_numbers': obj.condition_numbers.copy() if hasattr(obj, 'condition_numbers') else [],
                     'runtime': obj.runtime if hasattr(obj, 'runtime') else 0,
                     'steps': obj.step_counter if hasattr(obj, 'step_counter') else steps,
-                    'steps': obj.step_counter if hasattr(obj, 'step_counter') else steps,
                 }
-                print(trial_result)
+                print(trial_result) 
                 all_trial_results.append(trial_result)   
-                print(trial_result)
-                all_trial_results.append(trial_result)   
-                return obj.runtime if hasattr(obj, 'runtime') else float('inf')
+                return best_test_accuracy
             
         set_seed()
         n_trials = 5
@@ -1069,6 +1076,7 @@ def trial(
            
     else:
         print("Using Quasi-random Sampling")
+        best_test_accuracies = []
         # Specify exactly which parameter indices to tune - you can change this list
         tuned_indices = [0, 1, 2, 5]  # Example: tune learning_rate, one_minus_beta3, one_minus_shampoo_beta
         
@@ -1095,6 +1103,7 @@ def trial(
         all_trial_results = []
         
         def _optuna_objective(trial):
+            nonlocal best_test_accuracies
             did_win = False
             set_seed(0x12312)
             obj = Objective(
@@ -1110,9 +1119,11 @@ def trial(
                 max(trials * warmup_trial_pct, 1 + random_trials),
                 estimate_condition_number,
                 test_loader,
+                train_loader,
                 track_variance,
                 runtime_limit,
                 step_hint,
+                best_test_accuracies,
                 **kwargs,
             )
             # Get tuned parameter values
@@ -1134,7 +1145,7 @@ def trial(
                 
                 # Create params dict for logging
                 params_dict = {f"param_{i}_{param_names[i]}": val for i, val in zip(tuned_indices, tuned_values)}
-                
+                best_test_accuracy = max(obj.test_accuracies.copy())
                 trial_result = {
                     'tuned_indices': tuned_indices,
                     'params': params_dict,
@@ -1145,13 +1156,14 @@ def trial(
                     'condition_numbers': obj.condition_numbers.copy() if hasattr(obj, 'condition_numbers') else [],
                     'runtime': obj.runtime if hasattr(obj, 'runtime') else [],
                     'steps': obj.step_counter if hasattr(obj, 'step_counter') else steps,
-                    'steps': obj.step_counter if hasattr(obj, 'step_counter') else steps,
                 }
                 print(trial_result)
                 all_trial_results.append(trial_result)   
+                if best_test_accuracies == [] or best_test_accuracy > max(best_test_accuracies):
+                    best_test_accuracies = trial_result["test_accuracies"]
             except Stop:
                 pass
-            return obj.runtime if hasattr(obj, 'runtime') else float('inf')
+            return best_test_accuracy
         set_seed()
         study.optimize(_optuna_objective, n_trials=trials)
     
@@ -1161,7 +1173,6 @@ def trial(
         #best_trial = min(all_trial_results, key=lambda x: x['runtime'])
         best_trial = max(all_trial_results, key=lambda x: max(x['test_accuracies']) if x['test_accuracies'] else 0)
         winning_params = best_trial['params']
-        
         # Use the best trial's metrics
         final_losses = best_trial['losses']
         final_test_accuracies = best_trial['test_accuracies']
@@ -1170,18 +1181,14 @@ def trial(
         final_runtime = best_trial['runtime']
         final_steps = best_trial['steps']
         final_steps = best_trial['steps']
-        
         print("Successfully found the minimum runtime")
 
     if all_trial_results:
         #best_trial = min(all_trial_results, key=lambda x: x['losses'][-1])
         most_accurate_trial = max(all_trial_results, key=lambda x: max(x['test_accuracies']) if x['test_accuracies'] else 0)
-        
         best_test_accuracies = most_accurate_trial['test_accuracies']
         best_test_accuracy = max(best_test_accuracies)
-        
         print("Successfully found the maximum test accuracy")
-
     
     else:
         # Fallback if no trials succeeded
@@ -1196,17 +1203,14 @@ def trial(
     std_err_cond = np.std(final_condition_numbers) / np.sqrt(len(final_condition_numbers)) if final_condition_numbers else 0
     torch.cuda.synchronize() 
     end_time = time.time()
-    print(best_test_accuracy)
-    print(best_test_accuracy)
+
     print(
-        f"Took: {end_time - start_time} | Highest_accuracy: {best_test_accuracy} | Winning_runtime: {final_runtime} | Trials: {obj.attempt + 1} | "
-        f"Params: {opt.__name__}_{winning_params} | "
         f"Took: {end_time - start_time} | Highest_accuracy: {best_test_accuracy} | Winning_runtime: {final_runtime} | Trials: {obj.attempt + 1} | "
         f"Params: {opt.__name__}_{winning_params} | "
         f"loss_trajectory: {final_losses} | test_accuracies: {final_test_accuracies} | "
         f"grad_variances: {final_grad_variances} | mean_cond: {mean_cond} | std_err_cond: {std_err_cond} | steps: {final_steps} "
-        f"grad_variances: {final_grad_variances} | mean_cond: {mean_cond} | std_err_cond: {std_err_cond} | steps: {final_steps} "
     )
+        
     
     loss_trajectory = obj.best_losses
     if return_best:
@@ -1736,3 +1740,297 @@ def _uniform_filter(im, size=7):
     except Exception:
         # Fallback to simple averaging
         return im
+    
+    import time
+import torch
+import numpy as np
+from torch.nn.utils import parameters_to_vector, vector_to_parameters
+
+@torch.no_grad()
+def _clone_params(params):
+    return [p.detach().clone() for p in params]
+
+def _auto_loss_fn(output, y):
+    # Match your heuristic
+    try:
+        if output.dim() > 2 or (y.dim() == output.dim() and y.shape == output.shape):
+            return torch.nn.functional.mse_loss
+        else:
+            return torch.nn.functional.cross_entropy
+    except:
+        return torch.nn.functional.cross_entropy
+
+def _prepare_batch(data_fn, device):
+    inp, target = data_fn()
+    gpu_target = target if isinstance(target, torch.Tensor) else torch.from_numpy(target)
+    gpu_inp = inp if isinstance(inp, torch.Tensor) else torch.from_numpy(inp)
+    return gpu_inp.to(device), gpu_target.to(device)
+
+def _compute_loss(model, data_fn, loss_fn, device, dtype=torch.float64):
+    model.zero_grad(set_to_none=True)
+    x, y = _prepare_batch(data_fn, device)
+    # Forward
+    out = model(x)
+    # Auto-detect loss if needed
+    if loss_fn is None:
+        loss_fn = _auto_loss_fn(out, y)
+    loss = loss_fn(out, y)
+    return loss, loss_fn
+
+def estimate_condition_number_full(
+    model,
+    data_fn,
+    loss_fn=None,
+    device=None,
+    timeout=1800,
+    max_params=150_000,
+    use_double=False,
+    return_eigs=False,
+):
+    """
+    EXACT condition number via dense Hessian eigenvalues.
+
+    Parameters
+    ----------
+    model : torch.nn.Module
+    data_fn : callable -> (inp, target)
+        Should return a *single* batch used to define the Hessian.
+    loss_fn : callable or None
+    device : torch.device or None (auto-detect)
+    timeout : seconds
+    max_params : int
+        Safety guard; dense Hessian scales as O(n^2) memory/time.
+    use_double : bool
+        Temporarily cast module params to float64 for better Hessian spectra.
+    return_eigs : bool
+        If True, returns full eigenvalue tensor (on CPU).
+
+    Returns
+    -------
+    result : dict
+        {
+          'condition_number': float (inf if indefinite or singular),
+          'lambda_max': float,
+          'lambda_min_pos': float or None,
+          'num_params': int,
+          'num_pos': int,
+          'num_neg': int,
+          'num_zero': int,
+          'reached_timeout': bool,
+          'dtype_used': torch.dtype,
+        }
+        (+ 'eigenvalues' if return_eigs=True)
+    """
+    t0 = time.time()
+    reached_timeout = False
+
+    if device is None:
+        device = next(model.parameters(), torch.tensor([])).device
+        if not device.type in ("cuda", "mps"):
+            device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    # Collect & validate parameter vector
+    params = [p for p in model.parameters() if p.requires_grad]
+    n = sum(p.numel() for p in params)
+    if n == 0:
+        return {
+            'condition_number': float('inf'),
+            'lambda_max': float('nan'),
+            'lambda_min_pos': None,
+            'num_params': 0,
+            'num_pos': 0,
+            'num_neg': 0,
+            'num_zero': 0,
+            'reached_timeout': False,
+            'dtype_used': model.parameters().__iter__().__next__().dtype if any(True for _ in model.parameters()) else torch.float32,
+        }
+
+    if n > max_params:
+        raise RuntimeError(
+            f"Refusing to build a dense {n}x{n} Hessian (>{max_params} params). "
+            "Use a smaller model/batch or increase max_params explicitly."
+        )
+
+    # Save original parameter state to restore later
+    with torch.no_grad():
+        original_params = _clone_params(params)
+        original_dtypes = [p.dtype for p in params]
+
+    # Optional: promote to double for better spectra
+    dtype_used = torch.float64 if use_double else params[0].dtype
+    if use_double:
+        model.to(device=device, dtype=torch.float64)
+    else:
+        model.to(device=device)
+
+    # Build scalar loss for the fixed batch
+    loss, loss_fn = _compute_loss(model, data_fn, loss_fn, device, dtype_used)
+
+    # Build function f(theta) that maps a flat parameter vector -> scalar loss
+    # We'll use parameters_to_vector / vector_to_parameters.
+    flat_params = parameters_to_vector(params).detach()
+    flat_params.requires_grad_(True)
+
+    def set_params_from_flat(theta):
+        # Assign flat vector back into model parameters
+        vector_to_parameters(theta, params)
+
+    # Closure that recomputes the loss for current theta
+    def f(theta):
+        set_params_from_flat(theta)
+        # Recompute loss on the same batch
+        loss_val, _ = _compute_loss(model, data_fn, loss_fn, device, dtype_used)
+        return loss_val
+
+    # Compute Hessian using autograd.functional.hessian
+    # NOTE: This can be memory/time intensive for large n
+    try:
+        from torch.autograd.functional import hessian as autograd_hessian
+    except Exception as e:
+        raise RuntimeError("torch.autograd.functional.hessian not available in this environment") from e
+
+    # Time guard wrapper
+    class _TimeoutFlag(Exception): pass
+
+    def _check_timeout():
+        nonlocal reached_timeout
+        if time.time() - t0 > timeout:
+            reached_timeout = True
+            raise _TimeoutFlag()
+
+    _check_timeout()
+
+    # Important: Ensure evaluation mode (no dropout/bn randomness)
+    was_training = model.training
+    model.eval()
+
+    try:
+        H = autograd_hessian(f, flat_params)
+        _check_timeout()
+    except _TimeoutFlag:
+        # Restore and exit
+        with torch.no_grad():
+            for p, q, dt in zip(params, original_params, original_dtypes):
+                p.copy_(q.to(dtype=dt))
+        model.train(was_training)
+        return {
+            'condition_number': float('inf'),
+            'lambda_max': float('nan'),
+            'lambda_min_pos': None,
+            'num_params': n,
+            'num_pos': 0,
+            'num_neg': 0,
+            'num_zero': 0,
+            'reached_timeout': True,
+            'dtype_used': dtype_used,
+        }
+    finally:
+        # Put model back to its original train/eval state after we’re done with H
+        model.train(was_training)
+
+    # H should be symmetric; enforce symmetry to reduce numerical noise
+    H = (H + H.transpose(0,1)) * 0.5
+
+    # Move to CPU for eigensolve (often more RAM available)
+    H_cpu = H.detach().cpu()
+
+    # Compute eigenvalues (symmetric → eigvalsh)
+    evals = torch.linalg.eigvalsh(H_cpu)  # shape: [n]
+    evals_np = evals.numpy()
+
+    # Classify eigenvalues with a tolerance
+    # (tolerance scales with max(|λ|) and dtype)
+    eps = np.finfo(np.float64).eps if evals_np.dtype == np.float64 else np.finfo(np.float32).eps
+    lam_abs_max = float(np.max(np.abs(evals_np))) if evals_np.size else 0.0
+    tol = max(1e-12, 1e-10 * (1.0 + lam_abs_max))  # adaptive-ish
+
+    num_pos = int(np.sum(evals_np >  tol))
+    num_neg = int(np.sum(evals_np < -tol))
+    num_zero = int(evals_np.size - num_pos - num_neg)
+
+    # Condition number definition:
+    # - If Hessian is not positive definite (any neg or ~zero eig), κ is ∞ for strict convex analysis.
+    # - Otherwise κ = λ_max / λ_min.
+    lambda_max = float(np.max(evals_np)) if evals_np.size else float('nan')
+    pos_eigs = evals_np[evals_np > tol]
+    lambda_min_pos = float(np.min(pos_eigs)) if pos_eigs.size else None
+
+    if (num_neg > 0) or (lambda_min_pos is None):
+        kappa = float('inf')
+    else:
+        kappa = lambda_max / max(lambda_min_pos, 1e-300)
+
+    # Restore original params/dtypes
+    with torch.no_grad():
+        for p, q, dt in zip(params, original_params, original_dtypes):
+            p.copy_(q.to(dtype=dt))
+
+    result = {
+        'condition_number': float(kappa),
+        'lambda_max': lambda_max,
+        'lambda_min_pos': lambda_min_pos,
+        'num_params': n,
+        'num_pos': num_pos,
+        'num_neg': num_neg,
+        'num_zero': num_zero,
+        'reached_timeout': reached_timeout,
+        'dtype_used': dtype_used,
+    }
+    if return_eigs:
+        result['eigenvalues'] = evals_np  # full spectrum on CPU
+    return result
+
+import torch
+import numpy as np
+
+def compute_true_minibatch_variance(model, trainloader, loss_fn=torch.nn.functional.cross_entropy, device=None):
+    """
+    Compute variance between minibatch gradients and the full-batch gradient.
+
+    Returns a dict with gradient noise variance and supporting stats.
+    """
+    if device is None:
+        device = next(model.parameters()).device
+    model.eval()
+
+    # ---- Step 1: compute full-batch gradient ----
+    model.zero_grad(set_to_none=True)
+    total_loss = 0.0
+    n_samples = 0
+    for x, y in trainloader:
+        x, y = x.to(device), y.to(device)
+        output = model(x)
+        loss = loss_fn(output, y) * x.size(0)  # weight by batch size
+        loss.backward()
+        total_loss += loss.item()
+        n_samples += x.size(0)
+
+    full_grad = torch.cat([p.grad.detach().flatten() for p in model.parameters() if p.grad is not None]) / n_samples
+    full_grad_np = full_grad.cpu().numpy()
+
+    # ---- Step 2: compute minibatch gradient deviations ----
+    deviations = []
+    for x, y in trainloader:
+        model.zero_grad(set_to_none=True)
+        x, y = x.to(device), y.to(device)
+        output = model(x)
+        loss = loss_fn(output, y)
+        grads = torch.autograd.grad(loss, model.parameters(), create_graph=False)
+        flat_grad = torch.cat([g.detach().flatten() for g in grads])
+        diff = flat_grad.cpu().numpy() - full_grad_np
+        deviations.append(diff)
+
+    deviations = np.stack(deviations)  # shape [num_batches, num_params]
+
+    # ---- Step 3: compute variance metrics ----
+    var_per_param = np.mean(deviations**2, axis=0)   # E[(g_b - g_full)^2]
+    grad_noise_variance = float(np.mean(var_per_param))  # average across params
+    grad_norm_variance = float(np.var([np.linalg.norm(d) for d in deviations]))
+
+    result = {
+        "gradient_noise_variance": grad_noise_variance,
+        "gradient_norm_variance": grad_norm_variance,
+        "num_batches": len(trainloader),
+        "num_params": full_grad_np.shape[0],
+    }
+    return result

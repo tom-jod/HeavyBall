@@ -1,0 +1,22 @@
+/var/spool/slurmd/job20749/slurm_script: line 15: cd: HeavyBall: No such file or directory
+Current directory /home/tomjodrell/HeavyBall
+CUDA_VISIBLE_DEVICES 0
+/home/tomjodrell/HeavyBall/benchmark/benchmark_runner.py:289: UserWarning: No artists with labels found to put in legend.  Note that artists whose label start with an underscore are ignored when legend() is called with no argument.
+  plt.legend()
+Running comparison for Tolstoi_RNN
+Optimizers: mars-AdamW
+Runs per optimizer: 1
+Steps per run: 25000
+Optuna trials per run: 5
+
+=== Running mars-AdamW ===
+Run 1/1
+running mars-AdamW
+Running: python -m benchmark.Tolstoi_RNN --opt mars-AdamW --steps 25000 --trials 5 --runtime-limit 3600 --step-hint 27000
+{'runtime': 3361.2920100688934, 'attempts': 1, 'best_loss': 0.4654342834655917, 'loss_trajectory': [4.712414741516113, 2.9934163093566895, 2.5321543216705322, 2.3042969703674316, 2.289628267288208, 2.2497355937957764, 2.1808767318725586, 2.0959603786468506, 2.1081149578094482, 2.019258975982666, 2.005849838256836, 2.0125746726989746, 2.054558753967285, 1.9941167831420898, 1.9528888463974, 2.0243945121765137, 1.9707365036010742, 1.962470293045044, 1.9628148078918457, 1.9950517416000366, 2.038712501525879, 1.9981886148452759, 1.9210015535354614, 2.0213687419891357, 1.997690200805664], 'test_accuracies': [0.020421904581891196, 0.22058575824148582, 0.31656917456549966, 0.3588252919650355, 0.3862778447418406, 0.40454848835083523, 0.41920446693335234, 0.4308784514465787, 0.4382739281188125, 0.4450455338412962, 0.4503369721157511, 0.4557268527269178, 0.4596616645028151, 0.46272769244593726, 0.4634456986865059, 0.46383079196968335, 0.46424383457225454, 0.4646478912517391, 0.46500512817334777, 0.46526113402349356, 0.4652979453222073, 0.46519829453377004, 0.4652840326343938, 0.4653719707368767, 0.4654342834655917], 'grad_variances': [], 'config_str': '', 'mean_cond': 0.0, 'std_err_cond': None, 'memory_usage': None, 'steps': 25000, 'optimizer': 'mars-AdamW', 'seed': 42, 'trials': 5, 'log_file': 'comparison_results/run_mars-AdamW_42_1755534922735.log', 'success': True}
+  ✓ Success - Loss: 0.4654342834655917
+
+=== Aggregating Results ===
+
+Results saved to: comparison_results
+Plots: comparison_results/Tolstoi_RNN_*.png

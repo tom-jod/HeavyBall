@@ -1,0 +1,22 @@
+/var/spool/slurmd/job20720/slurm_script: line 15: cd: HeavyBall: No such file or directory
+Current directory /home/tomjodrell/HeavyBall
+CUDA_VISIBLE_DEVICES 3
+/home/tomjodrell/HeavyBall/benchmark/benchmark_runner.py:289: UserWarning: No artists with labels found to put in legend.  Note that artists whose label start with an underscore are ignored when legend() is called with no argument.
+  plt.legend()
+Running comparison for Tolstoi_RNN
+Optimizers: AdamW
+Runs per optimizer: 1
+Steps per run: 27000
+Optuna trials per run: 5
+
+=== Running AdamW ===
+Run 1/1
+running AdamW
+Running: python -m benchmark.Tolstoi_RNN --opt AdamW --steps 27000 --trials 5 --runtime-limit 3600 --step-hint 27000
+{'runtime': 3471.0823085308075, 'attempts': 1, 'best_loss': 0.4782886464411097, 'loss_trajectory': [4.719544887542725, 2.771535634994507, 2.4989302158355713, 2.444580078125, 2.2382376194000244, 2.2095892429351807, 2.1820266246795654, 2.0896646976470947, 2.0512733459472656, 2.057029962539673, 2.0124456882476807, 2.0172998905181885, 1.9983611106872559, 1.975458025932312, 1.9323323965072632, 1.9667075872421265, 1.967855453491211, 1.914156436920166, 1.9862648248672485, 1.9272761344909668, 1.9150060415267944, 1.928084373474121, 1.9031624794006348, 1.9259908199310303, 1.9184211492538452, 2.041062593460083, 1.9668715000152588], 'test_accuracies': [0.009630151800128281, 0.2742514571139074, 0.329470016453535, 0.36397403997806194, 0.3926064444561502, 0.4080845110573333, 0.4214549448915027, 0.43076832740985416, 0.4383607197414533, 0.445190300160817, 0.4512660236050904, 0.45709763980082235, 0.4610071670483102, 0.4638564173434513, 0.4666651690128189, 0.46909747247673733, 0.4710014346490997, 0.4724575570063862, 0.47424541485528016, 0.4752312635757157, 0.4759992191542697, 0.4768352818326325, 0.47743049078633026, 0.47792251655423934, 0.47803877580741616, 0.4782886464411097, 0.4781876942431219], 'grad_variances': [], 'config_str': '', 'mean_cond': 0.0, 'std_err_cond': None, 'memory_usage': None, 'steps': 27000, 'optimizer': 'AdamW', 'seed': 42, 'trials': 5, 'log_file': 'comparison_results/run_AdamW_42_1755260384764.log', 'success': True}
+  ✓ Success - Loss: 0.4782886464411097
+
+=== Aggregating Results ===
+
+Results saved to: comparison_results
+Plots: comparison_results/Tolstoi_RNN_*.png

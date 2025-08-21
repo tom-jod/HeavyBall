@@ -14,7 +14,7 @@ def parse_log_file(log_file_path):
     dict_candidates = []
     
     # Find all positions where dictionaries might start
-    for match in re.finditer(r"\{'tuned_indices'", content):
+    for match in re.finditer(r"\{'\w+'", content):
         start_pos = match.start()
         
         # Extract the complete dictionary by counting braces
@@ -240,7 +240,7 @@ def additional_deduplication(experiments_data_dict):
     return experiments_data_dict
 
 def main():
-    log_file_path = "comparison_results/run_AdamW_42_1755502033344.log"
+    log_file_path = "comparison_results/run_AdamW_42_1755268755797.log"
     
     try:
         # First, debug the log structure

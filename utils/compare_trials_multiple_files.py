@@ -5,10 +5,10 @@ import sys
 import os
 import importlib.util
 
-plt.rcParams['font.size'] = 15
+plt.rcParams['font.size'] = 18
 plt.rcParams['font.family'] = 'serif'
 
-MARKERS = ['o', 'X', 'D', '^', 'v', '<', '>', 'P', '*', 's', 'h', '+']
+MARKERS = ['o', '*', 'D', '^', 'v', '<', '>', 'P', '+', 's', 'h', 'X']
 
 
 def load_experiments_from_file(file_path):
@@ -39,10 +39,10 @@ def plot_aggregated_parameter_comparison(folder_path, output_prefix="Aggregated"
 
     # Prepare parameter containers across all files
     parameters = [
-        {"name": "Learning Rate", "key": "learning_rate", "use_log_norm": True, "cmap": plt.cm.brg, "ax_idx": 0},
-        {"name": r"$1-\beta_1$", "key": "beta1", "use_log_norm": True, "cmap": plt.cm.brg, "ax_idx": 1},
-        {"name": r"$1-\beta_2$", "key": "beta2", "use_log_norm": True, "cmap": plt.cm.brg, "ax_idx": 2},
-        {"name": "Weight Decay", "key": "weight_decay", "use_log_norm": True, "cmap": plt.cm.brg, "ax_idx": 3},
+        {"name": "Learning Rate", "key": "learning_rate", "use_log_norm": True, "cmap": plt.cm.seismic, "ax_idx": 0},
+        {"name": r"$1-\beta_1$", "key": "beta1", "use_log_norm": True, "cmap": plt.cm.seismic, "ax_idx": 1},
+        {"name": r"$1-\beta_2$", "key": "beta2", "use_log_norm": True, "cmap": plt.cm.seismic, "ax_idx": 2},
+        {"name": "Weight Decay", "key": "weight_decay", "use_log_norm": True, "cmap": plt.cm.seismic, "ax_idx": 3},
     ]
 
     # For each subplot, collect values across all files
@@ -81,7 +81,12 @@ def plot_aggregated_parameter_comparison(folder_path, output_prefix="Aggregated"
                 continue
 
             marker = MARKERS[idx % len(MARKERS)]
-            label = file_name.replace("parsed_results", "").replace(".py", "").strip("_")
+            label = (
+                    file_name.replace("parsed_experiments", "")  # remove prefix
+                            .replace(".py", "")                 # drop extension
+                            .strip("_")                         # remove leading/trailing underscores
+                            .replace("_", " ")                  # make underscores into spaces
+                    )
 
             for i in range(len(experiments_data_dict)):
                 trial = experiments_data_dict[f"Exp_{i+1}"]
@@ -101,24 +106,52 @@ def plot_aggregated_parameter_comparison(folder_path, output_prefix="Aggregated"
                 # Line + scatter with small markers
                 ax.plot(x_vals, test_accuracies, color=color, alpha=0.8, linewidth=1.2)
                 ax.scatter(x_vals, test_accuracies, color=color, marker=marker,
-                           s=20, alpha=0.8, label=label if i == 0 else "")
+                           s=30, alpha=0.8, label=label if i == 0 else "")
 
         ax.set_ylim([0.4, 0.8])
         ax.set_xlabel("Steps (x1000)")
         ax.set_ylabel("Test Accuracy")
-        ax.set_title(f"Test Accuracy vs {param['name']}", fontsize=15)
+        #ax.set_title(f"Test Accuracy vs {param['name']}", fontsize=15)
         ax.grid(True, alpha=0.3)
 
-        # Add colorbar
+          # Add colorbar
         sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
         sm.set_array([])
         cbar = plt.colorbar(sm, ax=ax)
         cbar.set_label(param["name"])
         cbar.ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, p: f"{x:.0e}"))
 
+        # === ADD MARKERS TO COLORBAR ===
+        for idx, file_name in enumerate(sorted(parsed_files)):
+            file_path = os.path.join(folder_path, file_name)
+            experiments_data_dict = load_experiments_from_file(file_path)
+            if experiments_data_dict is None:
+                continue
+
+            marker = MARKERS[idx % len(MARKERS)]
+            # x-position: left side for file 0, right side for file 1, etc.
+            # 0 = left (0), 1 = right (1.1), 2 = slightly further right, etc.
+            x_pos = -0.1 if idx == 0 else 1.1  
+
+            for i in range(len(experiments_data_dict)):
+                trial = experiments_data_dict[f"Exp_{i+1}"]
+                if param["key"] == "learning_rate":
+                    val = trial["learning_rate"]
+                elif param["key"] == "beta1":
+                    val = 1 - trial["beta1"]
+                elif param["key"] == "beta2":
+                    val = 1 - trial["beta2"]
+                else:
+                    val = trial["weight_decay"]
+
+                y = norm(val)  # map value to [0,1]
+                cbar.ax.plot([x_pos], [y], marker=marker, color="black",
+                             transform=cbar.ax.transAxes, clip_on=False)
+
+
     handles, labels = axes[0].get_legend_handles_labels()
     if handles:
-        fig.legend(handles, labels, loc="upper center", ncol=4, fontsize=12)
+        fig.legend(handles, labels, loc="upper center", ncol=4, fontsize=18)
 
     plt.tight_layout(rect=[0, 0, 1, 0.95])
     plt.savefig(f"{output_prefix}_all_params.png", dpi=500, bbox_inches="tight")

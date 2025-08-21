@@ -1,0 +1,22 @@
+/var/spool/slurmd/job20748/slurm_script: line 15: cd: HeavyBall: No such file or directory
+Current directory /home/tomjodrell/HeavyBall
+CUDA_VISIBLE_DEVICES 1
+/home/tomjodrell/HeavyBall/benchmark/benchmark_runner.py:289: UserWarning: No artists with labels found to put in legend.  Note that artists whose label start with an underscore are ignored when legend() is called with no argument.
+  plt.legend()
+Running comparison for CIFAR10_wide
+Optimizers: mars-AdamW
+Runs per optimizer: 1
+Steps per run: 25000
+Optuna trials per run: 5
+
+=== Running mars-AdamW ===
+Run 1/1
+running mars-AdamW
+Running: python -m benchmark.CIFAR10_wide --opt mars-AdamW --steps 25000 --trials 5 --runtime-limit 3600 --step-hint 27000
+{'runtime': 11877.37235212326, 'attempts': 1, 'best_loss': 0.9395, 'loss_trajectory': [2.2906928062438965, 0.7911621928215027, 0.6038234829902649, 0.5391290783882141, 0.5720524787902832, 0.41736727952957153, 0.39435040950775146, 0.3777797818183899, 0.32481154799461365, 0.3743593394756317, 0.22392728924751282, 0.4364434778690338, 0.21294298768043518, 0.13964511454105377, 0.18001510202884674, 0.12328419834375381, 0.1975880116224289, 0.07676108181476593, 0.06370170414447784, 0.09205210208892822, 0.06943363696336746, 0.07171878963708878, 0.06916476786136627, 0.046121157705783844, 0.15172196924686432], 'test_accuracies': [0.0994, 0.6407, 0.7543, 0.7845, 0.8026, 0.8272, 0.8423, 0.8492, 0.8779, 0.882, 0.8702, 0.8756, 0.9043, 0.9306, 0.9317, 0.9345, 0.9345, 0.9378, 0.9324, 0.9376, 0.9389, 0.9395, 0.9386, 0.9387, 0.9391], 'grad_variances': [], 'config_str': '', 'mean_cond': 0.0, 'std_err_cond': None, 'memory_usage': None, 'steps': 25000, 'optimizer': 'mars-AdamW', 'seed': 42, 'trials': 5, 'log_file': 'comparison_results/run_mars-AdamW_42_1755534882724.log', 'success': True}
+  ✓ Success - Loss: 0.9395
+
+=== Aggregating Results ===
+
+Results saved to: comparison_results
+Plots: comparison_results/CIFAR10_wide_*.png

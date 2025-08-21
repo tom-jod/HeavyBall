@@ -1,0 +1,24 @@
+/var/spool/slurmd/job20705/slurm_script: line 15: cd: HeavyBall: No such file or directory
+Current directory /home/tomjodrell/HeavyBall
+CUDA_VISIBLE_DEVICES 3
+/home/tomjodrell/HeavyBall/benchmark/benchmark_runner.py:254: UserWarning: No artists with labels found to put in legend.  Note that artists whose label start with an underscore are ignored when legend() is called with no argument.
+  plt.legend()
+/home/tomjodrell/HeavyBall/benchmark/benchmark_runner.py:289: UserWarning: No artists with labels found to put in legend.  Note that artists whose label start with an underscore are ignored when legend() is called with no argument.
+  plt.legend()
+Running comparison for MNIST
+Optimizers: NAdamW
+Runs per optimizer: 1
+Steps per run: 27000
+Optuna trials per run: 5
+
+=== Running NAdamW ===
+Run 1/1
+running NAdamW
+Running: python -m benchmark.MNIST --opt NAdamW --steps 27000 --trials 5 --runtime-limit 3600 --step-hint 27000
+{'runtime': 2347.1426289081573, 'attempts': 1, 'best_loss': 0.9829, 'loss_trajectory': [], 'test_accuracies': [0.0802, 0.7214, 0.1058, 0.0945, 0.101, 0.1034, 0.098, 0.098, 0.098, 0.098, 0.098, 0.098, 0.098, 0.098, 0.098, 0.098, 0.098, 0.098, 0.098, 0.098, 0.098, 0.098, 0.098, 0.098, 0.098, 0.098, 0.098], 'grad_variances': [], 'config_str': '', 'mean_cond': 0.0, 'std_err_cond': None, 'memory_usage': None, 'steps': 27000, 'optimizer': 'NAdamW', 'seed': 42, 'trials': 5, 'log_file': 'comparison_results/run_NAdamW_42_1755251932744.log', 'success': True}
+  ✓ Success - Loss: 0.9829
+
+=== Aggregating Results ===
+
+Results saved to: comparison_results
+Plots: comparison_results/MNIST_*.png

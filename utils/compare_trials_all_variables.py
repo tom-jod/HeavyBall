@@ -121,8 +121,15 @@ def plot_parameter_comparison(experiments_data_dict, output_prefix="Compare_targ
             cbar.ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, p: f'{x:.0e}'))
         elif param['name'] == 'Weight Decay':
             cbar.ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, p: f'{x:.0e}'))
-        elif param['name'] in [r'$1-\beta_1$', r'$1-\beta_2$']:  # Updated condition
-            cbar.ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, p: f'{x:.0e}'))  # Scientific notation for small values
+        elif param['name'] in [r'$1-\beta_1$', r'$1-\beta_2$']:
+            cbar.ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, p: f'{x:.0e}'))
+
+        ### ADD STARS TO COLORBAR ###
+        for val in param['values']:
+            y = norm(val)  # normalized position (0–1)
+            cbar.ax.plot([1.05], [y], marker="*", color="black",
+                         transform=cbar.ax.transAxes, clip_on=False)
+
     
     plt.tight_layout()
     plt.savefig(f'{output_prefix}_all_params', dpi=500, bbox_inches='tight')
