@@ -1,0 +1,37 @@
+[
+  {
+    "learning_rate": 0.007395916411447664,
+    "one_minus_beta1": 0.10456111692403224,
+    "one_minus_beta2": 0.10120258079902408,
+    "epsilon": 1e-8,
+    "weight_decay": 0.002422164454799919
+  },
+  {
+    "learning_rate": 0.000644,
+    "one_minus_beta1": 0.068217,
+    "one_minus_beta2": 0.030932,
+    "epsilon": 1e-8,
+    "weight_decay": 0.677756
+  },
+  {
+    "learning_rate": 0.002234,
+    "one_minus_beta1": 0.248677,
+    "one_minus_beta2": 0.387054,
+    "epsilon": 1e-8,
+    "weight_decay": 0.215092
+  },
+  {
+    "learning_rate": 0.001949,
+    "one_minus_beta1": 0.467204,
+    "one_minus_beta2": 0.018722,
+    "epsilon": 1e-8,
+    "weight_decay": 0.037642
+  },
+  {
+    "learning_rate": 0.004958,
+    "one_minus_beta1": 0.136256,
+    "one_minus_beta2": 0.370815,
+    "epsilon": 1e-8,
+    "weight_decay": 0.114739
+  }
+] 
