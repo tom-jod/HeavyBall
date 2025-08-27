@@ -1,0 +1,22 @@
+/var/spool/slurmd/job21082/slurm_script: line 15: cd: HeavyBall: No such file or directory
+Current directory /home/tomjodrell/HeavyBall
+CUDA_VISIBLE_DEVICES 0
+/home/tomjodrell/HeavyBall/benchmark/benchmark_runner.py:289: UserWarning: No artists with labels found to put in legend.  Note that artists whose label start with an underscore are ignored when legend() is called with no argument.
+  plt.legend()
+Running comparison for Tolstoi_RNN
+Optimizers: ExternalDistributedShampoo
+Runs per optimizer: 1
+Steps per run: 27000
+Optuna trials per run: 20
+
+=== Running ExternalDistributedShampoo ===
+Run 1/1
+running ExternalDistributedShampoo
+Running: python -m benchmark.Tolstoi_RNN --opt ExternalDistributedShampoo --steps 27000 --trials 20 --runtime-limit 227200 --step-hint 27000
+{'runtime': 4605.413442611694, 'attempts': 1, 'best_loss': 0.5906396118081226, 'loss_trajectory': [4.712215900421143, 1.9022917747497559, 1.7408621311187744, 1.6970000267028809, 1.6644203662872314, 1.6186612844467163, 1.6310778856277466, 1.534665584564209, 1.49855375289917, 1.5178704261779785, 1.5252716541290283, 1.5194158554077148, 1.50787353515625, 1.4947702884674072, 1.4880038499832153, 1.5108425617218018, 1.486268162727356, 1.488901138305664, 1.4794808626174927, 1.4865882396697998, 1.4672954082489014, 1.4851230382919312, 1.4507414102554321, 1.456982135772705, 1.5006009340286255, 1.5007489919662476, 1.4582500457763672], 'test_accuracies': [0.0034643212374545667, 0.49667310141388854, 0.5304780511082122, 0.5433571408651895, 0.5536852510016206, 0.5592918782748267, 0.5644378065671605, 0.5685369987636609, 0.5725003795777855, 0.5735522593399375, 0.5763421095848813, 0.5776608092908248, 0.5794508361556362, 0.5809323359991572, 0.5822321962525602, 0.5827869065804845, 0.5843067980057448, 0.5843463980392096, 0.5861055009342261, 0.5875082035280593, 0.5878439981780267, 0.5884187564102167, 0.5885899847239308, 0.5900077154994778, 0.5898593238247807, 0.5906396118081226, 0.5900520253960778], 'grad_variances': [], 'config_str': '', 'mean_cond': 0.0, 'std_err_cond': None, 'memory_usage': None, 'steps': 27000, 'optimizer': 'ExternalDistributedShampoo', 'seed': 42, 'trials': 20, 'log_file': 'comparison_results/run_ExternalDistributedShampoo_42_1756223864952.log', 'success': True}
+  ✓ Success - Loss: 0.5906396118081226
+
+=== Aggregating Results ===
+
+Results saved to: comparison_results
+Plots: comparison_results/Tolstoi_RNN_*.png

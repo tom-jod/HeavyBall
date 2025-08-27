@@ -1,0 +1,22 @@
+/var/spool/slurmd/job20959/slurm_script: line 15: cd: HeavyBall: No such file or directory
+Current directory /home/tomjodrell/HeavyBall
+CUDA_VISIBLE_DEVICES 2
+/home/tomjodrell/HeavyBall/benchmark/benchmark_runner.py:289: UserWarning: No artists with labels found to put in legend.  Note that artists whose label start with an underscore are ignored when legend() is called with no argument.
+  plt.legend()
+Running comparison for SVHN
+Optimizers: ExternalDistributedShampoo
+Runs per optimizer: 1
+Steps per run: 27000
+Optuna trials per run: 20
+
+=== Running ExternalDistributedShampoo ===
+Run 1/1
+running ExternalDistributedShampoo
+Running: python -m benchmark.SVHN --opt ExternalDistributedShampoo --steps 27000 --trials 20 --runtime-limit 7200 --step-hint 27000
+{'runtime': 8676.336779117584, 'attempts': 1, 'best_loss': 0.9441072526121697, 'loss_trajectory': [2.2929933071136475, 0.3494587242603302, 0.22927039861679077, 0.17567327618598938, 0.14832831919193268, 0.17899107933044434, 0.27804794907569885, 0.12395260483026505, 0.2113427370786667, 0.23428882658481598, 0.0781022161245346, 0.23579788208007812, 0.09579311311244965, 0.1502392739057541, 0.07492408901453018, 0.20877355337142944, 0.041820067912340164, 0.029914408922195435, 0.04234640300273895, 0.03553386032581329, 0.0306245069950819, 0.043751608580350876, 0.035237692296504974, 0.022087106481194496, 0.09822279959917068, 0.11444459855556488, 0.07647029310464859], 'test_accuracies': [0.1107098955132145, 0.8464582052858021, 0.9183312845728334, 0.9368085433312846, 0.9395743700061463, 0.9409572833435771, 0.9441072526121697, 0.9398048555623848, 0.9345421020282729, 0.9421097111247695, 0.938959741856177, 0.9381146281499693, 0.9358097725875845, 0.9222879532882606, 0.9363859864781807, 0.9302397049784881, 0.9385371850030731, 0.9381530424093424, 0.931699446834665, 0.9356945298094653, 0.9343500307314075, 0.9383066994468346, 0.9309695759065765, 0.9397664413030117, 0.9370774431468961, 0.9274354640442533, 0.9350799016594961], 'grad_variances': [], 'config_str': '', 'mean_cond': 0.0, 'std_err_cond': None, 'memory_usage': None, 'steps': 27000, 'optimizer': 'ExternalDistributedShampoo', 'seed': 42, 'trials': 20, 'log_file': 'comparison_results/run_ExternalDistributedShampoo_42_1755975694964.log', 'success': True}
+  ✓ Success - Loss: 0.9441072526121697
+
+=== Aggregating Results ===
+
+Results saved to: comparison_results
+Plots: comparison_results/SVHN_*.png

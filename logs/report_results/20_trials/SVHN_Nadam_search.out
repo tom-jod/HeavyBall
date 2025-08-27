@@ -1,0 +1,22 @@
+/var/spool/slurmd/job20934/slurm_script: line 15: cd: HeavyBall: No such file or directory
+Current directory /home/tomjodrell/HeavyBall
+CUDA_VISIBLE_DEVICES 3
+/home/tomjodrell/HeavyBall/benchmark/benchmark_runner.py:289: UserWarning: No artists with labels found to put in legend.  Note that artists whose label start with an underscore are ignored when legend() is called with no argument.
+  plt.legend()
+Running comparison for SVHN
+Optimizers: NAdamW
+Runs per optimizer: 1
+Steps per run: 27000
+Optuna trials per run: 20
+
+=== Running NAdamW ===
+Run 1/1
+running NAdamW
+Running: python -m benchmark.SVHN --opt NAdamW --steps 27000 --trials 20 --runtime-limit 7200 --step-hint 27000
+{'runtime': 6296.473293066025, 'attempts': 1, 'best_loss': 0.9406499692685925, 'loss_trajectory': [2.309462308883667, 1.8374011516571045, 1.12850821018219, 0.5235635638237, 0.46429407596588135, 0.3683890700340271, 0.25495126843452454, 0.4204180836677551, 0.2182939499616623, 0.43978604674339294, 0.21332693099975586, 0.5131713151931763, 0.3374178111553192, 0.25964850187301636, 0.18437817692756653, 0.19136424362659454, 0.10323971509933472, 0.5332017540931702, 0.290152370929718, 0.26065436005592346, 0.230473592877388, 0.17799438536167145, 0.31074151396751404, 0.14834064245224, 0.2735345959663391, 0.16938526928424835, 0.08706210553646088], 'test_accuracies': [0.07755838967424708, 0.3524892440073755, 0.6568454210202828, 0.8017055931161647, 0.8464582052858021, 0.8716963736939152, 0.8935156730178242, 0.8928626306084819, 0.9028503380454825, 0.9096496619545175, 0.9136063306699447, 0.9189843269821758, 0.9255531653349723, 0.9233251382913338, 0.9249385371850031, 0.9303549477566072, 0.9325829748002459, 0.9293177627535341, 0.9297403196066379, 0.9377304855562385, 0.9371926859250154, 0.9369237861094039, 0.9380377996312231, 0.9403042409342348, 0.938959741856177, 0.9405731407498463, 0.9406499692685925], 'grad_variances': [], 'config_str': '', 'mean_cond': 0.0, 'std_err_cond': None, 'memory_usage': None, 'steps': 27000, 'optimizer': 'NAdamW', 'seed': 42, 'trials': 20, 'log_file': 'comparison_results/run_NAdamW_42_1755877902911.log', 'success': True}
+  ✓ Success - Loss: 0.9406499692685925
+
+=== Aggregating Results ===
+
+Results saved to: comparison_results
+Plots: comparison_results/SVHN_*.png

@@ -1,0 +1,22 @@
+/var/spool/slurmd/job21107/slurm_script: line 15: cd: HeavyBall: No such file or directory
+Current directory /home/tomjodrell/HeavyBall
+CUDA_VISIBLE_DEVICES 0
+/home/tomjodrell/HeavyBall/benchmark/benchmark_runner.py:289: UserWarning: No artists with labels found to put in legend.  Note that artists whose label start with an underscore are ignored when legend() is called with no argument.
+  plt.legend()
+Running comparison for SVHN
+Optimizers: mars-AdamW
+Runs per optimizer: 1
+Steps per run: 27000
+Optuna trials per run: 20
+
+=== Running mars-AdamW ===
+Run 1/1
+running mars-AdamW
+Running: python -m benchmark.SVHN --opt mars-AdamW --steps 27000 --trials 20 --runtime-limit 227200 --step-hint 27000
+{'runtime': 3913.1993374824524, 'attempts': 1, 'best_loss': 0.9302397049784881, 'loss_trajectory': [2.2889976501464844, 2.2759344577789307, 1.9883273839950562, 1.5349018573760986, 0.8701799511909485, 0.6445827484130859, 0.481448233127594, 0.6041870713233948, 0.40230613946914673, 0.38805335760116577, 0.3083229064941406, 0.18856896460056305, 0.25647321343421936, 0.21658365428447723, 0.1573982536792755, 0.21165883541107178, 0.3122750520706177, 0.1874406486749649, 0.2560352385044098, 0.3844843804836273, 0.08447926491498947, 0.4725799262523651, 0.18325641751289368, 0.16916126012802124, 0.18510884046554565, 0.40813499689102173, 0.18943285942077637], 'test_accuracies': [0.15938076213890595, 0.1958743085433313, 0.32629071911493546, 0.4891671788567916, 0.6752842655193608, 0.8234864781807006, 0.8442301782421635, 0.858520282728949, 0.8729256299938537, 0.8795328826060234, 0.8896358328211432, 0.9038491087891826, 0.9044637369391518, 0.9071143208358943, 0.9258220651505839, 0.9232098955132145, 0.9257068223724647, 0.9235556238475722, 0.9264366933005531, 0.9278964351567301, 0.9260525507068224, 0.9293561770129072, 0.9300092194222496, 0.9294330055316533, 0.9296250768285187, 0.9294330055316533, 0.9302397049784881], 'grad_variances': [], 'config_str': '', 'mean_cond': 0.0, 'std_err_cond': None, 'memory_usage': None, 'steps': 27000, 'optimizer': 'mars-AdamW', 'seed': 42, 'trials': 20, 'log_file': 'comparison_results/run_mars-AdamW_42_1756286091763.log', 'success': True}
+  ✓ Success - Loss: 0.9302397049784881
+
+=== Aggregating Results ===
+
+Results saved to: comparison_results
+Plots: comparison_results/SVHN_*.png
