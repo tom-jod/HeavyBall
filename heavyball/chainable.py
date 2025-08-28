@@ -320,12 +320,15 @@ def scale_by_nadam(group, update, grad, param, exp_avg, exp_avg_sq):
         group["eps"],
     )
 
+@zero_guard("exp_avg")
 @no_state
-def update_by_SGD(group, update, grad, param):
+def update_by_SGD(group, update, grad, param, exp_avg):
     utils.fused_SGD_(
         param,
+        exp_avg,
         update,
         grad,
+        utils.get_beta1(group),
         group["step"],
         group["lr"],
         group["eps"],
@@ -1306,18 +1309,6 @@ def set_indices(fns: Iterable[callable], retain: bool = True, offset: int = 0):
             fn = fn.fn
     return fns
 
-def create_step_schedule_fn(total_steps, decay_points=[0.5, 0.75], gamma=0.1):
-    """Creates a function that returns LR multiplier for step decay schedule"""
-    milestones = [int(p * total_steps) for p in decay_points]
-    
-    def get_lr_multiplier(step):
-        multiplier = 1.0
-        for milestone in milestones:
-            if step >= milestone:
-                multiplier *= gamma
-        return multiplier
-    
-    return get_lr_multiplier
 
 def create_step_schedule_fn(total_steps, warmup_ratio=0.05, decay_points=[0.5, 0.75], gamma=0.1):
     """Creates a function that returns LR multiplier for step decay schedule"""
@@ -1460,8 +1451,8 @@ class ChainOpt(utils.StatefulOptimizer):
                     self.lr_scheduler.step()
                     current_lr = self.lr_scheduler.get_last_lr()[0]
         
-        if step%1000==0:
-            print(current_lr)    
+       # if step%1000==0:
+        #    print(current_lr)    
         group["lr"] = current_lr
         group["prev_lr"] = current_lr
         # Apply optimization step
@@ -1611,7 +1602,7 @@ class ChainOpt(utils.StatefulOptimizer):
                 momentum=group.get("momentum", 0.0),
                 weight_decay=weight_decay,
                 max_preconditioner_dim=max_preconditioner_dim,
-                precondition_frequency=group.get("precondition_frequency", 100),
+                precondition_frequency=int(group.get("precondition_frequency", 100)),
                 start_preconditioning_step=start_preconditioning_step,
                 inv_root_override=group.get("inv_root_override", 0),
                 exponent_multiplier=group.get("exponent_multiplier", 1.0),

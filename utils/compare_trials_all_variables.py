@@ -3,9 +3,9 @@ import matplotlib.colors as mcolors
 import numpy as np
 import sys
 import importlib.util
-plt.rcParams['font.size'] = 15
-plt.rcParams['font.family'] = 'serif'
 
+plt.rcParams['font.size'] = 18
+plt.rcParams['font.family'] = 'serif'
 def load_experiments_from_file(file_path):
     """
     Load experiments_data_dict from a Python file
@@ -52,28 +52,28 @@ def plot_parameter_comparison(experiments_data_dict, output_prefix="Compare_targ
             'name': 'Learning Rate',
             'values': learning_rates,
             'use_log_norm': True,
-            'cmap': plt.cm.brg,
+            'cmap': plt.cm.seismic,
             'ax_idx': 0
         },
         {
             'name': r'$1-\beta_1$',  # Updated label
             'values': beta1_values,
             'use_log_norm': True,    # Changed to True for log scale
-            'cmap': plt.cm.brg,
+            'cmap': plt.cm.seismic,
             'ax_idx': 1
         },
         {
             'name': r'$1-\beta_2$',  # Updated label
             'values': beta2_values,
             'use_log_norm': True,    # Changed to True for log scale
-            'cmap': plt.cm.brg,
+            'cmap': plt.cm.seismic,
             'ax_idx': 2
         },
         {
             'name': 'Weight Decay',
             'values': weight_decays,
             'use_log_norm': True,
-            'cmap': plt.cm.brg,
+            'cmap': plt.cm.seismic,
             'ax_idx': 3
         }
     ]
@@ -104,10 +104,10 @@ def plot_parameter_comparison(experiments_data_dict, output_prefix="Compare_targ
                    color=colors[i], alpha=0.8, linewidth=1.5)
         
         # Customize subplot
-        ax.set_ylim([0.3, 0.65])
+        ax.set_ylim([0.0, 1])
         ax.set_xlabel('Steps (x1000)')
         ax.set_ylabel('Test Accuracy')
-        ax.set_title(f'Test Accuracy vs {param["name"]}', fontsize=15)
+        #ax.set_title(f'Test Accuracy vs {param["name"]}', fontsize=15)
         ax.grid(True, alpha=0.3)
         
         # Add colorbar
@@ -132,6 +132,7 @@ def plot_parameter_comparison(experiments_data_dict, output_prefix="Compare_targ
 
     
     plt.tight_layout()
+    print(output_prefix)
     plt.savefig(f'{output_prefix}_all_params', dpi=500, bbox_inches='tight')
     plt.show()
   

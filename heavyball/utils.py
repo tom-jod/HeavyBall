@@ -1733,32 +1733,36 @@ def SGD_(
 @decorator_knowngood
 def _fused_compilable_SGD_(
     y: List[Tensor],
+    exp_avg: List[Tensor],
     update: List[Tensor],
     grad: List[Tensor],
+    beta1: Tensor,
     step: Tensor,
     decay: Tensor,
     lr: Tensor,
     eps: Tensor,
     caution: bool,
 ):
-    
     u32, g32 = [list(map(promote, x)) for x in [update, grad]]
-    _compilable_update_(y, u32, decay, lr, caution, g32)
+    exp_avg32 = _lerp(exp_avg, g32, beta1)
+    _compilable_update_(y, exp_avg32, decay, lr, caution, g32)
 
 
 def fused_SGD_(
     y: List[Tensor],
+    exp_avg: List[Tensor],
     update: List[Tensor],
     grad: List[Tensor],
+    beta1: float,
     step: int,
     lr: float,
     eps: float,
     decay: float,
     caution: bool,
 ):
-    y, grad = list_guard(y, grad)
-    step, lr = scalar_guard(step, lr, y[0])
-    _fused_compilable_SGD_(y, update, grad, step, decay, lr, eps, caution)
+    y, grad, exp_avg = list_guard(y, grad, exp_avg)
+    beta1, step, lr = scalar_guard(beta1, step, lr, y[0])
+    _fused_compilable_SGD_(y, exp_avg, update, grad, beta1, step, decay, lr, eps, caution)
 
 
 @decorator_knowngood
@@ -2297,6 +2301,95 @@ def fused_adam_(
     y, exp_avg, exp_avg_sq, grad = list_guard(y, exp_avg, exp_avg_sq, grad)
     beta1, beta2, step, lr = scalar_guard(beta1, beta2, step, lr, y[0])
     _fused_compilable_adam_(y, exp_avg, exp_avg_sq, update, grad, beta1, beta2, step, decay, lr, eps, caution)
+
+
+@decorator_knowngood
+def _fused_compilable_adan_(
+    y: List[Tensor],
+    exp_avg: List[Tensor],           # m_k (first moment)
+    exp_avg_sq: List[Tensor],        # n_k (second moment for Adan)
+    exp_avg_diff: List[Tensor],      # v_k (gradient difference)
+    prev_grad: List[Tensor],         # g_{k-1}
+    update: List[Tensor],
+    grad: List[Tensor],              # g_k
+    beta1: Tensor,                   # β₁
+    beta2: Tensor,                   # β₂  
+    beta3: Tensor,                   # β₃
+    step: Tensor,
+    decay: Tensor,
+    lr: Tensor,
+    eps: Tensor,
+    caution: bool,
+):
+    # Promote tensors to float32
+    u32, g32 = [list(map(promote, x)) for x in [update, grad]]
+    prev_grad32 = list(map(promote, prev_grad))
+    
+    # Compute gradient difference: g_k - g_{k-1}
+    grad_diff = torch._foreach_sub(g32, prev_grad32)
+    
+    # Update first moment: m_k = (1 - β₁) * m_{k-1} + β₁ * g_k
+    exp_avg32 = _lerp(exp_avg, g32, beta1)
+    
+    # Update gradient difference moment: v_k = (1 - β₂) * v_{k-1} + β₂ * (g_k - g_{k-1})
+    exp_avg_diff32 = _lerp(exp_avg_diff, grad_diff, beta2)
+    
+    # Compute weighted gradient: g_k + (1 - β₂) * (g_k - g_{k-1})
+    one_minus_beta2 = 1.0 - beta2
+    weighted_grad_diff = torch._foreach_add(g32, grad_diff, alpha=one_minus_beta2)
+    
+    # Square the weighted gradient difference
+    weighted_grad_diff_sq = torch._foreach_mul(weighted_grad_diff, weighted_grad_diff)
+    
+    # Update second moment: n_k = (1 - β₃) * n_{k-1} + β₃ * [g_k + (1 - β₂) * (g_k - g_{k-1})]²
+    exp_avg_sq32 = _lerp(exp_avg_sq, weighted_grad_diff_sq, beta3)
+    
+    # Bias correction (optional - can be disabled for standard Adan)
+    bias_correction1 = 1 - beta1 ** step
+    bias_correction3 = 1 - beta3 ** step
+    
+    # Apply bias correction to first moment
+    exp_avg_corrected = torch._foreach_div(exp_avg32, bias_correction1)
+    exp_avg_sq_corrected = torch._foreach_div(exp_avg_sq32, bias_correction3)
+    
+    # Compute denominator: sqrt(n_k) + eps
+    denom = torch._foreach_sqrt(exp_avg_sq_corrected)
+    denom = torch._foreach_add(denom, eps)
+    
+    # Compute step size for each parameter: η / (√n_k + ε)
+    step_size = torch._foreach_div([lr] * len(denom), denom)
+    
+    # Compute update direction: m_k + (1 - β₂) * v_k
+    update_direction = torch._foreach_add(exp_avg_corrected, exp_avg_diff32, alpha=one_minus_beta2)
+    
+    # Scale by step size: η_k ∘ (m_k + (1 - β₂) * v_k)
+    u32 = torch._foreach_mul(update_direction, step_size)
+    
+    # Update previous gradient for next iteration
+    torch._foreach_copy_(prev_grad, g32)
+    
+    # Apply parameter update with weight decay
+    _compilable_update_(y, u32, decay, lr, caution, g32)
+
+def fused_adan_(
+    y: List[Tensor],
+    exp_avg: List[Tensor],
+    exp_avg_sq: List[Tensor],
+    update: List[Tensor],
+    grad: List[Tensor],
+    beta1: float,
+    beta2: float,
+    step: int,
+    lr: float,
+    eps: float,
+    decay: float,
+    caution: bool,
+):
+    
+    y, exp_avg, exp_avg_sq, grad = list_guard(y, exp_avg, exp_avg_sq, grad)
+    beta1, beta2, step, lr = scalar_guard(beta1, beta2, step, lr, y[0])
+    _fused_compilable_adan_(y, exp_avg, exp_avg_sq, update, grad, beta1, beta2, step, decay, lr, eps, caution)
+
 
 @decorator_knowngood
 def _fused_compilable_nadam_(

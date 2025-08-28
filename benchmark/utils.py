@@ -8,6 +8,7 @@ import sys
 import time
 import warnings
 import json
+import matplotlib.pyplot as plt
 import numpy as np
 import optuna
 import torch
@@ -17,11 +18,13 @@ import functools
 import torch
 import torch.nn.functional as F
 from torchvision.transforms.functional import pad as pad_fn
+from torch.nn.utils import parameters_to_vector
+from torch.func import functional_call
 import heavyball.utils
 from heavyball import chainable as C
 from heavyball.helpers import AutoSampler
 from heavyball.utils import PrecondInitError
-
+from torch.func import functional_call
 config.cache_size_limit = 2**16
 
 np.warnings = warnings
@@ -405,7 +408,9 @@ class Objective:
         
         input_kwargs = locals()
         input_kwargs.pop("self")
-       
+        
+        weight_decay = params[5]
+        
         params = {
             "lr": params[0],                           # learning_rate
             "betas": (1 - params[1], 1 - params[2], 1 - params[3]),  # (beta1, beta2, beta3)
@@ -481,7 +486,8 @@ class Objective:
                     return validator.ema_states.min().item(), self.m, torch_hist[-1].item(), self.current_losses, self.test_accuracies, self.grad_variances, self.condition_numbers, self.step_counter, runtime
                 
                 # Early stopping for trials that are out of the 5 percent test performance of current best trial
-                if self.best_test_accuracies != []:
+                early_stopping_enabled = True
+                if self.best_test_accuracies != [] and len(self.best_test_accuracies) == self.steps//self.group and early_stopping_enabled:
                     if test_accuracy < 0.95 * self.best_test_accuracies[i]:
                         runtime = time.time() - self.start_time
                         print({"STOPPING EARLY"})
@@ -489,19 +495,61 @@ class Objective:
                 
             if self.estimate_condition_number: 
                 with torch.backends.cudnn.flags(enabled=False):
+                    x, y = self.data()
                     #if i % int(self.steps // (self.group*5)) == 0:
-                    #self.condition_numbers.append(estimate_condition_number_hvp(self.m, self.data, n_probes=20, n_samples=50, loss_fn=self.loss_fn)[0])
-                    self.condition_numbers.append(estimate_condition_number_grid_search(self.m, self.data, loss_fn=self.loss_fn, timout=100))
-                   
-                
+                    cutoff = 100
+                    estimate = True
+                    effective = True
+                    if estimate and effective:
+                             
+                        condition_number = estimate_effective_condition_number(self.m, self.data, loss_fn=self.loss_fn, weight_decay=weight_decay, lanczos_steps=200)
+                        self.condition_numbers.append(condition_number['condition_number'])
+                        eigs = sorted(np.abs(condition_number["eigenvals_lanczos"]))
+                        eigs = [float(ev) for ev in eigs if np.isfinite(ev)]
+                        print(eigs[-100:-1])
+                        eigs_R = sorted(np.abs(condition_number["eigenvals_rayleigh"]))
+                        eigs_R = [float(ev) for ev in eigs_R if np.isfinite(ev)]
+                        plt.figure()
+                        log_bins = np.logspace(np.log10(min(eigs)), np.log10(max(eigs)), 100)
+                        log_bins_R = np.logspace(np.log10(min(eigs_R)), np.log10(max(eigs_R)), 100)
+                        plt.hist(eigs, bins=log_bins, label="Lanczos Estimate")
+                        plt.hist(eigs_R, bins=log_bins_R, label="Rayleigh Estimate")
+                        plt.xscale('log')
+                        plt.ylabel('Count')
+                        plt.legend()
+                        plt.savefig(f"eigenspectrum_estimate_CIFAR10_wide.png", dpi=500)
+                    elif estimate:
+                        condition_number = _estimate_condition_number_single_batch_slq(self.m, x, y, loss_fn=self.loss_fn, weight_decay=weight_decay, lanczos_steps=1000, cutoff=cutoff)
+                      #  condition_number = estimate_condition_number_hvp(self.m, self.data, n_probes=1000, n_samples=1, loss_fn=self.loss_fn, weight_decay=weight_decay)
+                        self.condition_numbers.append(condition_number['lambda_max'])
+                        #eigs = sorted(np.abs(condition_number["ritz_values"]))
+                        eigs = sorted(np.abs(condition_number["eigenvals"]))
+                        eigs = [float(ev) for ev in eigs if np.isfinite(ev)]
+                        print(eigs[-100:-1])
+                        plt.figure()
+                        log_bins = np.logspace(np.log10(min(eigs)), np.log10(max(eigs)), 100)
+                        plt.hist(eigs, bins=log_bins)
+                        plt.xscale('log')
+                        plt.xlabel('Eigenvalues (log scale)')
+                        plt.ylabel('Count')
+                        plt.savefig("eigenspectrum_estimate_MNIST_Lanczos_1000.png", dpi=500)
+                       
+                   # self.condition_numbers.append(estimate_condition_number_grid_search(self.m, self.data, loss_fn=self.loss_fn, timout=1000, weight_decay=weight_decay))
+                    else:
+                        condition_number = estimate_condition_number_full(self.m, self.data, num_batches=10, loss_fn=self.loss_fn, weight_decay=weight_decay, cutoff=cutoff)
+                        eigs = sorted(abs(condition_number["eigenvalues"]))
+                        eigs = [float(ev) for ev in eigs if np.isfinite(ev)]
+                        print(eigs[-100:-1])
+                        self.condition_numbers.append(condition_number["lambda_max"])
+                        
     
             if self.track_variance:
                 # track variance at every 1000 steps through training
-                #grad_variance = estimate_minibatch_variance_detailed(self.m, self.data, n_samples=10, loss_fn=self.loss_fn)[0]
+                #grad_variance = estimate_minibatch_variance_detailed(self.m, self.data, n_samples=500, loss_fn=self.loss_fn)[0]
                 #grad_variance = estimate_minibatch_variance_grid_search(self.m, self.data, loss_fn=self.loss_fn, timout=30)
                 #self.grad_variances.append(grad_variance["gradient_variance"])
                 grad_variance = compute_true_minibatch_variance(self.m, self.train_loader, loss_fn=self.loss_fn)
-                self.grad_variances.append(grad_variance)
+                self.grad_variances.append(grad_variance["gradient_noise_variance"])
             
             if hasattr(o, "train"):
                 o.train()
@@ -746,7 +794,7 @@ def trial(
     return_best: bool = False,
     warmup_trial_pct: int = 0.2,
     random_trials: int = 10,
-    estimate_condition_number: bool = False,
+    estimate_condition_number: bool = True,
     test_loader=None,
     train_loader=None,
     track_variance=False,
@@ -754,10 +802,13 @@ def trial(
     runtime_limit: int = 3600 * 24, # Default runtime limit is a day
     step_hint: int = 0,
 ):
+    opt_name = opt
     use_fixed_hyperparams = False
-    if opt in ["AdamW", "ExternalDistributedShampoo"]:
-    #if opt in [ "ExternalDistributedShampoo"]:
-        opt_name = opt
+    if opt in []:
+   # if opt in ["AdamW"]:
+    #    if opt_name == ["mars-AdamW"]:
+    #        print("Using AdamW Algo params")
+    #        opt_name = "AdamW"
         print("using_list")
         use_fixed_hyperparams = True
 
@@ -860,7 +911,7 @@ def trial(
         4: 0.001,      # one_minus_shampoo_beta
         5: 0.08,       # weight_decay
         6: 1e-8,       # epsilon
-        7: 0.02,       # warmup_factor
+        7: 0.05,       # warmup_factor
         8: 0.1,        # dropout_rate
         9: 0.4,        # label_smoothing
         10: 0.0,       # one_minus_momentum
@@ -873,7 +924,7 @@ def trial(
         17: "ADAM",    # grafting_type
         18: 1e-8,      # grafting_epsilon
         19: False,     # use_normalized_grafting
-        20: "FP32",    # communication_dtype
+        20: "FP64",    # communication_dtype
         21: True,      # communicate_params
         22: True,      # use_cosine_decay
         23: True,      # use_nadam
@@ -1042,7 +1093,9 @@ def trial(
                     **kwargs,
                 )
                 out = obj.objective(full_params)
+                
                 best_test_accuracy = max(obj.test_accuracies.copy())
+                
                 trial_result = {
                     'trial_number': hyperparam_counter,
                     'tuned_indices': tuned_indices,
@@ -1058,14 +1111,6 @@ def trial(
                 print(trial_result) 
                 all_trial_results.append(trial_result)   
                 return best_test_accuracy
-            
-        set_seed()
-        n_trials = 5
-        # If trials is less than 5, only do trials many runs
-        if trials < n_trials:
-            n_trials = trials
-
-        study.optimize(_optuna_objective, n_trials)
            
         n_trials = 5
         # If trials is less than 5, only do trials many runs
@@ -1078,17 +1123,42 @@ def trial(
         print("Using Quasi-random Sampling")
         best_test_accuracies = []
         # Specify exactly which parameter indices to tune - you can change this list
-        tuned_indices = [0, 1, 2, 5]  # Example: tune learning_rate, one_minus_beta3, one_minus_shampoo_beta
-        
-        # Define search ranges for each parameter index
-        search_ranges = {
-            0: (1e-4, 1e-2, True),   # learning_rate (log scale)
-            1: (1e-3, 0.5, True),    # one_minus_beta1 (log scale)
-            2: (1e-3, 0.5, True),    # one_minus_beta2 (log scale)
-            3: (1e-3, 0.5, True),    # one_minus_beta3 (log scale)
-            4: (1e-3, 0.5, True),      # one_minus_shampoo_beta (log scale)
-            5: (1e-5, 1e-0, True),   # weight_decay (log scale)
-        }
+        # Example: tune learning_rate, one_minus_beta3, one_minus_shampoo_beta
+        if opt_name == "ExternalDistributedShampoo":
+            tuned_indices = [0, 1, 2, 13, 5] 
+            print("Tuning precond. freq. instead of beta2")
+            search_ranges = {
+                0: (1e-4, 1e-2, True),   # learning_rate (log scale)
+                1: (1e-3, 0.5, True),    # one_minus_beta1 (log scale)
+                2: (1e-3, 0.5, True),    # one_minus_beta2 (log scale)
+                13: (10, 200, True),    # Precond. freq. (log scale)
+                5: (1e-5, 1e-0, True),   # weight_decay (log scale)
+            }
+
+        elif opt_name == "SGD":
+            tuned_indices = [0, 1, 5] 
+            # Define search ranges for each parameter index
+            search_ranges = {
+                0: (1e-2, 10, True),   # learning_rate (log scale)
+                1: (1e-3, 0.5, True),    # one_minus_beta1 (log scale)
+                2: (1e-3, 0.5, True),    # one_minus_beta2 (log scale)
+                3: (1e-3, 0.5, True),    # one_minus_beta3 (log scale)
+                4: (1e-3, 0.5, True),      # one_minus_shampoo_beta (log scale)
+                5: (1e-7, 1e-2, True),   # weight_decay (log scale)
+            }
+
+        else:
+            print("Using higher lr default ranges")
+            # Define search ranges for each parameter index
+            tuned_indices = [0, 1, 2, 5]  
+            search_ranges = {
+                0: (1e-3, 1e-1, True),   # learning_rate (log scale)
+                1: (1e-3, 0.5, True),    # one_minus_beta1 (log scale)
+                2: (1e-3, 0.5, True),    # one_minus_beta2 (log scale)
+                3: (1e-3, 0.5, True),    # one_minus_beta3 (log scale)
+                4: (1e-3, 0.5, True),      # one_minus_shampoo_beta (log scale)
+                5: (1e-5, 1e-0, True),   # weight_decay (log scale)
+            }
         
         sampler = AutoSampler(
             seed=0x123125,
@@ -1159,7 +1229,11 @@ def trial(
                 }
                 print(trial_result)
                 all_trial_results.append(trial_result)   
-                if best_test_accuracies == [] or best_test_accuracy > max(best_test_accuracies):
+                if (
+                    best_test_accuracies == [] 
+                    or (best_test_accuracy > max(best_test_accuracies) 
+                        and len(trial_result["test_accuracies"]) == steps // group)
+                ):
                     best_test_accuracies = trial_result["test_accuracies"]
             except Stop:
                 pass
@@ -1172,6 +1246,7 @@ def trial(
         #best_trial = min(all_trial_results, key=lambda x: x['losses'][-1])
         #best_trial = min(all_trial_results, key=lambda x: x['runtime'])
         best_trial = max(all_trial_results, key=lambda x: max(x['test_accuracies']) if x['test_accuracies'] else 0)
+
         winning_params = best_trial['params']
         # Use the best trial's metrics
         final_losses = best_trial['losses']
@@ -1185,7 +1260,9 @@ def trial(
 
     if all_trial_results:
         #best_trial = min(all_trial_results, key=lambda x: x['losses'][-1])
+       
         most_accurate_trial = max(all_trial_results, key=lambda x: max(x['test_accuracies']) if x['test_accuracies'] else 0)
+      
         best_test_accuracies = most_accurate_trial['test_accuracies']
         best_test_accuracy = max(best_test_accuracies)
         print("Successfully found the maximum test accuracy")
@@ -1429,21 +1506,27 @@ def _get_default_metrics(task_type):
     return base_metrics
 
 
-def estimate_condition_number_grid_search(model, data_fn, loss_fn=torch.nn.functional.cross_entropy, timout=3600):
-    n_samples = [5,10,20,50,100,300,1000]
+def estimate_condition_number_grid_search(model, data_fn, loss_fn=torch.nn.functional.cross_entropy, timout=3600, weight_decay=1e-4):
+    n_samples = [5,10,20,50,100,200,500,1000]
     results = [0]
 
     for n in n_samples:
-        result, reached_timout = estimate_condition_number_hvp(model, data_fn, n_probes=int(n/2), n_samples=n, loss_fn=loss_fn, timout=timout)
+        result = estimate_condition_number_hvp(model, data_fn, n_probes=int(n*2), n_samples=n, loss_fn=loss_fn, timout=timout, weight_decay=weight_decay)
+        condition_number = result["condition_number"]
+        reached_timout = result["reached_timout"]
+        sorted_eigs = sorted(result['eigenvals'])
+        print(f"Bottom 20 for n={n}: {sorted_eigs[0:20]}")
+        print(f"Top 20 for n={n}: {sorted_eigs[-21:-1]}")
+        print(f"Median for n={n}: {sorted_eigs[int(len(sorted_eigs)/2)]}")
         if reached_timout:
             return results[-1]
         else:
-            results.append(result)
-
+            results.append(condition_number)
+    
     return float(results[-1])
 
 
-def estimate_condition_number_hvp(model, data_fn, n_probes=20, n_samples=50, loss_fn=None, timout=3600):
+def estimate_condition_number_hvp(model, data_fn, n_probes=20, n_samples=50, loss_fn=None, timout=3600, weight_decay=1e-4):
     """Estimate condition number using Hessian-vector products - works for any loss function"""
     start_time = time.time()
     reached_timout = False
@@ -1495,7 +1578,7 @@ def estimate_condition_number_hvp(model, data_fn, n_probes=20, n_samples=50, los
                 # Compute Hv
                 hvp = compute_hvp(loss, params, v)
                 
-                # Rayleigh quotient: v^T H v / v^T v = v^T H v (since v normalized)
+                # Rayleigh quotient:
                 eigenval = sum(torch.sum(hv * v_i) for hv, v_i in zip(hvp, v))
                 eigenvals.append(eigenval.item())
 
@@ -1512,87 +1595,107 @@ def estimate_condition_number_hvp(model, data_fn, n_probes=20, n_samples=50, los
     eigenvals = eigenvals[np.isfinite(eigenvals)]  # Remove NaN/inf
     
     if len(eigenvals) == 0:
-        return float('inf'), False
+        result = {
+        "condition_number" : 0,
+        "eigenvals" : eigenvals,
+        "reached_timout" : False
+        } 
+        return result
     
     # Condition number approximation
     abs_eigenvals = np.abs(eigenvals)
     max_eig = np.max(abs_eigenvals)
     min_eig = np.min(abs_eigenvals)
-    
-    if min_eig <= 0:
-        return float('inf'), False  # Indefinite Hessian
-        
-    return max_eig / (min_eig + 1e-8), reached_timout
+
+    # Convert to python float for better printing visibility 
+    eigenvals = [float(ev) for ev in eigenvals if np.isfinite(ev)]
+
+    result = {
+        "condition_number" : (max_eig ) / (min_eig ),
+        "lambda_max": max_eig,
+        "eigenvals" : eigenvals,
+        "reached_timout" : reached_timout
+    } 
+    return result
 
 
 def evaluate_test_accuracy(model, test_loader):
-    """Evaluate model performance with automatic task detection"""
-    # Save the current training state
+    """Evaluate model performance with automatic task detection (robust)."""
     was_training = model.training
     model.eval()
-    
-    # Try to get a sample batch to determine task type
+
     try:
-        sample_data, sample_target = next(iter(test_loader))
+        # Grab one batch safely
+        sample_batch = next(iter(test_loader))
+        # Detect format: FastMRI returns 5 items, classification returns 2
+        if isinstance(sample_batch, (list, tuple)):
+            if len(sample_batch) >= 5:
+                # FastMRI dataset: data, target, mean, std, volume_max
+                sample_data, sample_target = sample_batch[0], sample_batch[1]
+            else:
+                # Classification dataset: data, target
+                sample_data, sample_target = sample_batch
+        else:
+            raise ValueError(f"Unexpected batch format: {type(sample_batch)}")
+
+        # Move to GPU if available
         if torch.cuda.is_available():
             sample_data, sample_target = sample_data.cuda(), sample_target.cuda()
-        
+
         with torch.no_grad():
             sample_output = model(sample_data)
-        
-        # Detect task type based on output characteristics
+     
+        # Detect task type
         task_type = detect_task_type(sample_output, sample_target, model)
-        
+
         if task_type == 'fastmri':
             result = evaluate_fastmri_ssim_internal(model, test_loader)
         else:
             result = evaluate_classification_accuracy(model, test_loader)
-            
+
     except Exception as e:
         print(f"Error in evaluation: {e}")
         result = 0.0
-    
-    # Restore the original training state
+
+    # Restore original training state
     model.train(was_training)
     return result
+
+
 
 def detect_task_type(output, target, model):
     """Detect whether this is a FastMRI reconstruction task or classification"""
     
-    # Check 1: If model is a UNet (common for FastMRI)
     model_name = model.__class__.__name__.lower()
     if 'unet' in model_name:
         return 'fastmri'
     
-    # Check 2: If output and target are both 2D images (after removing batch/channel dims)
-    output_spatial_dims = len([d for d in output.shape[2:] if d > 1])  # Skip batch and channel
+    # Ensure output and target have at least 2 spatial dims
+    output_spatial_dims = len([d for d in output.shape[2:] if d > 1])
     target_spatial_dims = len([d for d in target.shape[2:] if d > 1])
     
     if output_spatial_dims == 2 and target_spatial_dims == 2:
-        # Both are 2D images
-        if output.shape[-2:] == target.shape[-2:]:  # Same spatial dimensions
+        if output.shape[-2:] == target.shape[-2:]:
             return 'fastmri'
     
-    # Check 3: If output is continuous values (not logits) and target is also continuous
     if output.dtype == torch.float32 and target.dtype == torch.float32:
-        # Check if output values are in a reasonable range for images (not logits)
         output_range = output.max() - output.min()
         target_range = target.max() - target.min()
         
-        # If both have reasonable image-like ranges and similar scales
-        if (0.1 < output_range < 100) and (0.1 < target_range < 100):
-            # Check if target has image-like statistics (not one-hot encoded)
-            if target.numel() > 1000 and len(target.unique()) > 10:
+        # Safe unique count
+        target_unique = target.unique()
+        num_unique = target_unique.numel() if target_unique.numel() > 0 else 0
+        
+        if (0.1 < output_range < 100) and (0.1 < target_range < 100) and num_unique > 10:
+            return 'fastmri'
+    
+    if len(output.shape) == 4 and len(target.shape) == 4:
+        if output.shape[2] > 64 and output.shape[3] > 64:
+            if output.shape == target.shape:
                 return 'fastmri'
     
-    # Check 4: Spatial dimensions suggest image reconstruction
-    if len(output.shape) == 4 and len(target.shape) == 4:  # [B, C, H, W]
-        if output.shape[2] > 64 and output.shape[3] > 64:  # Large spatial dimensions
-            if output.shape == target.shape:  # Same shape (reconstruction task)
-                return 'fastmri'
-    
-    # Default to classification
     return 'classification'
+
 
 def evaluate_classification_accuracy(model, test_loader):
     """Original classification evaluation logic"""
@@ -1606,103 +1709,102 @@ def evaluate_classification_accuracy(model, test_loader):
             
             output = model(data)
             
-            # Handle different output shapes
-            if output.dim() > 2:
-                # Sequence modeling: [batch, seq_len, vocab_size]
-                pred = output.argmax(dim=-1)  # [batch, seq_len]
-                pred_flat = pred.view(-1)
-                target_flat = target.view(-1)
-                correct += pred_flat.eq(target_flat).sum().item()
-                total += target_flat.numel()
+            # Ensure output & target are at least 2D
+            if output.ndim < 2:
+                output = output.view(1, -1)
+            if target.ndim < 2:
+                target = target.view(1, -1)
+            
+            if output.ndim == 3:  # (batch, seq_len, vocab_size)
+                pred_flat = output.argmax(dim=2).reshape(-1)   # take vocab dimension
+                target_flat = target.reshape(-1)
             else:
-                # Regular classification: [batch, num_classes]
-                pred = output.argmax(dim=1, keepdim=True)
-                correct += pred.eq(target.view_as(pred)).sum().item()
-                total += target.numel()
+                pred_flat = output.argmax(dim=1).view(-1)
+                target_flat = target.view(-1)
+            correct += pred_flat.eq(target_flat).sum().item()
+            total += target_flat.numel()
+
     
     return correct / total
 
+from skimage.metrics import structural_similarity as skimage_ssim
+
 def evaluate_fastmri_ssim_internal(model, test_loader):
-    """SSIM evaluation for FastMRI tasks"""
     total_ssim = 0.0
     total_samples = 0
     
     with torch.no_grad():
-        for i, (data, target) in enumerate(test_loader):
-            if i >= 10:  # Limit evaluation to prevent memory issues
-                break
+        for i, batch in enumerate(test_loader):
+            # Unpack with fallback
+            if isinstance(batch, tuple) and len(batch) == 5:
+                data, target, mean, std, volume_max = batch
+            else:
+                data, target = batch, batch  # fallback
+                mean = torch.tensor(0.0)
+                std = torch.tensor(1.0)
+                volume_max = torch.tensor(1.0)
             
             if torch.cuda.is_available():
                 data, target = data.cuda(), target.cuda()
             
             output = model(data)
             
-            # Ensure output and target have the same shape
-            if output.shape != target.shape:
-                if len(output.shape) == 4 and len(target.shape) == 4:
-                    output = F.interpolate(output, size=target.shape[-2:], 
-                                         mode='bilinear', align_corners=False)
+            # Make sure output is at least 4D [B,C,H,W]
+            while output.ndim < 4:
+                output = output.unsqueeze(0)
+            while target.ndim < 4:
+                target = target.unsqueeze(0)
             
-            try:
-                # Compute SSIM for each example in the batch
-                batch_ssim = 0.0
-                batch_size = output.shape[0]
-                
-                for j in range(batch_size):
-                    # Remove batch and channel dimensions for SSIM computation
-                    pred_img = output[j].squeeze()
-                    target_img = target[j].squeeze()
-                    
-                    # Simple SSIM computation (you can use your more complex version)
-                    ssim_val = structural_similarity(pred_img, target_img, data_range=1.0)
-                    batch_ssim += ssim_val.item()
-                
-                total_ssim += batch_ssim
-                total_samples += batch_size
-                
-            except Exception as e:
-                print(f"SSIM computation error: {e}")
-                # Fallback to MSE-based metric
-                mse = F.mse_loss(output, target)
-                # Convert MSE to a "higher is better" metric
-                total_ssim += max(0, 1.0 - mse.item())
-                total_samples += output.shape[0]
-    
-    if total_samples == 0:
-        return 0.0
-    
-    avg_ssim = total_ssim / total_samples
-    print(f"FastMRI SSIM evaluation: {avg_ssim:.4f}")
-    return avg_ssim
+            # Denormalize
+            output = output * std + mean
+            target = target * std + mean
+            output = torch.clamp(output, 0, volume_max)
+            target = torch.clamp(target, 0, volume_max)
+            
+            batch_size = output.shape[0]
+            for j in range(batch_size):
+                pred_img = output[j,0].cpu().numpy()
+                target_img = target[j,0].cpu().numpy()
+                try:
+                    ssim_val = skimage_ssim(pred_img, target_img, data_range=volume_max.item())
+                except Exception as e:
+                    print(f"Error in skimage_ssim: {e}")
+                    ssim_val = 0.0
+                total_ssim += ssim_val
+                total_samples += 1
 
-# Add the SSIM functions from before
+    
+    return total_ssim / max(1, total_samples)
+
+
 def structural_similarity(im1, im2, data_range=1.0, win_size=7, k1=0.01, k2=0.03):
-    """Compute the mean structural similarity index between two images."""
-    # Add a simple fallback for very small images or errors
     try:
         if im1.numel() < win_size * win_size or im2.numel() < win_size * win_size:
-            # Fallback to normalized correlation for very small images
+            # fallback
             im1_flat = im1.flatten()
             im2_flat = im2.flatten()
             correlation = F.cosine_similarity(im1_flat.unsqueeze(0), im2_flat.unsqueeze(0))
-            return correlation.squeeze()
+            return float(correlation.item())
         
         filter_func = functools.partial(_uniform_filter, size=win_size)
-        num_points = win_size ** len(im1.shape)
+        try:
+            num_points = win_size ** len(im1.shape)
+        except:
+            print(f"im1 shape: {im1.shape}")
+            num_points = win_size ** 2
+
         cov_norm = num_points / (num_points - 1)
-        
-        # compute (weighted) means
+
         ux = filter_func(im1)
         uy = filter_func(im2)
-        
-        # compute (weighted) variances and covariances
+
         uxx = filter_func(im1 * im1)
         uyy = filter_func(im2 * im2)
         uxy = filter_func(im1 * im2)
         vx = cov_norm * (uxx - ux * ux)
         vy = cov_norm * (uyy - uy * uy)
         vxy = cov_norm * (uxy - ux * uy)
-        
+
         c1 = (k1 * data_range) ** 2
         c2 = (k2 * data_range) ** 2
         a1 = 2 * ux * uy + c1
@@ -1711,18 +1813,18 @@ def structural_similarity(im1, im2, data_range=1.0, win_size=7, k1=0.01, k2=0.03
         b2 = vx + vy + c2
         d = b1 * b2
         s = (a1 * a2) / d
-        
-        # to avoid edge effects will ignore filter radius strip around edges
+
         pad = (win_size - 1) // 2
         if s.shape[0] > 2*pad and s.shape[1] > 2*pad:
-            return torch.mean(s[pad:-pad, pad:-pad])
+            return float(torch.mean(s[pad:-pad, pad:-pad]).item())
         else:
-            return torch.mean(s)
-            
+            return float(torch.mean(s).item())
+
     except Exception as e:
         print(f"SSIM computation failed: {e}, using fallback")
-        # Fallback to simple correlation
-        return F.cosine_similarity(im1.flatten().unsqueeze(0), im2.flatten().unsqueeze(0)).squeeze()
+        return float(F.cosine_similarity(im1.flatten().unsqueeze(0),
+                                        im2.flatten().unsqueeze(0)).item())
+
 
 def _uniform_filter(im, size=7):
     """Uniform filter for SSIM computation"""
@@ -1741,7 +1843,7 @@ def _uniform_filter(im, size=7):
         # Fallback to simple averaging
         return im
     
-    import time
+import time
 import torch
 import numpy as np
 from torch.nn.utils import parameters_to_vector, vector_to_parameters
@@ -1762,22 +1864,31 @@ def _auto_loss_fn(output, y):
 
 def _prepare_batch(data_fn, device):
     inp, target = data_fn()
-    gpu_target = target if isinstance(target, torch.Tensor) else torch.from_numpy(target)
-    gpu_inp = inp if isinstance(inp, torch.Tensor) else torch.from_numpy(inp)
-    return gpu_inp.to(device), gpu_target.to(device)
+
+    return inp.to(device), target.to(device)
 
 def _compute_loss(model, data_fn, loss_fn, device, dtype=torch.float64):
     model.zero_grad(set_to_none=True)
-    x, y = _prepare_batch(data_fn, device)
+    if data_fn()[0] is not None:
+        x, y = _prepare_batch(data_fn, device)
+    else: 
+        x, y = data_fn()
     # Forward
-    out = model(x)
+      # Compute loss with previous model
+    loss = model() if x is None else model(x)
+    
     # Auto-detect loss if needed
-    if loss_fn is None:
-        loss_fn = _auto_loss_fn(out, y)
-    loss = loss_fn(out, y)
+    if loss_fn is not None:
+        loss = loss_fn(loss, y)
     return loss, loss_fn
 
-def estimate_condition_number_full(
+from torch.func import functional_call
+from torch.nn.utils import parameters_to_vector
+import numpy as np
+import time
+import torch
+
+def estimate_condition_number_full_old(
     model,
     data_fn,
     loss_fn=None,
@@ -1785,54 +1896,19 @@ def estimate_condition_number_full(
     timeout=1800,
     max_params=150_000,
     use_double=False,
-    return_eigs=False,
+    return_eigs=True,
 ):
-    """
-    EXACT condition number via dense Hessian eigenvalues.
-
-    Parameters
-    ----------
-    model : torch.nn.Module
-    data_fn : callable -> (inp, target)
-        Should return a *single* batch used to define the Hessian.
-    loss_fn : callable or None
-    device : torch.device or None (auto-detect)
-    timeout : seconds
-    max_params : int
-        Safety guard; dense Hessian scales as O(n^2) memory/time.
-    use_double : bool
-        Temporarily cast module params to float64 for better Hessian spectra.
-    return_eigs : bool
-        If True, returns full eigenvalue tensor (on CPU).
-
-    Returns
-    -------
-    result : dict
-        {
-          'condition_number': float (inf if indefinite or singular),
-          'lambda_max': float,
-          'lambda_min_pos': float or None,
-          'num_params': int,
-          'num_pos': int,
-          'num_neg': int,
-          'num_zero': int,
-          'reached_timeout': bool,
-          'dtype_used': torch.dtype,
-        }
-        (+ 'eigenvalues' if return_eigs=True)
-    """
     t0 = time.time()
     reached_timeout = False
 
     if device is None:
         device = next(model.parameters(), torch.tensor([])).device
-        if not device.type in ("cuda", "mps"):
+        if device.type not in ("cuda", "mps"):
             device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    # Collect & validate parameter vector
-    params = [p for p in model.parameters() if p.requires_grad]
-    n = sum(p.numel() for p in params)
-    if n == 0:
+    # --- collect trainable params metadata (ORDER + SHAPES) ---
+    named = [(n, p) for (n, p) in model.named_parameters() if p.requires_grad]
+    if len(named) == 0:
         return {
             'condition_number': float('inf'),
             'lambda_max': float('nan'),
@@ -1842,8 +1918,14 @@ def estimate_condition_number_full(
             'num_neg': 0,
             'num_zero': 0,
             'reached_timeout': False,
-            'dtype_used': model.parameters().__iter__().__next__().dtype if any(True for _ in model.parameters()) else torch.float32,
+            'dtype_used': next(model.parameters(), torch.empty(())).dtype if any(True for _ in model.parameters()) else torch.float32,
         }
+
+    names = [n for (n, _) in named]
+    params = [p for (_, p) in named]
+    shapes = [p.shape for p in params]
+    numels = [p.numel() for p in params]
+    n = sum(numels)
 
     if n > max_params:
         raise RuntimeError(
@@ -1851,67 +1933,59 @@ def estimate_condition_number_full(
             "Use a smaller model/batch or increase max_params explicitly."
         )
 
-    # Save original parameter state to restore later
-    with torch.no_grad():
-        original_params = _clone_params(params)
-        original_dtypes = [p.dtype for p in params]
-
-    # Optional: promote to double for better spectra
+    # dtype/device handling
     dtype_used = torch.float64 if use_double else params[0].dtype
+    model = model.to(device=device)
     if use_double:
-        model.to(device=device, dtype=torch.float64)
-    else:
-        model.to(device=device)
+        model = model.to(dtype=torch.float64)
 
-    # Build scalar loss for the fixed batch
-    loss, loss_fn = _compute_loss(model, data_fn, loss_fn, device, dtype_used)
+    # --- FIXED BATCH (avoid calling data_fn multiple times) ---
+    x0, y0 = _prepare_batch(data_fn, device)
 
-    # Build function f(theta) that maps a flat parameter vector -> scalar loss
-    # We'll use parameters_to_vector / vector_to_parameters.
-    flat_params = parameters_to_vector(params).detach()
-    flat_params.requires_grad_(True)
+    # choose loss
+    if loss_fn is None:
+        loss_scalar = model(x0)
+        loss_fn = _auto_loss_fn(loss_scalar, y0)
 
-    def set_params_from_flat(theta):
-        # Assign flat vector back into model parameters
-        vector_to_parameters(theta, params)
+    # --- build flat initial vector (not used for values, just shape) ---
+    with torch.no_grad():
+        flat0 = parameters_to_vector(params).to(dtype_used)
 
-    # Closure that recomputes the loss for current theta
+    # unflatten helper that **creates differentiable views from theta**
+    def unflatten(theta):
+        splits = list(torch.split(theta, numels))
+        tensors = [t.view(s) for t, s in zip(splits, shapes)]
+        return {n: t for n, t in zip(names, tensors)}
+
+    # closure f(theta): NO copy_, NO vector_to_parameters
     def f(theta):
-        set_params_from_flat(theta)
-        # Recompute loss on the same batch
-        loss_val, _ = _compute_loss(model, data_fn, loss_fn, device, dtype_used)
-        return loss_val
+        # theta is the ONLY source of parameters here
+        pmap = unflatten(theta)
+        out = functional_call(model, pmap, (x0,))
+        loss = loss_fn(out, y0)
+        return loss
 
-    # Compute Hessian using autograd.functional.hessian
-    # NOTE: This can be memory/time intensive for large n
-    try:
-        from torch.autograd.functional import hessian as autograd_hessian
-    except Exception as e:
-        raise RuntimeError("torch.autograd.functional.hessian not available in this environment") from e
+    # build theta with grad
+    theta0 = flat0.detach().clone().requires_grad_(True)
 
-    # Time guard wrapper
+    # eigens via dense Hessian of f wrt theta
+    from torch.autograd.functional import hessian as autograd_hessian
+
     class _TimeoutFlag(Exception): pass
-
     def _check_timeout():
         nonlocal reached_timeout
         if time.time() - t0 > timeout:
             reached_timeout = True
             raise _TimeoutFlag()
 
-    _check_timeout()
-
-    # Important: Ensure evaluation mode (no dropout/bn randomness)
     was_training = model.training
-    model.eval()
+    model.eval()  # deterministic forward for Hessian
 
     try:
-        H = autograd_hessian(f, flat_params)
+        _check_timeout()
+        H = autograd_hessian(f, theta0)  # shape [n, n]
         _check_timeout()
     except _TimeoutFlag:
-        # Restore and exit
-        with torch.no_grad():
-            for p, q, dt in zip(params, original_params, original_dtypes):
-                p.copy_(q.to(dtype=dt))
         model.train(was_training)
         return {
             'condition_number': float('inf'),
@@ -1925,45 +1999,24 @@ def estimate_condition_number_full(
             'dtype_used': dtype_used,
         }
     finally:
-        # Put model back to its original train/eval state after we’re done with H
         model.train(was_training)
 
-    # H should be symmetric; enforce symmetry to reduce numerical noise
-    H = (H + H.transpose(0,1)) * 0.5
-
-    # Move to CPU for eigensolve (often more RAM available)
-    H_cpu = H.detach().cpu()
-
-    # Compute eigenvalues (symmetric → eigvalsh)
-    evals = torch.linalg.eigvalsh(H_cpu)  # shape: [n]
+    # symmetrize, move to CPU, eig
+    H = (H + H.transpose(0, 1)) * 0.5
+    evals = torch.linalg.eigvalsh(H.cpu())
     evals_np = evals.numpy()
 
-    # Classify eigenvalues with a tolerance
-    # (tolerance scales with max(|λ|) and dtype)
-    eps = np.finfo(np.float64).eps if evals_np.dtype == np.float64 else np.finfo(np.float32).eps
     lam_abs_max = float(np.max(np.abs(evals_np))) if evals_np.size else 0.0
-    tol = max(1e-12, 1e-10 * (1.0 + lam_abs_max))  # adaptive-ish
+    tol = max(1e-12, 1e-10 * (1.0 + lam_abs_max))
 
     num_pos = int(np.sum(evals_np >  tol))
     num_neg = int(np.sum(evals_np < -tol))
     num_zero = int(evals_np.size - num_pos - num_neg)
 
-    # Condition number definition:
-    # - If Hessian is not positive definite (any neg or ~zero eig), κ is ∞ for strict convex analysis.
-    # - Otherwise κ = λ_max / λ_min.
-    lambda_max = float(np.max(evals_np)) if evals_np.size else float('nan')
-    pos_eigs = evals_np[evals_np > tol]
+    pos_eigs = np.abs(evals_np)
+    lambda_max = float(np.max(pos_eigs)) if pos_eigs.size else float('nan')
     lambda_min_pos = float(np.min(pos_eigs)) if pos_eigs.size else None
-
-    if (num_neg > 0) or (lambda_min_pos is None):
-        kappa = float('inf')
-    else:
-        kappa = lambda_max / max(lambda_min_pos, 1e-300)
-
-    # Restore original params/dtypes
-    with torch.no_grad():
-        for p, q, dt in zip(params, original_params, original_dtypes):
-            p.copy_(q.to(dtype=dt))
+    kappa = lambda_max / max(lambda_min_pos, 1e-300)
 
     result = {
         'condition_number': float(kappa),
@@ -1977,11 +2030,9 @@ def estimate_condition_number_full(
         'dtype_used': dtype_used,
     }
     if return_eigs:
-        result['eigenvalues'] = evals_np  # full spectrum on CPU
+        result['eigenvalues'] = evals_np
     return result
 
-import torch
-import numpy as np
 
 def compute_true_minibatch_variance(model, trainloader, loss_fn=torch.nn.functional.cross_entropy, device=None):
     """
@@ -1991,7 +2042,7 @@ def compute_true_minibatch_variance(model, trainloader, loss_fn=torch.nn.functio
     """
     if device is None:
         device = next(model.parameters()).device
-    model.eval()
+    model.train()
 
     # ---- Step 1: compute full-batch gradient ----
     model.zero_grad(set_to_none=True)
@@ -2034,3 +2085,523 @@ def compute_true_minibatch_variance(model, trainloader, loss_fn=torch.nn.functio
         "num_params": full_grad_np.shape[0],
     }
     return result
+
+def estimate_condition_number_full(
+    model,
+    data_fn=None,
+    trainloader=None,   
+    num_batches=1,     
+    loss_fn=None,
+    device=None,
+    timeout=1800,
+    max_params=150_000,
+    use_double=False,
+    return_eigs=True,
+    weight_decay=1e-4,
+    cutoff=100
+):
+    """
+    Compute condition number of the Hessian averaged over multiple batches.
+    Either supply data_fn() (single batch sampler) or a trainloader.
+    """
+    results = []
+    max_eigs = []
+    eigs_all = [] if return_eigs else None
+
+    # pick data source
+    if trainloader is not None:
+        batch_iter = iter(trainloader)
+        get_batch = lambda: next(batch_iter)
+    elif data_fn is not None:
+        get_batch = data_fn
+    else:
+        raise ValueError("Must supply either data_fn or trainloader")
+
+    for b in range(num_batches):
+        try:
+            x0, y0 = get_batch()
+        except StopIteration:
+            break  # exhausted loader
+
+        # --- per-batch estimate ---
+        
+        res = _estimate_condition_number_single_batch(
+            model=model,
+            x0=x0,
+            y0=y0,
+            loss_fn=loss_fn,
+            device=device,
+            timeout=timeout,
+            max_params=max_params,
+            use_double=use_double,
+            return_eigs=return_eigs,
+            weight_decay=weight_decay,
+            cutoff=cutoff
+        )
+
+        results.append(res["condition_number"])
+        max_eigs.append(res["lambda_max"])
+        if return_eigs:
+            eigs_all.extend(res.get("eigenvalues", []))
+
+    if len(results) == 0:
+        return {"condition_number": float("nan")}
+
+    # aggregate
+    avg_kappa = float(np.mean(results))
+    avg_max = float(np.mean(max_eigs))
+    out = {
+        "condition_number": avg_kappa,
+        "lambda_max": avg_max,
+        "num_batches": len(results),
+        "per_batch": results,
+    }
+    if return_eigs:
+        out["eigenvalues"] = np.array(eigs_all)
+    return out
+
+
+def _estimate_condition_number_single_batch(
+    model,
+    x0,
+    y0,
+    loss_fn=None,
+    device=None,
+    timeout=1800,
+    max_params=150_000,
+    use_double=False,
+    return_eigs=True,
+    weight_decay=1e-4,
+    cutoff=100
+):
+    """
+    Estimate Hessian condition number for a *single fixed batch* (x0, y0).
+    """
+
+    t0 = time.time()
+    reached_timeout = False
+
+    if device is None:
+        device = next(model.parameters(), torch.tensor([])).device
+        if device.type not in ("cuda", "mps"):
+            device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    # --- collect trainable params metadata (ORDER + SHAPES) ---
+    named = [(n, p) for (n, p) in model.named_parameters() if p.requires_grad]
+    if len(named) == 0:
+        return {
+            "condition_number": float("inf"),
+            "lambda_max": float("nan"),
+            "lambda_min_pos": None,
+            "num_params": 0,
+            "num_pos": 0,
+            "num_neg": 0,
+            "num_zero": 0,
+            "reached_timeout": False,
+            "dtype_used": next(model.parameters(), torch.empty(())).dtype
+            if any(True for _ in model.parameters())
+            else torch.float32,
+        }
+
+    names = [n for (n, _) in named]
+    params = [p for (_, p) in named]
+    shapes = [p.shape for p in params]
+    numels = [p.numel() for p in params]
+    n = sum(numels)
+
+    if n > max_params:
+        raise RuntimeError(
+            f"Refusing to build a dense {n}x{n} Hessian (>{max_params} params). "
+            "Use a smaller model/batch or increase max_params explicitly."
+        )
+
+    # dtype/device handling
+    dtype_used = torch.float64 if use_double else params[0].dtype
+    model = model.to(device=device)
+    if use_double:
+        model = model.to(dtype=torch.float64)
+
+    # --- move batch to device ---
+    x0, y0 = x0.to(device), y0.to(device)
+
+    # choose loss
+    if loss_fn is None:
+        loss_scalar = model(x0)
+        loss_fn = _auto_loss_fn(loss_scalar, y0)
+
+    # --- build flat initial vector (not used for values, just shape) ---
+    with torch.no_grad():
+        flat0 = parameters_to_vector(params).to(dtype_used)
+
+    # unflatten helper that **creates differentiable views from theta**
+    def unflatten(theta):
+        splits = list(torch.split(theta, numels))
+        tensors = [t.view(s) for t, s in zip(splits, shapes)]
+        return {n: t for n, t in zip(names, tensors)}
+
+    # closure f(theta): NO copy_, NO vector_to_parameters
+    def f(theta):
+        pmap = unflatten(theta)
+        out = functional_call(model, pmap, (x0,))
+        loss = loss_fn(out, y0)
+        return loss
+
+    # build theta with grad
+    theta0 = flat0.detach().clone().requires_grad_(True)
+
+    # eigens via dense Hessian of f wrt theta
+    from torch.autograd.functional import hessian as autograd_hessian
+
+    class _TimeoutFlag(Exception):
+        pass
+
+    def _check_timeout():
+        nonlocal reached_timeout
+        if time.time() - t0 > timeout:
+            reached_timeout = True
+            raise _TimeoutFlag()
+
+    was_training = model.training
+    model.eval()  # deterministic forward for Hessian
+
+    try:
+        _check_timeout()
+        H = autograd_hessian(f, theta0)  # shape [n, n]
+        _check_timeout()
+    except _TimeoutFlag:
+        model.train(was_training)
+        return {
+            "condition_number": float("inf"),
+            "lambda_max": float("nan"),
+            "lambda_min_pos": None,
+            "num_params": n,
+            "num_pos": 0,
+            "num_neg": 0,
+            "num_zero": 0,
+            "reached_timeout": True,
+            "dtype_used": dtype_used,
+        }
+    finally:
+        model.train(was_training)
+
+    # symmetrize, move to CPU, eig
+    H = (H + H.transpose(0, 1)) * 0.5
+    evals = torch.linalg.eigvalsh(H.cpu())
+    evals_np = evals.numpy()
+
+    lam_abs_max = float(np.max(np.abs(evals_np))) if evals_np.size else 0.0
+    tol = max(1e-12, 1e-10 * (1.0 + lam_abs_max))
+
+    num_pos = int(np.sum(evals_np > tol))
+    num_neg = int(np.sum(evals_np < -tol))
+    num_zero = int(evals_np.size - num_pos - num_neg)
+
+    pos_eigs = np.abs(evals_np)
+    lambda_max = float(np.max(pos_eigs)) if pos_eigs.size else float("nan")
+  #  lambda_min_pos = float(np.min(pos_eigs)) if pos_eigs.size else None
+  #  kappa = (lambda_max + weight_decay) / (lambda_min_pos + weight_decay)
+    pos_vals = np.sort(np.abs(evals_np))
+   #cutoff_index = int(len(pos_vals) * percentile / 100.0)
+    #cutoff_index = min(max(cutoff_index, 0), len(pos_vals) - 1)
+    cutoff_index = -cutoff
+    lambda_p = float(pos_vals[cutoff_index])
+
+    kappa_eff = (lambda_max) / (lambda_p + weight_decay)
+    print("plotting eigenspectrum hist")
+    plt.figure()
+    log_bins = np.logspace(np.log10(min(pos_vals)), np.log10(max(pos_vals)), 100)
+    plt.hist(pos_vals, bins=log_bins)
+    plt.xscale('log')
+    plt.xlabel('Eigenvalues (log scale)')
+    plt.ylabel('Count')
+    plt.savefig("eigenspectrum_true.png", dpi=500)
+
+    result = {
+        "condition_number": float(kappa_eff),
+        "lambda_max": lambda_max,
+        "lambda_min_pos": lambda_p,
+        "num_params": n,
+        "num_pos": num_pos,
+        "num_neg": num_neg,
+        "num_zero": num_zero,
+        "reached_timeout": reached_timeout,
+        "dtype_used": dtype_used,
+    }
+    if return_eigs:
+        result["eigenvalues"] = evals_np
+
+    return result
+
+
+def _estimate_condition_number_single_batch_slq(
+    model,
+    x0,
+    y0,
+    loss_fn=None,
+    device=None,
+    timeout=1800,
+    use_double=False,
+    weight_decay=1e-4,
+    lanczos_steps=50,
+    cutoff=100,
+):
+    """
+    Estimate 'effective' Hessian condition number using stochastic Lanczos quadrature (SLQ).
+    - Uses HVPs instead of building the dense Hessian.
+    - Returns kappa_eff = lambda_max / (lambda_percentile + wd).
+    """
+
+    t0 = time.time()
+    reached_timeout = False
+
+    if device is None:
+        device = next(model.parameters(), torch.tensor([])).device
+        if device.type not in ("cuda", "mps"):
+            device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    # collect params
+    named = [(n, p) for (n, p) in model.named_parameters() if p.requires_grad]
+    names = [n for (n, _) in named]
+    params = [p for (_, p) in named]
+    shapes = [p.shape for p in params]
+    numels = [p.numel() for p in params]
+    n = sum(numels)
+
+    dtype_used = torch.float64 if use_double else params[0].dtype
+    model = model.to(device=device)
+    if use_double:
+        model = model.to(dtype=torch.float64)
+
+    x0, y0 = x0.to(device), y0.to(device)
+
+    # choose loss
+    if loss_fn is None:
+        loss_scalar = model(x0)
+        loss_fn = _auto_loss_fn(loss_scalar, y0)
+
+    with torch.no_grad():
+        flat0 = parameters_to_vector(params).to(dtype_used)
+
+    # unflatten helper
+    def unflatten(theta):
+        splits = list(torch.split(theta, numels))
+        tensors = [t.view(s) for t, s in zip(splits, shapes)]
+        return {n: t for n, t in zip(names, tensors)}
+
+    def closure(theta):
+        pmap = unflatten(theta)
+        out = functional_call(model, pmap, (x0,))
+        return loss_fn(out, y0)
+
+    # build theta with grad
+    theta0 = flat0.detach().clone().requires_grad_(True)
+
+    # HVP function with weight decay
+    def hvp_fn(v):
+        loss = closure(theta0)
+        grads = torch.autograd.grad(loss, theta0, create_graph=True)[0]
+        grad_v = torch.dot(grads, v)
+        Hv = torch.autograd.grad(grad_v, theta0, retain_graph=False)[0]
+        return Hv + weight_decay * v
+
+    # ---- Lanczos algorithm ----
+    def lanczos(hvp_fn, dim, m):
+        # start with random unit vector
+        q = torch.randn(dim, device=device, dtype=dtype_used)
+        q = q / q.norm()
+        Q = []
+        alpha, beta = [], []
+        prev_q = torch.zeros_like(q)
+
+        for j in range(m):
+            if time.time() - t0 > timeout:
+                break
+            z = hvp_fn(q)
+            a = torch.dot(q, z).item()
+            z = z - a * q - (beta[-1] * prev_q if j > 0 else 0)
+            b = z.norm().item()
+            alpha.append(a)
+            beta.append(b)
+            Q.append(q)
+            if b < 1e-10:
+                break
+            prev_q, q = q, z / b
+
+        T = np.diag(alpha) + np.diag(beta[:-1], 1) + np.diag(beta[:-1], -1)
+        return np.linalg.eigvalsh(T)
+
+    ritz_vals = lanczos(hvp_fn, n, lanczos_steps)
+
+    if len(ritz_vals) == 0:
+        return {
+            "condition_number": float("nan"),
+            "lambda_max": None,
+            "lambda_percentile": None,
+            "reached_timeout": reached_timeout,
+        }
+
+    lambda_max = float(np.max(ritz_vals))
+    # choose effective lower eigenvalue as percentile of positive spectrum
+    pos_vals = np.sort(np.abs(ritz_vals))
+
+   # cutoff_index = int(len(pos_vals) * percentile / 100.0)
+   # cutoff_index = min(max(cutoff_index, 0), len(pos_vals) - 1)
+    cutoff_index = -cutoff
+    lambda_p = float(pos_vals[cutoff_index])
+
+    kappa_eff = (lambda_max) / (lambda_p + weight_decay)
+
+    return {
+        "condition_number": kappa_eff,
+        "lambda_max": lambda_max,
+        "lambda_percentile": lambda_p,
+        "num_params": n,
+        "reached_timeout": reached_timeout,
+        "dtype_used": dtype_used,
+        "eigenvals": ritz_vals,
+    }
+
+def estimate_effective_condition_number(
+    model,
+    data_fn,
+    loss_fn=None,
+    device=None,
+    weight_decay=1e-4,
+    lanczos_steps=50,
+    lanczos_topk=10,
+    n_probes=20,
+    n_samples=1,
+    timeout=1800,
+    use_double=False,
+):
+    """
+    Combine Lanczos and Rayleigh methods to estimate an 'effective' Hessian condition number.
+    
+    - Numerator: mean of top-K Lanczos Ritz eigenvalues
+    - Denominator: median Rayleigh quotient eigenvalue (across random probes)
+    
+    Returns dict with all intermediate results.
+    """
+
+    start_time = time.time()
+    if device is None:
+        device = next(model.parameters(), torch.tensor([])).device
+        if device.type not in ("cuda", "mps"):
+            device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    # get batch
+    x0, y0 = data_fn()
+    x0, y0 = x0.to(device), y0.to(device)
+
+    # dtype
+    params = [p for p in model.parameters() if p.requires_grad]
+    shapes = [p.shape for p in params]
+    numels = [p.numel() for p in params]
+    n = sum(numels)
+    dtype_used = torch.float64 if use_double else params[0].dtype
+    if use_double:
+        model = model.to(dtype=torch.float64)
+    model = model.to(device)
+
+    # pick loss if not given
+    with torch.no_grad():
+        flat0 = parameters_to_vector(params).to(dtype_used)
+    def _auto_loss_fn(out, y):
+        if out.ndim > 1 and out.shape[-1] > 1:
+            return torch.nn.functional.cross_entropy
+        else:
+            return torch.nn.functional.mse_loss
+    if loss_fn is None:
+        loss_scalar = model(x0)
+        loss_fn = _auto_loss_fn(loss_scalar, y0)
+
+    # unflatten helper
+    def unflatten(theta):
+        splits = list(torch.split(theta, numels))
+        tensors = [t.view(s) for t, s in zip(splits, shapes)]
+        return {n: t for n, t in zip([n for n, _ in model.named_parameters() if _.requires_grad], tensors)}
+
+    def closure(theta):
+        pmap = unflatten(theta)
+        out = functional_call(model, pmap, (x0,))
+        return loss_fn(out, y0)
+
+    theta0 = flat0.detach().clone().requires_grad_(True)
+
+    def hvp_fn(v):
+        loss = closure(theta0)
+        grads = torch.autograd.grad(loss, theta0, create_graph=True)[0]
+        grad_v = torch.dot(grads, v)
+        Hv = torch.autograd.grad(grad_v, theta0, retain_graph=False)[0]
+        return Hv + weight_decay * v
+
+    # ---- Lanczos ----
+    def lanczos(hvp_fn, dim, m):
+        q = torch.randn(dim, device=device, dtype=dtype_used)
+        q = q / q.norm()
+        Q, alpha, beta = [], [], []
+        prev_q = torch.zeros_like(q)
+        for j in range(m):
+            if time.time() - start_time > timeout:
+                break
+            z = hvp_fn(q)
+            a = torch.dot(q, z).item()
+            z = z - a * q - (beta[-1] * prev_q if j > 0 else 0)
+            b = z.norm().item()
+            alpha.append(a)
+            beta.append(b)
+            Q.append(q)
+            if b < 1e-10:
+                break
+            prev_q, q = q, z / b
+        T = np.diag(alpha) + np.diag(beta[:-1], 1) + np.diag(beta[:-1], -1)
+        return np.linalg.eigvalsh(T)
+
+    ritz_vals = lanczos(hvp_fn, n, lanczos_steps)
+    if len(ritz_vals) == 0:
+        return {"condition_number": float("nan"), "eigenvals_lanczos": [], "eigenvals_rayleigh": []}
+
+    topk_vals = np.sort(ritz_vals)[-lanczos_topk:]
+    lanczos_mean_topk = float(np.mean(topk_vals))
+
+    # ---- Rayleigh estimates ----
+    eigenvals_rayleigh = []
+    for _ in range(n_samples):
+        if time.time() - start_time > timeout:
+            break
+        inp, target = data_fn()
+        inp, target = inp.to(device), target.to(device)
+        loss = model(inp)
+        loss = loss_fn(loss, target)
+        params = list(model.parameters())
+
+        # probe
+        for _ in range(n_probes):
+            v = [torch.randn_like(p) for p in params]
+            v_norm = sum(torch.sum(v_i**2) for v_i in v).sqrt()
+            v = [v_i / v_norm for v_i in v]
+            grads = torch.autograd.grad(loss, params, create_graph=True)
+            grad_v = sum(torch.sum(g * v_i) for g, v_i in zip(grads, v))
+            hvp = torch.autograd.grad(grad_v, params, retain_graph=True)
+            eig_est = sum(torch.sum(hv * v_i) for hv, v_i in zip(hvp, v))
+            eigenvals_rayleigh.append(eig_est.item())
+
+    eigenvals_rayleigh = np.array(eigenvals_rayleigh)
+    eigenvals_rayleigh = eigenvals_rayleigh[np.isfinite(eigenvals_rayleigh)]
+    if len(eigenvals_rayleigh) == 0:
+        return {"condition_number": float("nan"), "eigenvals_lanczos": ritz_vals, "eigenvals_rayleigh": []}
+
+    rayleigh_median = float(np.median(np.abs(eigenvals_rayleigh)))
+
+    # effective condition number
+    kappa_eff = lanczos_mean_topk / (rayleigh_median + weight_decay)
+
+    return {
+        "condition_number": kappa_eff,
+        "lanczos_mean_topk": lanczos_mean_topk,
+        "rayleigh_median": rayleigh_median,
+        "eigenvals_lanczos": ritz_vals,
+        "eigenvals_rayleigh": eigenvals_rayleigh,
+        "dtype_used": dtype_used,
+        "num_params": n,
+    }
