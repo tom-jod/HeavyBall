@@ -1366,7 +1366,7 @@ class ChainOpt(utils.StatefulOptimizer):
             self.total_steps, self.warmup_ratio, self.min_lr_ratio
         )
         # Step decay
-        #self._lr_schedule_fn = create_step_schedule_fn(self.total_steps, self.warmup_ratio, decay_points, decay_gamma)
+       # self._lr_schedule_fn = create_step_schedule_fn(self.total_steps, self.warmup_ratio, decay_points, decay_gamma)
         # Keep existing scheduler initialization for backward compatibility
         self.lr_scheduler = None
         self._scheduler_initialized = False
@@ -2096,6 +2096,8 @@ class ChainOpt(utils.StatefulOptimizer):
             
         for optimizer_key, optimizer in self._global_shampoo_optimizers.items():
             try:
+                # Gradient clipping to ensure Shampoo does not receive NaNs
+                torch.nn.utils.clip_grad_norm_(self.m.parameters(), max_norm=1.0)
                 optimizer.step()
             except Exception as e:
                 print(f"Error stepping {optimizer_key} DistributedShampoo: {e}")

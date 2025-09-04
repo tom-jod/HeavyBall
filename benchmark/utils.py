@@ -1,4 +1,5 @@
 import copy
+import csv
 import functools
 import gc
 import inspect
@@ -498,10 +499,10 @@ class Objective:
                     x, y = self.data()
                     #if i % int(self.steps // (self.group*5)) == 0:
                     cutoff = 100
-                    estimate = True
-                    effective = True
+                    estimate = False
+                    effective = False
+
                     if estimate and effective:
-                             
                         condition_number = estimate_effective_condition_number(self.m, self.data, loss_fn=self.loss_fn, weight_decay=weight_decay, lanczos_steps=200)
                         self.condition_numbers.append(condition_number['condition_number'])
                         eigs = sorted(np.abs(condition_number["eigenvals_lanczos"]))
@@ -517,30 +518,153 @@ class Objective:
                         plt.xscale('log')
                         plt.ylabel('Count')
                         plt.legend()
-                        plt.savefig(f"eigenspectrum_estimate_CIFAR10_wide.png", dpi=500)
+                        save_dir = "eigenspectrum_estimate_CIFAR10_wide"
+                        os.makedirs(save_dir, exist_ok=True)
+                        plt.savefig(f"{save_dir}/step_{i}.png", dpi=500)
+
                     elif estimate:
-                        condition_number = _estimate_condition_number_single_batch_slq(self.m, x, y, loss_fn=self.loss_fn, weight_decay=weight_decay, lanczos_steps=1000, cutoff=cutoff)
-                      #  condition_number = estimate_condition_number_hvp(self.m, self.data, n_probes=1000, n_samples=1, loss_fn=self.loss_fn, weight_decay=weight_decay)
-                        self.condition_numbers.append(condition_number['lambda_max'])
-                        #eigs = sorted(np.abs(condition_number["ritz_values"]))
-                        eigs = sorted(np.abs(condition_number["eigenvals"]))
-                        eigs = [float(ev) for ev in eigs if np.isfinite(ev)]
-                        print(eigs[-100:-1])
-                        plt.figure()
-                        log_bins = np.logspace(np.log10(min(eigs)), np.log10(max(eigs)), 100)
-                        plt.hist(eigs, bins=log_bins)
-                        plt.xscale('log')
-                        plt.xlabel('Eigenvalues (log scale)')
-                        plt.ylabel('Count')
-                        plt.savefig("eigenspectrum_estimate_MNIST_Lanczos_1000.png", dpi=500)
-                       
-                   # self.condition_numbers.append(estimate_condition_number_grid_search(self.m, self.data, loss_fn=self.loss_fn, timout=1000, weight_decay=weight_decay))
+                        condition_number = estimate_condition_lanczos_reorth(
+                            self.m, self.data, loss_fn=self.loss_fn, weight_decay=weight_decay, lanczos_steps=200
+                        )
+
+                        self.condition_numbers.append(condition_number['condition_number'])
+                        
+                        # Extract eigenvalues
+                        true_eigs = np.array(condition_number["eigenvals"])
+                        true_eigs = true_eigs[np.isfinite(true_eigs)]  # clean
+                        eigs_abs = np.abs(true_eigs)
+                        eigs_abs = eigs_abs[np.isfinite(eigs_abs)]
+
+                        # Split into pos/neg subspaces
+                        pos_eigs = true_eigs[true_eigs > 0]
+                        neg_eigs = true_eigs[true_eigs < 0]
+
+                        pos_lambda_min = np.min(pos_eigs) if len(pos_eigs) > 0 else np.nan
+                        pos_lambda_max = np.max(pos_eigs) if len(pos_eigs) > 0 else np.nan
+                        neg_lambda_min = np.min(neg_eigs) if len(neg_eigs) > 0 else np.nan
+                        neg_lambda_max = np.max(neg_eigs) if len(neg_eigs) > 0 else np.nan
+                        pos_neg_ratio = len(pos_eigs) / len(neg_eigs)
+                        # --- Save directory ---
+                        save_dir = "eigenspectrum_estimate_CIFAR10_wide"
+                        os.makedirs(save_dir, exist_ok=True)
+
+                        # --- Plot both histograms side by side ---
+                        plt.rcParams['font.size'] = 16
+                        plt.rcParams['font.family'] = 'serif'
+                        fig, axes = plt.subplots(1, 2, figsize=(12, 5))
+
+                        # Left: abs eigenvalues (log scale)
+                        if len(eigs_abs) > 0:
+                            log_bins = np.logspace(np.log10(np.min(eigs_abs)), np.log10(np.max(eigs_abs)), 100)
+                            axes[0].hist(eigs_abs, bins=log_bins, color="navy")
+                            axes[0].set_xscale("log")
+                            axes[0].set_xlabel("Absolute value of Lanczos Ritz values")
+                            axes[0].set_ylabel("Count")
+                            
+
+                        # Right: raw eigenvalues
+                        axes[1].hist(true_eigs, bins=200, color="navy")
+                        axes[1].set_xlabel("Lanczos Ritz values")
+                        axes[1].set_ylabel("Count")
+                        
+
+                        plt.tight_layout()
+                        plt.savefig(f"{save_dir}/step_{i}.png", dpi=500)
+                        plt.close(fig)
+
+                        # --- CSV file inside save_dir ---
+                        csv_file = os.path.join(save_dir, "eigenspectrum_stats.csv")
+
+                        # If file doesn't exist, write header
+                        if not os.path.exists(csv_file):
+                            with open(csv_file, mode="w", newline="") as f:
+                                writer = csv.writer(f)
+                                writer.writerow([
+                                    "iteration",
+                                    "condition_number", "condition_number_abs",
+                                    "pos_lambda_min", "pos_lambda_max",
+                                    "neg_lambda_min", "neg_lambda_max", "pos_neg_ratio"
+                                ])
+
+                        # Append row
+                        with open(csv_file, mode="a", newline="") as f:
+                            writer = csv.writer(f)
+                            writer.writerow([
+                                i,
+                                condition_number['condition_number'], condition_number['condition_number_abs'],
+                                pos_lambda_min, pos_lambda_max,
+                                neg_lambda_min, neg_lambda_max, pos_neg_ratio
+                            ])
+
                     else:
-                        condition_number = estimate_condition_number_full(self.m, self.data, num_batches=10, loss_fn=self.loss_fn, weight_decay=weight_decay, cutoff=cutoff)
-                        eigs = sorted(abs(condition_number["eigenvalues"]))
-                        eigs = [float(ev) for ev in eigs if np.isfinite(ev)]
-                        print(eigs[-100:-1])
-                        self.condition_numbers.append(condition_number["lambda_max"])
+                        # Full caculation of the eigenvalues of the Hessian
+                        condition_number = estimate_condition_number_full(self.m, self.data, num_batches=5, loss_fn=self.loss_fn, weight_decay=weight_decay, cutoff=cutoff)
+                        
+                        true_eigs = np.array(condition_number["eigenvalues"])
+                        true_eigs = true_eigs[np.isfinite(true_eigs)]  
+                        eigs_abs = np.abs(true_eigs)
+                        eigs_abs = eigs_abs[np.isfinite(eigs_abs)]
+                        print(f"length of eigs: {len(true_eigs)}")
+                        # Split into pos/neg subspaces
+                        pos_eigs = true_eigs[true_eigs > 0]
+                        neg_eigs = true_eigs[true_eigs < 0]
+
+                        pos_lambda_min = np.min(pos_eigs) if len(pos_eigs) > 0 else np.nan
+                        pos_lambda_max = np.max(pos_eigs) if len(pos_eigs) > 0 else np.nan
+                        neg_lambda_min = np.min(neg_eigs) if len(neg_eigs) > 0 else np.nan
+                        neg_lambda_max = np.max(neg_eigs) if len(neg_eigs) > 0 else np.nan
+                        pos_neg_ratio = len(pos_eigs) / len(neg_eigs)
+                        # --- Save directory ---
+                        save_dir = "eigenspectrum_true_MNIST_logreg_5_batches_64"
+                        os.makedirs(save_dir, exist_ok=True)
+
+                        # --- Plot both histograms side by side ---
+                        plt.rcParams['font.size'] = 16
+                        plt.rcParams['font.family'] = 'serif'
+                        fig, axes = plt.subplots(1, 2, figsize=(12, 5))
+
+                        # Left: abs eigenvalues (log scale)
+                        if len(eigs_abs) > 0:
+                            log_bins = np.logspace(np.log10(np.min(eigs_abs)), np.log10(np.max(eigs_abs)), 100)
+                            axes[0].hist(eigs_abs, bins=log_bins, color="navy")
+                            axes[0].set_xscale("log")
+                            axes[0].set_xlabel("Absolute value of eigenvalues")
+                            axes[0].set_ylabel("Count")
+                            
+
+                        # Right: raw eigenvalues
+                        axes[1].hist(true_eigs, bins=200, color="navy")
+                        axes[1].set_xlabel("Eigenvalues")
+                        axes[1].set_ylabel("Count")
+                        
+
+                        plt.tight_layout()
+                        plt.savefig(f"{save_dir}/step_{i}.png", dpi=500)
+                        plt.close(fig)
+
+                        # --- CSV file inside save_dir ---
+                        csv_file = os.path.join(save_dir, "eigenspectrum_stats.csv")
+
+                        # If file doesn't exist, write header
+                        if not os.path.exists(csv_file):
+                            with open(csv_file, mode="w", newline="") as f:
+                                writer = csv.writer(f)
+                                writer.writerow([
+                                    "iteration",
+                                    "condition_number", "condition_number_abs",
+                                    "pos_lambda_min", "pos_lambda_max",
+                                    "neg_lambda_min", "neg_lambda_max", "pos_neg_ratio"
+                                ])
+
+                        # Append row
+                        with open(csv_file, mode="a", newline="") as f:
+                            writer = csv.writer(f)
+                            writer.writerow([
+                                i,
+                                condition_number['condition_number'], condition_number['condition_number_abs'],
+                                pos_lambda_min, pos_lambda_max,
+                                neg_lambda_min, neg_lambda_max, pos_neg_ratio
+                            ])
                         
     
             if self.track_variance:
@@ -550,6 +674,7 @@ class Objective:
                 #self.grad_variances.append(grad_variance["gradient_variance"])
                 grad_variance = compute_true_minibatch_variance(self.m, self.train_loader, loss_fn=self.loss_fn)
                 self.grad_variances.append(grad_variance["gradient_noise_variance"])
+                print(grad_variance["gradient_norm_variance"])
             
             if hasattr(o, "train"):
                 o.train()
@@ -605,8 +730,18 @@ class Objective:
                     if self.loss_fn is not None:
                         loss = self.loss_fn(loss, gpu_tgt)  
                     
-                    loss.backward()
+                    if not torch.isfinite(loss):
+                    # Raising TrialPruned tells Optuna to stop this trial and record it as pruned.
+                    # This prevents the entire script from crashing.
+                        print("WARNING: Loss is NaN or infinite. Pruning trial.")
+                        raise optuna.exceptions.TrialPruned("Loss became non-finite.")
                     
+                    loss.backward()
+                    # Gradient check for shampoo
+                    for p in self.m.parameters():
+                        if p.grad is not None and not torch.isfinite(p.grad).all():
+                            print("WARNING: Found NaN or infinite gradients. Pruning trial.")
+                            raise optuna.exceptions.TrialPruned("Gradients became non-finite.")
                     # Clean up GPU tensors
                     del gpu_inp
                     if gpu_tgt is not None:
@@ -804,11 +939,11 @@ def trial(
 ):
     opt_name = opt
     use_fixed_hyperparams = False
-    if opt in []:
-   # if opt in ["AdamW"]:
-    #    if opt_name == ["mars-AdamW"]:
-    #        print("Using AdamW Algo params")
-    #        opt_name = "AdamW"
+   
+    if opt in ["AdamW"]:
+        if opt_name in ["mars-AdamW", "MARSAdamW"]:
+            print("Using AdamW Algo params")
+            opt_name = "AdamW"
         print("using_list")
         use_fixed_hyperparams = True
 
@@ -918,7 +1053,7 @@ def trial(
         11: False,     # use_momentum
         12: 1024,      # max_preconditioner_dim
         13: 100,       # precondition_frequency
-        14: -1,        # start_preconditioning_step
+        14: 100,       # start_preconditioning_step (was -1)
         15: 0,         # inv_root_override
         16: 1.0,       # exponent_multiplier
         17: "ADAM",    # grafting_type
@@ -1072,7 +1207,7 @@ def trial(
                 full_params = create_full_params_tuple(tuned_values, tuned_indices)
                 params_dict = create_params_dict(tuned_values, tuned_indices)
                 
-                loss = float("inf")
+                
                 obj = Objective(
                     failure_threshold,
                     model,
@@ -1110,7 +1245,7 @@ def trial(
                 }
                 print(trial_result) 
                 all_trial_results.append(trial_result)   
-                return best_test_accuracy
+                return 1-best_test_accuracy
            
         n_trials = 5
         # If trials is less than 5, only do trials many runs
@@ -1132,7 +1267,7 @@ def trial(
                 1: (1e-3, 0.5, True),    # one_minus_beta1 (log scale)
                 2: (1e-3, 0.5, True),    # one_minus_beta2 (log scale)
                 13: (10, 200, True),    # Precond. freq. (log scale)
-                5: (1e-5, 1e-0, True),   # weight_decay (log scale)
+                5: (1e-5, 1e-2, True),   # weight_decay (log scale)
             }
 
         elif opt_name == "SGD":
@@ -1140,7 +1275,7 @@ def trial(
             # Define search ranges for each parameter index
             search_ranges = {
                 0: (1e-2, 10, True),   # learning_rate (log scale)
-                1: (1e-3, 0.5, True),    # one_minus_beta1 (log scale)
+                1: (1e-3, 1, True),    # one_minus_beta1 (log scale)
                 2: (1e-3, 0.5, True),    # one_minus_beta2 (log scale)
                 3: (1e-3, 0.5, True),    # one_minus_beta3 (log scale)
                 4: (1e-3, 0.5, True),      # one_minus_shampoo_beta (log scale)
@@ -1209,7 +1344,7 @@ def trial(
             # Create full params tuple
             full_params = create_full_params_tuple(tuned_values, tuned_indices)
             
-            loss = float("inf")
+            
             try:
                 out = obj.objective(full_params)
                 
@@ -1237,7 +1372,7 @@ def trial(
                     best_test_accuracies = trial_result["test_accuracies"]
             except Stop:
                 pass
-            return best_test_accuracy
+            return 1-best_test_accuracy
         set_seed()
         study.optimize(_optuna_objective, n_trials=trials)
     
@@ -2076,7 +2211,8 @@ def compute_true_minibatch_variance(model, trainloader, loss_fn=torch.nn.functio
     # ---- Step 3: compute variance metrics ----
     var_per_param = np.mean(deviations**2, axis=0)   # E[(g_b - g_full)^2]
     grad_noise_variance = float(np.mean(var_per_param))  # average across params
-    grad_norm_variance = float(np.var([np.linalg.norm(d) for d in deviations]))
+    grad_norm_variance = float(np.mean([np.linalg.norm(d) for d in deviations]))
+    grad_noise_variance = float(np.mean(np.sum(deviations**2, axis=1)))
 
     result = {
         "gradient_noise_variance": grad_noise_variance,
@@ -2105,6 +2241,7 @@ def estimate_condition_number_full(
     Either supply data_fn() (single batch sampler) or a trainloader.
     """
     results = []
+    results_abs = []
     max_eigs = []
     eigs_all = [] if return_eigs else None
 
@@ -2140,6 +2277,7 @@ def estimate_condition_number_full(
         )
 
         results.append(res["condition_number"])
+        results_abs.append(res["condition_number_abs"])
         max_eigs.append(res["lambda_max"])
         if return_eigs:
             eigs_all.extend(res.get("eigenvalues", []))
@@ -2149,9 +2287,11 @@ def estimate_condition_number_full(
 
     # aggregate
     avg_kappa = float(np.mean(results))
+    avg_kappa_abs = float(np.mean(results_abs))
     avg_max = float(np.mean(max_eigs))
     out = {
         "condition_number": avg_kappa,
+        "condition_number_abs": avg_kappa_abs,
         "lambda_max": avg_max,
         "num_batches": len(results),
         "per_batch": results,
@@ -2169,7 +2309,7 @@ def _estimate_condition_number_single_batch(
     device=None,
     timeout=1800,
     max_params=150_000,
-    use_double=False,
+    use_double=True,
     return_eigs=True,
     weight_decay=1e-4,
     cutoff=100
@@ -2296,30 +2436,27 @@ def _estimate_condition_number_single_batch(
     num_neg = int(np.sum(evals_np < -tol))
     num_zero = int(evals_np.size - num_pos - num_neg)
 
-    pos_eigs = np.abs(evals_np)
-    lambda_max = float(np.max(pos_eigs)) if pos_eigs.size else float("nan")
-  #  lambda_min_pos = float(np.min(pos_eigs)) if pos_eigs.size else None
-  #  kappa = (lambda_max + weight_decay) / (lambda_min_pos + weight_decay)
-    pos_vals = np.sort(np.abs(evals_np))
-   #cutoff_index = int(len(pos_vals) * percentile / 100.0)
-    #cutoff_index = min(max(cutoff_index, 0), len(pos_vals) - 1)
-    cutoff_index = -cutoff
-    lambda_p = float(pos_vals[cutoff_index])
 
-    kappa_eff = (lambda_max) / (lambda_p + weight_decay)
-    print("plotting eigenspectrum hist")
-    plt.figure()
-    log_bins = np.logspace(np.log10(min(pos_vals)), np.log10(max(pos_vals)), 100)
-    plt.hist(pos_vals, bins=log_bins)
-    plt.xscale('log')
-    plt.xlabel('Eigenvalues (log scale)')
-    plt.ylabel('Count')
-    plt.savefig("eigenspectrum_true.png", dpi=500)
+    # robust top-end estimate and requested lambda_min definition
+    evals_pos = evals[evals > 0]
+    evals_sorted = np.sort(evals_pos)
+    
+    lambda_max = float(np.max(evals_sorted)) 
+    lambda_min = float(np.median(evals_sorted))  # as requested
+    
+    kappa_pos_subspace = lambda_max / (lambda_min + weight_decay)
+
+    abs_evals_sorted = np.sort(np.abs(evals))
+    lambda_max = float(np.max(abs_evals_sorted))
+    lambda_min = float(np.median(abs_evals_sorted))  # as requested
+    
+    kappa_abs = lambda_max / (lambda_min + weight_decay)
 
     result = {
-        "condition_number": float(kappa_eff),
+        "condition_number": kappa_pos_subspace,
+        "condition_number_abs": kappa_abs,
         "lambda_max": lambda_max,
-        "lambda_min_pos": lambda_p,
+        "lambda_min_pos": lambda_min,
         "num_params": n,
         "num_pos": num_pos,
         "num_neg": num_neg,
@@ -2604,4 +2741,220 @@ def estimate_effective_condition_number(
         "eigenvals_rayleigh": eigenvals_rayleigh,
         "dtype_used": dtype_used,
         "num_params": n,
+    }
+
+import time
+import numpy as np
+import torch
+from torch.nn.utils import parameters_to_vector
+from torch.func import functional_call
+
+@torch.no_grad()
+def _flatten_params(model):
+    params = [p for p in model.parameters() if p.requires_grad]
+    return parameters_to_vector(params)
+
+def estimate_condition_lanczos_reorth(
+    model,
+    data_fn,
+    loss_fn=None,
+    device=None,
+    weight_decay=1e-4,
+    lanczos_steps=200,     # you mentioned using ~200 vectors
+    n_probes=8,            # multiple random starts improve the bulk estimate
+    topk_for_lambda_max=10,
+    tol_breakdown=1e-10,
+    use_double=False,
+    timeout=1800,
+    seed=None,
+):
+    """
+    Lanczos with FULL reorthogonalization + multiple probes (no Rayleigh).
+
+    - For each probe, run m-step Lanczos with full reorthogonalization.
+    - Collect all Ritz eigenvalues from the tridiagonal(s).
+    - lambda_max := mean of top-K pooled Ritz eigenvalues (configurable).
+    - lambda_min := median of pooled Ritz eigenvalues (as requested).
+    - kappa := lambda_max / (lambda_min + weight_decay)
+
+    Returns:
+      dict with kappa, lambda_max, lambda_min, pooled Ritz values, per-probe Ritz, etc.
+    """
+    start = time.time()
+    if device is None:
+        device = next(model.parameters(), torch.tensor([])).device
+        if device.type not in ("cuda", "mps"):
+            device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    # one batch (you can change to multiple if desired)
+    x0, y0 = data_fn()
+    x0, y0 = x0.to(device), y0.to(device)
+
+    # dtype
+    params = [p for p in model.parameters() if p.requires_grad]
+    shapes = [p.shape for p in params]
+    numels = [p.numel() for p in params]
+    n = sum(numels)
+    dtype_used = torch.float64 if use_double else params[0].dtype
+    if use_double:
+        model = model.to(dtype=torch.float64)
+    model = model.to(device)
+
+    # auto-select loss if not provided
+    def _auto_loss_fn(out, y):
+        if out.ndim > 1 and out.shape[-1] > 1:
+            return torch.nn.functional.cross_entropy
+        else:
+            return torch.nn.functional.mse_loss
+    if loss_fn is None:
+        with torch.no_grad():
+            trial_out = model(x0)
+        loss_fn = _auto_loss_fn(trial_out, y0)
+
+    # helpers to (un)flatten
+    with torch.no_grad():
+        theta0 = parameters_to_vector(params).to(device=device, dtype=dtype_used)
+    theta0 = theta0.detach().clone().requires_grad_(True)
+
+    names = [n for n, p in model.named_parameters() if p.requires_grad]
+    def unflatten(theta):
+        splits = list(torch.split(theta, numels))
+        tensors = [t.view(s) for t, s in zip(splits, shapes)]
+        return {name: t for name, t in zip(names, tensors)}
+
+    # Hessian-vector product (adds L2 weight decay on the fly)
+    def hvp_fn(v):
+        loss = loss_fn(functional_call(model, unflatten(theta0), (x0,)), y0)
+        grads = torch.autograd.grad(loss, theta0, create_graph=True)[0]
+        grad_v = torch.dot(grads, v)
+        Hv = torch.autograd.grad(grad_v, theta0, retain_graph=False)[0]
+        return Hv + weight_decay * v
+
+    # ---- FULL reorthogonalized Lanczos (single probe) ----
+    def lanczos_full_reorth(hvp, dim, m, q0=None):
+        """
+        Returns: eigvals(T_m), and (alpha, beta) actually used (length k, k-1)
+        """
+        if q0 is None:
+            q = torch.randn(dim, device=device, dtype=dtype_used)
+        else:
+            q = q0.to(device=device, dtype=dtype_used)
+        q = q / (q.norm() + 1e-32)
+
+        Q = []                     # list of orthonormal basis vectors (len k)
+        alpha, beta = [], []
+
+        prev_time = time.time()
+        for j in range(m):
+            if time.time() - start > timeout:
+                break
+
+            # z = H q_j
+            z = hvp(q)
+
+            # alpha_j = q_j^T z
+            a = torch.dot(q, z).item()
+            alpha.append(a)
+
+            # z <- z - alpha_j q_j - sum_{i=0}^{j-1} (q_i^T z) q_i
+            #   (full reorthogonalization against ALL previous Q, including current q)
+            # First remove the current component
+            z = z - a * q
+            # Now remove components on all previous basis vectors
+            if Q:
+                # single-pass full reorthogonalization
+                # (optionally, you can do a second pass for "double reorth")
+                coeffs = torch.stack([torch.dot(z, qi) for qi in Q])
+                # z <- z - sum_i coeff_i * q_i
+                for ci, qi in zip(coeffs, Q):
+                    z = z - ci * qi
+
+            b = z.norm().item()
+            beta.append(b)
+
+            # save current q
+            Q.append(q)
+
+            # breakdown / happy convergence
+            if b < tol_breakdown or j == m - 1:
+                break
+
+            # next q
+            q = (z / (b + 1e-32))
+
+        k = len(alpha)
+        if k == 0:
+            return np.array([]), alpha, beta
+
+        # Build the used tridiagonal (size k x k)
+        T = np.diag(alpha)
+        if k >= 2:
+            off = np.array(beta[:k-1], dtype=np.float64)
+            T = T + np.diag(off, 1) + np.diag(off, -1)
+
+        # NOTE: T is symmetric by construction
+        ritz = np.linalg.eigvalsh(T)
+        return ritz, alpha, beta
+
+    # ---- multiple probes ----
+    if seed is not None:
+        torch.manual_seed(seed)
+        np.random.seed(seed)
+
+    pooled_ritz = []
+    ritz_by_probe = []
+
+    for p in range(n_probes):
+        if time.time() - start > timeout:
+            break
+        q0 = torch.randn(n, device=device, dtype=dtype_used)
+        q0 = q0 / (q0.norm() + 1e-32)
+        ritz, _, _ = lanczos_full_reorth(hvp_fn, n, lanczos_steps, q0=q0)
+        if ritz.size > 0:
+            pooled_ritz.append(ritz)
+            ritz_by_probe.append(ritz)
+
+    if len(pooled_ritz) == 0:
+        return {
+            "kappa": float("nan"),
+            "lambda_max": float("nan"),
+            "lambda_min": float("nan"),
+            "ritz_all": np.array([]),
+            "ritz_by_probe": [],
+            "dtype_used": dtype_used,
+            "num_params": n,
+        }
+
+    ritz_all = np.concatenate(pooled_ritz, axis=0)
+
+    # robust top-end estimate and requested lambda_min definition
+    ritz_pos = ritz_all[ritz_all > 0]
+    ritz_sorted = np.sort(ritz_pos)
+    k_top = min(topk_for_lambda_max, len(ritz_sorted))
+    lambda_max = float(np.mean(ritz_sorted[-k_top:])) if k_top > 0 else float("nan")
+    lambda_min = float(np.median(ritz_sorted))  # as requested
+    
+    kappa_pos_subspace = lambda_max / (lambda_min + weight_decay)
+
+    ritz_sorted = np.sort(np.abs(ritz_all))
+    k_top = min(topk_for_lambda_max, len(ritz_sorted))
+    lambda_max = float(np.mean(ritz_sorted[-k_top:])) if k_top > 0 else float("nan")
+    lambda_min = float(np.median(ritz_sorted))  # as requested
+    
+    kappa_abs = lambda_max / (lambda_min + weight_decay)
+
+    return {
+        "condition_number": kappa_pos_subspace,
+        "condition_number_abs": kappa_abs,
+        "lambda_max": lambda_max,
+        "lambda_min": lambda_min,
+        "eigenvals": ritz_all,           # pooled Ritz eigenvalues over all probes
+        "ritz_by_probe": ritz_by_probe, # list of arrays per probe
+        "dtype_used": dtype_used,
+        "num_params": n,
+        "lanczos_steps": lanczos_steps,
+        "n_probes": n_probes,
+        "topk_for_lambda_max": topk_for_lambda_max,
+        "weight_decay": weight_decay,
+       
     }

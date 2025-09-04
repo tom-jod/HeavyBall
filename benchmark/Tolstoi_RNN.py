@@ -144,7 +144,7 @@ def main(
     test_loader: bool = None,
     track_variance: bool = False,
     runtime_limit: int = 3600 * 24,
-    step_hint: int = 123000
+    step_hint: int = 27000
 ):  
     dtype = [getattr(torch, d) for d in dtype]
     
@@ -176,7 +176,7 @@ def main(
         num_layers=2, 
         seq_length=seq_length
     ).cuda()
-    print(len(train_dataset))
+   
     # Create data loaders
     train_loader = DataLoader(
         train_dataset,
@@ -193,8 +193,6 @@ def main(
         num_workers=0,
         pin_memory=True
     )
-    print(len(train_dataset))
-    print(len(train_dataset))
     # Create data iterator
     data_iter = iter(train_loader)
     
@@ -220,8 +218,6 @@ def main(
     
     test_target = 1 - 0.6056 # 1 - target_test_accuracy as loss_win_condition checks if we are below a threshold
 
-    
-    test_target = 1 - 0.6056 # 1 - target_test_accuracy as loss_win_condition checks if we are below a threshold
 
     trial(
         model,
@@ -242,6 +238,7 @@ def main(
         trials=trials,
         estimate_condition_number=estimate_condition_number,
         test_loader=test_loader,
+        train_loader=train_loader,
         track_variance=track_variance,
         runtime_limit=runtime_limit,
         step_hint=step_hint

@@ -240,7 +240,7 @@ def additional_deduplication(experiments_data_dict):
     return experiments_data_dict
 
 def main():
-    log_file_path = "comparison_results/run_ExternalDistributedShampoo_42_1756385978313.log"
+    log_file_path = "comparison_results/run_AdamW_42_1756398908138.log"
     
     try:
         # First, debug the log structure

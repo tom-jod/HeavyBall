@@ -1638,6 +1638,7 @@ class StatefulOptimizer(torch.optim.Optimizer):
                         grads = [p.grad for p in param_tensors]
                         
                         if param_tensors:
+                            torch.nn.utils.clip_grad_norm_(param_tensors, max_norm=self.clip_norm)
                             self._use_external_optimizer(group, external_optimizer_type, param_tensors, grads, closure)
                 else:
                     # Use your existing chain-based approach

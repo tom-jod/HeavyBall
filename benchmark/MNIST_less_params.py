@@ -19,24 +19,52 @@ app = typer.Typer()
 
 torch._dynamo.config.disable = True
 
-class Model(nn.Module):
+class Model3Layer(nn.Module):
+    """Baseline 3-layer MLP."""
     def __init__(self, hidden_size: int = 128):
         super().__init__()
         self.flatten = nn.Flatten()
         self.fc1 = nn.Linear(28 * 28, hidden_size)
-        #self.dropout1 = nn.Dropout(0.25)
         self.fc2 = nn.Linear(hidden_size, hidden_size)
-        #self.dropout2 = nn.Dropout(0.5)
         self.fc3 = nn.Linear(hidden_size, 10)
-    
+
     def forward(self, x):
         x = self.flatten(x)
         x = F.relu(self.fc1(x))
-        #x = self.dropout1(x)
         x = F.relu(self.fc2(x))
-        #x = self.dropout2(x)
         x = self.fc3(x)
         return F.log_softmax(x, dim=1)
+
+
+class ModelLogReg(nn.Module):
+    """Much lower condition number: single linear classifier."""
+    def __init__(self):
+        super().__init__()
+        self.flatten = nn.Flatten()
+        self.fc = nn.Linear(28 * 28, 10)
+
+    def forward(self, x):
+        x = self.flatten(x)
+        x = self.fc(x)
+        return F.log_softmax(x, dim=1)
+
+
+class ModelDeepSigmoid(nn.Module):
+    """Much higher condition number: deep narrow sigmoid MLP."""
+    def __init__(self, hidden_size: int = 16, depth: int = 6):
+        super().__init__()
+        self.flatten = nn.Flatten()
+        layers = [nn.Linear(28 * 28, hidden_size), nn.Sigmoid()]
+        for _ in range(depth - 2):
+            layers += [nn.Linear(hidden_size, hidden_size), nn.Sigmoid()]
+        layers += [nn.Linear(hidden_size, 10)]
+        self.net = nn.Sequential(*layers)
+
+    def forward(self, x):
+        x = self.flatten(x)
+        x = self.net(x)
+        return F.log_softmax(x, dim=1)
+
 
 def set_deterministic_weights(model, seed=42):
     """Initialize model with deterministic weights using a fixed seed"""
@@ -57,24 +85,32 @@ def set_deterministic_weights(model, seed=42):
 def main(
     method: List[str] = typer.Option(["qr"], help="Eigenvector method to use (for SOAP)"),
     dtype: List[str] = typer.Option(["float32"], help="Data type to use"),
-    hidden_size: int = 128,
+    hidden_size: int = 16,
     batch: int = 128,
     steps: int = 0,
     weight_decay: float = 0,
     opt: List[str] = typer.Option(["ForeachSOAP"], help="Optimizers to use"),
     win_condition_multiplier: float = 1.0,
     trials: int = 10,
-    estimate_condition_number: bool = False,
+    estimate_condition_number: bool = True,
     test_loader: bool = None,
     track_variance: bool = False,
     runtime_limit: int = 3600 * 24,
-    step_hint: int = 317000
+    step_hint: int = 317000,
+    model_type: str = "logreg" # "Choose: mlp | logreg | deepsigmoid")
 ):
-    
     dtype = [getattr(torch, d) for d in dtype]
+
+    # Pick model
+    if model_type == "mlp":
+        model = Model3Layer(hidden_size).cuda()
+    elif model_type == "logreg":
+        model = ModelLogReg().cuda()
+    elif model_type == "deepsigmoid":
+        model = ModelDeepSigmoid(hidden_size=hidden_size).cuda()
+    else:
+        raise ValueError(f"Unknown model_type: {model_type}")
     
-    # Usage in your script:
-    model = Model(hidden_size).cuda()
     # Load MNIST data
     transform = transforms.Compose([
         transforms.ToTensor(),

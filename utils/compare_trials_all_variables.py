@@ -104,7 +104,7 @@ def plot_parameter_comparison(experiments_data_dict, output_prefix="Compare_targ
                    color=colors[i], alpha=0.8, linewidth=1.5)
         
         # Customize subplot
-        ax.set_ylim([0.0, 1])
+        ax.set_ylim([0.5, 0.96])
         ax.set_xlabel('Steps (x1000)')
         ax.set_ylabel('Test Accuracy')
         #ax.set_title(f'Test Accuracy vs {param["name"]}', fontsize=15)
