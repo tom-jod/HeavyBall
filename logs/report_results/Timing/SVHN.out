@@ -1,0 +1,22 @@
+/var/spool/slurmd/job21143/slurm_script: line 15: cd: HeavyBall: No such file or directory
+Current directory /home/tomjodrell/HeavyBall
+CUDA_VISIBLE_DEVICES 1
+/home/tomjodrell/HeavyBall/benchmark/benchmark_runner.py:289: UserWarning: No artists with labels found to put in legend.  Note that artists whose label start with an underscore are ignored when legend() is called with no argument.
+  plt.legend()
+Running comparison for SVHN
+Optimizers: AdamW
+Runs per optimizer: 1
+Steps per run: 27000
+Optuna trials per run: 1
+
+=== Running AdamW ===
+Run 1/1
+running AdamW
+Running: python -m benchmark.SVHN --opt AdamW --steps 27000 --trials 1 --runtime-limit 4200 --step-hint 27000
+{'runtime': 744.0185821056366, 'attempts': 1, 'best_loss': 0.7196527350952674, 'loss_trajectory': [2.311910629272461, 2.263047695159912, 2.252614736557007, 2.201291561126709, 2.2960846424102783, 2.240548610687256, 2.1639606952667236, 2.0721240043640137, 2.055368185043335, 2.025836944580078, 1.9139147996902466, 1.852963924407959, 1.538100004196167, 1.293860673904419, 0.9129172563552856, 0.898574948310852, 0.9603152275085449, 0.8240863680839539, 1.0966689586639404, 0.9865972399711609, 0.7988876700401306, 0.7741622924804688, 0.7845324277877808, 0.8472192883491516, 0.8701351284980774, 0.6241286993026733, 0.7739445567131042], 'test_accuracies': [0.09691917639827904, 0.1958743085433313, 0.1958743085433313, 0.1958743085433313, 0.1958743085433313, 0.1958743085433313, 0.1958743085433313, 0.3011677934849416, 0.31438229870928086, 0.33892901044867857, 0.3540642286416718, 0.4037722802704364, 0.5059542102028273, 0.5623079287031346, 0.646319913952059, 0.6503918254456054, 0.6838506453595574, 0.6911493546404426, 0.6971035648432699, 0.7024431468961279, 0.7087814996926859, 0.7145820528580209, 0.7141210817455439, 0.7156960663798402, 0.7160417947141979, 0.7161186232329441, 0.7196527350952674], 'grad_variances': [], 'config_str': '', 'mean_cond': 0.0, 'std_err_cond': None, 'memory_usage': None, 'steps': 27000, 'optimizer': 'AdamW', 'seed': 42, 'trials': 1, 'log_file': 'comparison_results/run_AdamW_42_1756308972858.log', 'success': True}
+  ✓ Success - Loss: 0.7196527350952674
+
+=== Aggregating Results ===
+
+Results saved to: comparison_results
+Plots: comparison_results/SVHN_*.png

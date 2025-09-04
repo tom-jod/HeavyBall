@@ -1,0 +1,22 @@
+/var/spool/slurmd/job21265/slurm_script: line 15: cd: HeavyBall: No such file or directory
+Current directory /home/tomjodrell/HeavyBall
+CUDA_VISIBLE_DEVICES 0
+/home/tomjodrell/HeavyBall/benchmark/benchmark_runner.py:289: UserWarning: No artists with labels found to put in legend.  Note that artists whose label start with an underscore are ignored when legend() is called with no argument.
+  plt.legend()
+Running comparison for MNIST
+Optimizers: AdamW
+Runs per optimizer: 1
+Steps per run: 3000
+Optuna trials per run: 1
+
+=== Running AdamW ===
+Run 1/1
+running AdamW
+Running: python -m benchmark.MNIST --opt AdamW --steps 3000 --trials 1 --runtime-limit 99717 --step-hint 3000
+{'runtime': 87.64479422569275, 'attempts': 1, 'best_loss': 0.9712, 'loss_trajectory': [2.3105032444000244, 0.18272089958190918, 0.11155574023723602], 'test_accuracies': [0.0765, 0.957, 0.9712], 'grad_variances': [], 'config_str': '', 'mean_cond': 100.45552523630072, 'std_err_cond': None, 'memory_usage': None, 'steps': 3000, 'optimizer': 'AdamW', 'seed': 42, 'trials': 1, 'log_file': 'comparison_results/run_AdamW_42_1756476322839.log', 'success': True}
+  ✓ Success - Loss: 0.9712
+
+=== Aggregating Results ===
+
+Results saved to: comparison_results
+Plots: comparison_results/MNIST_*.png

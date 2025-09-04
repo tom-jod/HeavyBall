@@ -1,0 +1,22 @@
+/var/spool/slurmd/job21144/slurm_script: line 15: cd: HeavyBall: No such file or directory
+Current directory /home/tomjodrell/HeavyBall
+CUDA_VISIBLE_DEVICES 1
+/home/tomjodrell/HeavyBall/benchmark/benchmark_runner.py:289: UserWarning: No artists with labels found to put in legend.  Note that artists whose label start with an underscore are ignored when legend() is called with no argument.
+  plt.legend()
+Running comparison for MNIST
+Optimizers: AdamW
+Runs per optimizer: 1
+Steps per run: 27000
+Optuna trials per run: 1
+
+=== Running AdamW ===
+Run 1/1
+running AdamW
+Running: python -m benchmark.MNIST --opt AdamW --steps 27000 --trials 1 --runtime-limit 4200 --step-hint 27000
+{'runtime': 471.68590450286865, 'attempts': 1, 'best_loss': 0.9793, 'loss_trajectory': [2.315033197402954, 0.6011788249015808, 0.22680608928203583, 0.057887982577085495, 0.1389697790145874, 0.11070383340120316, 0.19838304817676544, 0.04051947593688965, 0.10569153726100922, 0.06236139312386513, 0.047230660915374756, 0.03959815204143524, 0.02573469467461109, 0.028606731444597244, 0.0096919359639287, 0.04358063265681267, 0.010653086006641388, 0.001997619401663542, 0.027550334110856056, 0.01843808963894844, 0.019460458308458328, 0.01413048431277275, 0.012003552168607712, 0.03984752297401428, 0.01902781054377556, 0.03004130721092224, 0.010532395914196968], 'test_accuracies': [0.0848, 0.9166, 0.9382, 0.9524, 0.9606, 0.9662, 0.9691, 0.9715, 0.9736, 0.9721, 0.9766, 0.9769, 0.977, 0.9772, 0.9784, 0.9786, 0.9781, 0.9784, 0.9789, 0.979, 0.9787, 0.9789, 0.9793, 0.9791, 0.979, 0.9791, 0.9792], 'grad_variances': [], 'config_str': '', 'mean_cond': 22760.001276266932, 'std_err_cond': None, 'memory_usage': None, 'steps': 27000, 'optimizer': 'AdamW', 'seed': 42, 'trials': 1, 'log_file': 'comparison_results/run_AdamW_42_1756310134863.log', 'success': True}
+  ✓ Success - Loss: 0.9793
+
+=== Aggregating Results ===
+
+Results saved to: comparison_results
+Plots: comparison_results/MNIST_*.png

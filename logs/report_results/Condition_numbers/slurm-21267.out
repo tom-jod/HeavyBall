@@ -1,0 +1,22 @@
+/var/spool/slurmd/job21267/slurm_script: line 15: cd: HeavyBall: No such file or directory
+Current directory /home/tomjodrell/HeavyBall
+CUDA_VISIBLE_DEVICES 0
+/home/tomjodrell/HeavyBall/benchmark/benchmark_runner.py:289: UserWarning: No artists with labels found to put in legend.  Note that artists whose label start with an underscore are ignored when legend() is called with no argument.
+  plt.legend()
+Running comparison for Tolstoi_RNN
+Optimizers: AdamW
+Runs per optimizer: 1
+Steps per run: 3000
+Optuna trials per run: 1
+
+=== Running AdamW ===
+Run 1/1
+running AdamW
+Running: python -m benchmark.Tolstoi_RNN --opt AdamW --steps 3000 --trials 1 --runtime-limit 99717 --step-hint 3000
+{'runtime': 811.5252964496613, 'attempts': 1, 'best_loss': 0.39215429759518106, 'loss_trajectory': [4.718555450439453, 2.356461524963379, 2.2127525806427], 'test_accuracies': [0.013366095802334482, 0.3458776303191242, 0.39215429759518106], 'grad_variances': [], 'config_str': '', 'mean_cond': 185.3228661246677, 'std_err_cond': None, 'memory_usage': None, 'steps': 3000, 'optimizer': 'AdamW', 'seed': 42, 'trials': 1, 'log_file': 'comparison_results/run_AdamW_42_1756476801868.log', 'success': True}
+  ✓ Success - Loss: 0.39215429759518106
+
+=== Aggregating Results ===
+
+Results saved to: comparison_results
+Plots: comparison_results/Tolstoi_RNN_*.png

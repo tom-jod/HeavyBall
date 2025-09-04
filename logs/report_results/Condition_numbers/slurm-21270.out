@@ -1,0 +1,22 @@
+/var/spool/slurmd/job21270/slurm_script: line 15: cd: HeavyBall: No such file or directory
+Current directory /home/tomjodrell/HeavyBall
+CUDA_VISIBLE_DEVICES 0
+/home/tomjodrell/HeavyBall/benchmark/benchmark_runner.py:289: UserWarning: No artists with labels found to put in legend.  Note that artists whose label start with an underscore are ignored when legend() is called with no argument.
+  plt.legend()
+Running comparison for SVHN
+Optimizers: AdamW
+Runs per optimizer: 1
+Steps per run: 3000
+Optuna trials per run: 1
+
+=== Running AdamW ===
+Run 1/1
+running AdamW
+Running: python -m benchmark.SVHN --opt AdamW --steps 3000 --trials 1 --runtime-limit 99717 --step-hint 3000
+{'runtime': 3091.494657754898, 'attempts': 1, 'best_loss': 0.1958743085433313, 'loss_trajectory': [2.298832416534424, 2.2590794563293457, 2.2517430782318115], 'test_accuracies': [0.1958743085433313, 0.1958743085433313, 0.1958743085433313], 'grad_variances': [], 'config_str': '', 'mean_cond': 630.58543023534, 'std_err_cond': None, 'memory_usage': None, 'steps': 3000, 'optimizer': 'AdamW', 'seed': 42, 'trials': 1, 'log_file': 'comparison_results/run_AdamW_42_1756477734333.log', 'success': True}
+  ✓ Success - Loss: 0.1958743085433313
+
+=== Aggregating Results ===
+
+Results saved to: comparison_results
+Plots: comparison_results/SVHN_*.png

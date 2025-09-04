@@ -1,0 +1,22 @@
+/var/spool/slurmd/job21362/slurm_script: line 15: cd: HeavyBall: No such file or directory
+Current directory /home/tomjodrell/HeavyBall
+CUDA_VISIBLE_DEVICES 1
+/home/tomjodrell/HeavyBall/benchmark/benchmark_runner.py:289: UserWarning: No artists with labels found to put in legend.  Note that artists whose label start with an underscore are ignored when legend() is called with no argument.
+  plt.legend()
+Running comparison for CIFAR100
+Optimizers: ExternalDistributedShampoo
+Runs per optimizer: 1
+Steps per run: 0
+Optuna trials per run: 20
+
+=== Running ExternalDistributedShampoo ===
+Run 1/1
+running ExternalDistributedShampoo
+Running: python -m benchmark.CIFAR100 --opt ExternalDistributedShampoo --steps 0 --trials 20 --runtime-limit 7586 --step-hint 78000
+{'runtime': 152837.62836050987, 'attempts': 1, 'best_loss': 0.7124, 'loss_trajectory': [4.676509857177734, 1.9765408039093018, 1.6250126361846924, 1.2257391214370728, 1.2265453338623047, 0.6706132292747498, 0.7813546061515808, 0.6606722474098206, 0.44411131739616394, 0.3860541880130768, 0.469961553812027, 0.3934149146080017, 0.1868053823709488, 0.3245278298854828, 0.17349863052368164, 0.27260181307792664, 0.26221224665641785, 0.2222888320684433, 0.3094533085823059, 0.11121377348899841, 0.1459805965423584, 0.16451036930084229, 0.0950571671128273, 0.25941506028175354, 0.11973270773887634, 0.14992724359035492, 0.09250558912754059, 0.14559441804885864, 0.10991733521223068, 0.09577935189008713, 0.11799290776252747, 0.14112576842308044, 0.096490278840065, 0.09639635682106018, 0.11677924543619156, 0.09235087782144547, 0.1060216873884201, 0.10181677341461182, 0.07692951709032059, 0.06903993338346481, 0.09390092641115189, 0.03970273956656456, 0.03752699866890907, 0.09218727052211761, 0.07374715805053711, 0.0500379242002964, 0.04431433603167534, 0.06188575178384781, 0.036685168743133545], 'test_accuracies': [0.01, 0.4622, 0.5721, 0.6064, 0.6357, 0.6581, 0.671, 0.6805, 0.6824, 0.6955, 0.6987, 0.699, 0.6955, 0.6999, 0.6958, 0.6939, 0.6979, 0.7034, 0.7039, 0.7022, 0.7107, 0.7036, 0.7023, 0.701, 0.7104, 0.7073, 0.7091, 0.7076, 0.7097, 0.7101, 0.7124, 0.7094, 0.7042, 0.7064, 0.7077, 0.7054, 0.7012, 0.702, 0.7104, 0.7081, 0.7081, 0.7099, 0.7034, 0.7113, 0.7101, 0.7077, 0.7111, 0.7073, 0.7063], 'grad_variances': [], 'config_str': '', 'mean_cond': 0.0, 'std_err_cond': None, 'memory_usage': None, 'steps': 0, 'optimizer': 'ExternalDistributedShampoo', 'seed': 42, 'trials': 20, 'log_file': 'comparison_results/run_ExternalDistributedShampoo_42_1756805800775.log', 'success': True}
+  ✓ Success - Loss: 0.7124
+
+=== Aggregating Results ===
+
+Results saved to: comparison_results
+Plots: comparison_results/CIFAR100_*.png
