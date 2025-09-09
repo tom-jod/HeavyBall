@@ -3,7 +3,6 @@ from typing import List
 
 import requests
 import torch
-import torch._dynamo
 import torch.backends.opt_einsum
 import torch.nn as nn
 import typer
@@ -17,8 +16,6 @@ app = typer.Typer(pretty_exceptions_enable=False)
 set_torch()
 
 app = typer.Typer()
-torch._dynamo.config.suppress_errors = True
-torch._dynamo.config.disable = True
 
 
 class TolstoiDataset(Dataset):
