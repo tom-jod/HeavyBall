@@ -7,17 +7,15 @@ import torch.nn as nn
 import typer
 from torch.nn import functional as F
 from torchvision import datasets, transforms
+import torch._dynamo
 
 from benchmark.utils import loss_win_condition, trial
 from heavyball.utils import set_torch
 
 app = typer.Typer(pretty_exceptions_enable=False)
 set_torch()
-import torch._dynamo
-torch._dynamo.config.suppress_errors = True
-app = typer.Typer()
 
-torch._dynamo.config.disable = True
+app = typer.Typer()
 
 class Model(nn.Module):
     def __init__(self, hidden_size: int = 128):
@@ -143,4 +141,3 @@ def main(
 
 if __name__ == "__main__":
     app()
-
