@@ -332,14 +332,13 @@ class Objective:
         validator = self.validator.new()
 
         for i in range(self.steps // self.group):
-
             if hasattr(o, "train"):
                 o.train()
 
-            if not hasattr(self, 'test_accuracies'):
+            if not hasattr(self, "test_accuracies"):
                 self.test_accuracies = []
 
-            if self.test_loader != None:
+            if self.test_loader is not None:
                 test_accuracy = evaluate_test_accuracy(self.m, self.test_loader)
                 self.test_accuracies.append(test_accuracy)
 
@@ -591,22 +590,22 @@ def trial(
     if return_best:
         return obj.get_best()
 
-   
+
 def evaluate_test_accuracy(model, test_loader):
     # Save the current training state
     was_training = model.training
-    
+
     model.eval()
     correct = 0
     total = 0
-    
+
     with torch.no_grad():
         for data, target in test_loader:
             if torch.cuda.is_available():
                 data, target = data.cuda(), target.cuda()
-            
+
             output = model(data)
-            
+
             # Handle different output shapes
             if output.dim() > 2:  # Sequence modeling: [batch, seq_len, vocab_size]
                 pred = output.argmax(dim=-1)  # [batch, seq_len]
@@ -618,8 +617,7 @@ def evaluate_test_accuracy(model, test_loader):
                 pred = output.argmax(dim=1, keepdim=True)
                 correct += pred.eq(target.view_as(pred)).sum().item()
                 total += target.numel()
-    
+
     # Restore the original training state
     model.train(was_training)
-    
     return correct / total
