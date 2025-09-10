@@ -53,11 +53,11 @@ base_args = {
     "one_minus_momentum": 1,   # one_minus_momentum
     "use_momentum": True,          # use_momentum
     "max_preconditioner_dim": 1024,    # max_preconditioner_dim
-    "precondition_frequency":  110,    # precondition_frequency
+    "precondition_frequency":  100,    # precondition_frequency
     "start_preconditioning_step": -1,  # start_preconditioning_step
     "inv_root_override":  0,         # inv_root_override
     "exponent_multiplier": 1,        # exponent_multiplier
-    "grafting_type": "ADAM",         # grafting_type
+    "grafting_type": "None",         # grafting_type
     "grafting_epsilon":  1e-8,        # grafting_epsilon
     "use_normalized_grafting":  False,    # use_normalized_grafting
     "communication_dtype":  "FP32",       # communication_dtype
@@ -465,6 +465,7 @@ class Objective:
         self.test_accuracies = []
         self.grad_variances = []
         self.condition_numbers = []
+        self.condition_number_variances = []
         self.current_losses = []
         prev_model_params = None
         self.step_counter = 0
@@ -484,7 +485,7 @@ class Objective:
                 if self.win_condition(1 - test_accuracy):
                     runtime = time.time() - self.start_time
                     print({"WIN"})
-                    return validator.ema_states.min().item(), self.m, torch_hist[-1].item(), self.current_losses, self.test_accuracies, self.grad_variances, self.condition_numbers, self.step_counter, runtime
+                    return validator.ema_states.min().item(), self.m, torch_hist[-1].item(), self.current_losses, self.test_accuracies, self.grad_variances, self.condition_numbers, self.condition_number_variances, self.step_counter, runtime
                 
                 # Early stopping for trials that are out of the 5 percent test performance of current best trial
                 early_stopping_enabled = True
@@ -492,60 +493,42 @@ class Objective:
                     if test_accuracy < 0.95 * self.best_test_accuracies[i]:
                         runtime = time.time() - self.start_time
                         print({"STOPPING EARLY"})
-                        return validator.ema_states.min().item(), self.m, torch_hist[-1].item(), self.current_losses, self.test_accuracies, self.grad_variances, self.condition_numbers, self.step_counter, runtime
+                        return validator.ema_states.min().item(), self.m, torch_hist[-1].item(), self.current_losses, self.test_accuracies, self.grad_variances, self.condition_numbers, self.condition_number_variances, self.step_counter, runtime
                 
             if self.estimate_condition_number: 
                 with torch.backends.cudnn.flags(enabled=False):
                     x, y = self.data()
-                    #if i % int(self.steps // (self.group*5)) == 0:
-                    cutoff = 100
+
                     estimate = False
-                    effective = False
-
-                    if estimate and effective:
-                        condition_number = estimate_effective_condition_number(self.m, self.data, loss_fn=self.loss_fn, weight_decay=weight_decay, lanczos_steps=200)
+                    visualisation = True
+            
+                    if estimate:
+                        condition_number = estimate_effective_condition_number_reorth(self.m, self.data, loss_fn=self.loss_fn, weight_decay=weight_decay, lanczos_steps=200, n_samples=5)
                         self.condition_numbers.append(condition_number['condition_number'])
-                        eigs = sorted(np.abs(condition_number["eigenvals_lanczos"]))
-                        eigs = [float(ev) for ev in eigs if np.isfinite(ev)]
-                        print(eigs[-100:-1])
-                        eigs_R = sorted(np.abs(condition_number["eigenvals_rayleigh"]))
-                        eigs_R = [float(ev) for ev in eigs_R if np.isfinite(ev)]
-                        plt.figure()
-                        log_bins = np.logspace(np.log10(min(eigs)), np.log10(max(eigs)), 100)
-                        log_bins_R = np.logspace(np.log10(min(eigs_R)), np.log10(max(eigs_R)), 100)
-                        plt.hist(eigs, bins=log_bins, label="Lanczos Estimate")
-                        plt.hist(eigs_R, bins=log_bins_R, label="Rayleigh Estimate")
-                        plt.xscale('log')
-                        plt.ylabel('Count')
-                        plt.legend()
-                        save_dir = "eigenspectrum_estimate_CIFAR10_wide"
-                        os.makedirs(save_dir, exist_ok=True)
-                        plt.savefig(f"{save_dir}/step_{i}.png", dpi=500)
-
-                    elif estimate:
-                        condition_number = estimate_condition_lanczos_reorth(
-                            self.m, self.data, loss_fn=self.loss_fn, weight_decay=weight_decay, lanczos_steps=200
-                        )
-
-                        self.condition_numbers.append(condition_number['condition_number'])
-                        
+                        self.condition_number_variances.append(condition_number['condition_number_variance'])
                         # Extract eigenvalues
-                        true_eigs = np.array(condition_number["eigenvals"])
-                        true_eigs = true_eigs[np.isfinite(true_eigs)]  # clean
-                        eigs_abs = np.abs(true_eigs)
-                        eigs_abs = eigs_abs[np.isfinite(eigs_abs)]
-
+                        true_eigs_l = np.array(condition_number["eigenvals_lanczos"])
+                        true_eigs_r = np.array(condition_number["eigenvals_rayleigh"])
+                        true_eigs_l = true_eigs_l[np.isfinite(true_eigs_l)]  # clean
+                        true_eigs_r = true_eigs_r[np.isfinite(true_eigs_r)]  # clean
+                        eigs_abs_l = np.abs(true_eigs_l)
+                        eigs_abs_r = np.abs(true_eigs_r)
+                       
                         # Split into pos/neg subspaces
-                        pos_eigs = true_eigs[true_eigs > 0]
-                        neg_eigs = true_eigs[true_eigs < 0]
+                        pos_eigs_r = true_eigs_r[true_eigs_r > 0]
+                        neg_eigs_r = true_eigs_r[true_eigs_r < 0]
+                        pos_eigs_l = true_eigs_l[true_eigs_l > 0]
+                        neg_eigs_l = true_eigs_l[true_eigs_l < 0]
 
-                        pos_lambda_min = np.min(pos_eigs) if len(pos_eigs) > 0 else np.nan
-                        pos_lambda_max = np.max(pos_eigs) if len(pos_eigs) > 0 else np.nan
-                        neg_lambda_min = np.min(neg_eigs) if len(neg_eigs) > 0 else np.nan
-                        neg_lambda_max = np.max(neg_eigs) if len(neg_eigs) > 0 else np.nan
-                        pos_neg_ratio = len(pos_eigs) / len(neg_eigs)
+                        pos_lambda_min = np.min(pos_eigs_l) if len(pos_eigs_l) > 0 else np.nan
+                        pos_lambda_max = np.max(pos_eigs_l) if len(pos_eigs_l) > 0 else np.nan
+                        neg_lambda_min = np.min(neg_eigs_l) if len(neg_eigs_l) > 0 else np.nan
+                        neg_lambda_max = np.max(neg_eigs_l) if len(neg_eigs_l) > 0 else np.nan
+                        
+                        pos_neg_ratio = len(pos_eigs_l) / (len(neg_eigs_l) + 1e-8)
+                       
                         # --- Save directory ---
-                        save_dir = "eigenspectrum_estimate_CIFAR10_wide"
+                        save_dir = "eigenspectrum_estimate_lanczos_SVHN_less_p_CNN"
                         os.makedirs(save_dir, exist_ok=True)
 
                         # --- Plot both histograms side by side ---
@@ -554,16 +537,19 @@ class Objective:
                         fig, axes = plt.subplots(1, 2, figsize=(12, 5))
 
                         # Left: abs eigenvalues (log scale)
-                        if len(eigs_abs) > 0:
-                            log_bins = np.logspace(np.log10(np.min(eigs_abs)), np.log10(np.max(eigs_abs)), 100)
-                            axes[0].hist(eigs_abs, bins=log_bins, color="navy")
+                        if len(eigs_abs_l) > 0:
+                            log_bins = np.logspace(np.log10(np.min(eigs_abs_l)), np.log10(np.max(eigs_abs_l)), 100)
+                            axes[0].hist(eigs_abs_l, bins=log_bins, color="navy", label="Lanczos")
+                            log_bins = np.logspace(np.log10(np.min(eigs_abs_r)), np.log10(np.max(eigs_abs_r)), 100)
+                            axes[0].hist(eigs_abs_r, bins=log_bins, color="red", label="Rayleigh")
                             axes[0].set_xscale("log")
-                            axes[0].set_xlabel("Absolute value of Lanczos Ritz values")
+                            axes[0].set_xlabel("Absolute value of estimated eigenvalues")
                             axes[0].set_ylabel("Count")
+                            axes[0].legend()
                             
 
                         # Right: raw eigenvalues
-                        axes[1].hist(true_eigs, bins=200, color="navy")
+                        axes[1].hist(true_eigs_l, bins=200, color="navy")
                         axes[1].set_xlabel("Lanczos Ritz values")
                         axes[1].set_ylabel("Count")
                         
@@ -575,15 +561,15 @@ class Objective:
                         # --- CSV file inside save_dir ---
                         csv_file = os.path.join(save_dir, "eigenspectrum_stats.csv")
 
-                        # If file doesn't exist, write header
                         if not os.path.exists(csv_file):
                             with open(csv_file, mode="w", newline="") as f:
                                 writer = csv.writer(f)
                                 writer.writerow([
                                     "iteration",
-                                    "condition_number", "condition_number_abs",
+                                    "condition_number", "condition_number_abs", "condition_number_variance",
                                     "pos_lambda_min", "pos_lambda_max",
-                                    "neg_lambda_min", "neg_lambda_max", "pos_neg_ratio"
+                                    "neg_lambda_min", "neg_lambda_max", "pos_neg_ratio_Lanczos", "condition_numbers_all_samples",
+                                    "Lanczos_condition_number", "Lanczos_condition_number_variance"
                                 ])
 
                         # Append row
@@ -591,18 +577,125 @@ class Objective:
                             writer = csv.writer(f)
                             writer.writerow([
                                 i,
-                                condition_number['condition_number'], condition_number['condition_number_abs'],
+                                condition_number['condition_number'], condition_number['condition_number_abs'], condition_number["condition_number_variance"],
                                 pos_lambda_min, pos_lambda_max,
-                                neg_lambda_min, neg_lambda_max, pos_neg_ratio
+                                neg_lambda_min, neg_lambda_max, pos_neg_ratio, condition_number['condition_numbers_all_samples'],
+                                condition_number['lanczos_condition_number'], condition_number['lanczos_condition_number_variance']
                             ])
+                    elif visualisation:
+                        # Full caculation of the eigenvalues of the Hessian
+                        condition_number = estimate_condition_number_full(self.m, self.data, num_batches=1, loss_fn=self.loss_fn, weight_decay=weight_decay)
+                        condition_number_approx = estimate_effective_condition_number_reorth(self.m, self.data, loss_fn=self.loss_fn, weight_decay=weight_decay, lanczos_steps=200, n_samples=1)
+                        self.condition_numbers.append(condition_number['condition_number'])
+                        self.condition_number_variances.append(condition_number['condition_number_variance'])
+                        true_eigs = np.array(condition_number["eigenvalues"])
+                        sorted_true_eigs = np.sort(true_eigs)
+                        ninety_fifth = sorted_true_eigs[int(0.95*len(sorted_true_eigs))]
+                        ninety_nineth = sorted_true_eigs[int(0.99*len(sorted_true_eigs))]
+                        true_eigs = true_eigs[np.isfinite(true_eigs)]  
+                        eigs_abs = np.abs(true_eigs[true_eigs>10**(-10)])
+                        eigs_abs = eigs_abs[np.isfinite(eigs_abs)]
+                        
+                        true_eigs_l = np.array(condition_number_approx["eigenvals_lanczos"])
+                        true_eigs_r = np.array(condition_number_approx["eigenvals_rayleigh"])
+                        true_eigs_l = true_eigs_l[np.isfinite(true_eigs_l)]  # clean
+                        true_eigs_r = true_eigs_r[np.isfinite(true_eigs_r)]  # clean
+                        eigs_abs_l = np.abs(true_eigs_l)
+                        eigs_abs_r = np.abs(true_eigs_r)
+
+                        # Clone approximations to make the scale similar in the histogram
+                     #   true_eigs_l = np.repeat(true_eigs_l, 100)  
+                     #   true_eigs_r = np.repeat(true_eigs_r, 100)  
+                     #   eigs_abs_l = np.repeat(np.abs(true_eigs_l), 100)
+                     #   eigs_abs_r = np.repeat(np.abs(true_eigs_r), 100)
+
+
+                        # Split into pos/neg subspaces
+                        pos_eigs = true_eigs[true_eigs > 0]
+                        neg_eigs = true_eigs[true_eigs < 0]
+
+                        pos_lambda_min = np.min(pos_eigs) if len(pos_eigs) > 0 else np.nan
+                        pos_lambda_max = np.max(pos_eigs) if len(pos_eigs) > 0 else np.nan
+                        neg_lambda_min = np.min(neg_eigs) if len(neg_eigs) > 0 else np.nan
+                        neg_lambda_max = np.max(neg_eigs) if len(neg_eigs) > 0 else np.nan
+                        pos_neg_ratio = len(pos_eigs) / len(neg_eigs)
+                        # --- Save directory ---
+                        save_dir = "eigenspectrum_true_vs_approx_visualisation_SVHN"
+                        os.makedirs(save_dir, exist_ok=True)
+
+                        # --- Plot both histograms side by side ---
+                        plt.rcParams['font.size'] = 16
+                        plt.rcParams['font.family'] = 'serif'
+                        fig, axes = plt.subplots(1, 2, figsize=(12, 5))
+
+                        # Left: abs eigenvalues (log scale)
+                        if len(eigs_abs) > 0:
+                            log_bins = np.logspace(np.log10(np.min(eigs_abs)), np.log10(np.max(eigs_abs)), 200)
+                            axes[0].hist(eigs_abs, bins=log_bins, color="navy")
+                            
+                            axes[0].hist(eigs_abs_l, bins=log_bins, color="purple")
+                           
+                            axes[0].hist(eigs_abs_r, bins=log_bins, color="red")
+                            axes[0].axvline(ninety_fifth, color="red", linestyle="--", linewidth=2, label="95th percentile", alpha=0.8)
+                            axes[0].axvline(ninety_nineth, color="red", linestyle="--", linewidth=2, label="99th percentile", alpha=0.6)
+                            axes[0].set_xscale("log")
+                            axes[0].set_yscale("log")
+                            axes[0].set_xlabel("Absolute value of eigenvalues")
+                            axes[0].set_ylabel("Count")
+                            axes[0].legend()
+                            
+
+                        # Right: raw eigenvalues
+                        bins = np.linspace(np.min(true_eigs), np.max(true_eigs), 200)
+                        axes[1].hist(true_eigs, bins=bins, color="navy", label="True eigenspectrum")
+                        axes[1].hist(true_eigs_l, bins=bins, color="purple", label="Lanczos approximation")
+                        axes[1].hist(true_eigs_r, bins=bins, color="red", label="Rayleigh approximation")
+                        
+                        axes[1].set_xlabel("Eigenvalues")
+                        axes[1].set_ylabel("Count")
+                        axes[1].set_yscale("log")
+                        axes[1].legend()
+                        
+
+                        plt.tight_layout()
+                        plt.savefig(f"{save_dir}/step_{i}.png", dpi=500)
+                        plt.close(fig)
+
+                        # --- CSV file inside save_dir ---
+                        csv_file = os.path.join(save_dir, "eigenspectrum_stats.csv")
+
+                        # If file doesn't exist, write header
+                         # If file doesn't exist, write header
+                        if not os.path.exists(csv_file):
+                            with open(csv_file, mode="w", newline="") as f:
+                                writer = csv.writer(f)
+                                writer.writerow([
+                                    "iteration",
+                                    "condition_number", "condition_number_abs", "condition_number_variance", "condition_number_threshold", "condition_number_abs_threshold",
+                                    "pos_lambda_min", "pos_lambda_max",
+                                    "neg_lambda_min", "neg_lambda_max", "pos_neg_ratio_Lanczos", "condition_numbers_all_samples"
+                                ])
+
+                        # Append row
+                        with open(csv_file, mode="a", newline="") as f:
+                            writer = csv.writer(f)
+                            writer.writerow([
+                                i,
+                                condition_number['condition_number'], condition_number['condition_number_abs'], condition_number["condition_number_variance"], condition_number['condition_number_threshold'], condition_number['condition_number_abs_threshold'],
+                                pos_lambda_min, pos_lambda_max,
+                                neg_lambda_min, neg_lambda_max, pos_neg_ratio, condition_number['condition_numbers_all_samples']
+                            ])
+
 
                     else:
                         # Full caculation of the eigenvalues of the Hessian
-                        condition_number = estimate_condition_number_full(self.m, self.data, num_batches=5, loss_fn=self.loss_fn, weight_decay=weight_decay, cutoff=cutoff)
+                        condition_number = estimate_condition_number_full(self.m, self.data, num_batches=5, loss_fn=self.loss_fn, weight_decay=weight_decay)
                         
+                        self.condition_numbers.append(condition_number['condition_number'])
+                        self.condition_number_variances.append(condition_number['condition_number_variance'])
                         true_eigs = np.array(condition_number["eigenvalues"])
                         true_eigs = true_eigs[np.isfinite(true_eigs)]  
-                        eigs_abs = np.abs(true_eigs)
+                        eigs_abs = np.abs(true_eigs[true_eigs>10**(-10)])
                         eigs_abs = eigs_abs[np.isfinite(eigs_abs)]
                         print(f"length of eigs: {len(true_eigs)}")
                         # Split into pos/neg subspaces
@@ -615,7 +708,7 @@ class Objective:
                         neg_lambda_max = np.max(neg_eigs) if len(neg_eigs) > 0 else np.nan
                         pos_neg_ratio = len(pos_eigs) / len(neg_eigs)
                         # --- Save directory ---
-                        save_dir = "eigenspectrum_true_MNIST_logreg_5_batches_64"
+                        save_dir = "eigenspectrum_true_SVHN_less_p_CNN_threshold_6"
                         os.makedirs(save_dir, exist_ok=True)
 
                         # --- Plot both histograms side by side ---
@@ -636,6 +729,7 @@ class Objective:
                         axes[1].hist(true_eigs, bins=200, color="navy")
                         axes[1].set_xlabel("Eigenvalues")
                         axes[1].set_ylabel("Count")
+                        axes[1].set_yscale("log")
                         
 
                         plt.tight_layout()
@@ -646,14 +740,15 @@ class Objective:
                         csv_file = os.path.join(save_dir, "eigenspectrum_stats.csv")
 
                         # If file doesn't exist, write header
+                         # If file doesn't exist, write header
                         if not os.path.exists(csv_file):
                             with open(csv_file, mode="w", newline="") as f:
                                 writer = csv.writer(f)
                                 writer.writerow([
                                     "iteration",
-                                    "condition_number", "condition_number_abs",
+                                    "condition_number", "condition_number_abs", "condition_number_variance", "condition_number_threshold", "condition_number_abs_threshold",
                                     "pos_lambda_min", "pos_lambda_max",
-                                    "neg_lambda_min", "neg_lambda_max", "pos_neg_ratio"
+                                    "neg_lambda_min", "neg_lambda_max", "pos_neg_ratio_Lanczos", "condition_numbers_all_samples"
                                 ])
 
                         # Append row
@@ -661,9 +756,9 @@ class Objective:
                             writer = csv.writer(f)
                             writer.writerow([
                                 i,
-                                condition_number['condition_number'], condition_number['condition_number_abs'],
+                                condition_number['condition_number'], condition_number['condition_number_abs'], condition_number["condition_number_variance"], condition_number['condition_number_threshold'], condition_number['condition_number_abs_threshold'],
                                 pos_lambda_min, pos_lambda_max,
-                                neg_lambda_min, neg_lambda_max, pos_neg_ratio
+                                neg_lambda_min, neg_lambda_max, pos_neg_ratio, condition_number['condition_numbers_all_samples']
                             ])
                         
     
@@ -674,7 +769,7 @@ class Objective:
                 #self.grad_variances.append(grad_variance["gradient_variance"])
                 grad_variance = compute_true_minibatch_variance(self.m, self.train_loader, loss_fn=self.loss_fn)
                 self.grad_variances.append(grad_variance["gradient_noise_variance"])
-                print(grad_variance["gradient_norm_variance"])
+                
             
             if hasattr(o, "train"):
                 o.train()
@@ -824,11 +919,11 @@ class Objective:
         # Get current memory usage before returning
         self.current_memory_usage = get_gpu_memory_usage()
         runtime = time.time() - self.start_time
-        return validator.ema_states.min().item(), self.m, torch_hist[-1].item(), self.current_losses, self.test_accuracies, self.grad_variances, self.condition_numbers, self.step_counter, runtime
+        return validator.ema_states.min().item(), self.m, torch_hist[-1].item(), self.current_losses, self.test_accuracies, self.grad_variances, self.condition_numbers, self.condition_number_variances, self.step_counter, runtime
     
     def objective(self, params):
         self.attempt += 1
-        target, model, loss, step_losses, test_accuracies, grad_variances, condition_numbers, step_counter, runtime = self._inner(params)
+        target, model, loss, step_losses, test_accuracies, grad_variances, condition_numbers, condition_number_variances, step_counter, runtime = self._inner(params)
         self.loss = loss
         #if self.best_loss is None or loss < self.best_loss or not np.isfinite(self.best_loss):
         self.best_loss = loss
@@ -838,6 +933,7 @@ class Objective:
         self.test_accuracies = test_accuracies.copy()
         self.grad_variances = grad_variances.copy()
         self.condition_numbers = condition_numbers.copy()
+        self.condition_number_variances = condition_number_variances.copy()
         self.memory_usage = getattr(self, 'current_memory_usage', 0)/ (1024**2)
         self.step_counter = step_counter
         self.runtime = runtime
@@ -940,10 +1036,8 @@ def trial(
     opt_name = opt
     use_fixed_hyperparams = False
    
-    if opt in ["AdamW"]:
-        if opt_name in ["mars-AdamW", "MARSAdamW"]:
-            print("Using AdamW Algo params")
-            opt_name = "AdamW"
+    if opt in ["AdamW","mars-AdamW"]:
+        
         print("using_list")
         use_fixed_hyperparams = True
 
@@ -1149,6 +1243,7 @@ def trial(
             'test_accuracies': obj.test_accuracies.copy() if hasattr(obj, 'test_accuracies') else [],
             'grad_variances': obj.grad_variances.copy() if hasattr(obj, 'grad_variances') else [],
             'condition_numbers': obj.condition_numbers.copy() if hasattr(obj, 'condition_numbers') else [],
+            'condition_number_variances': obj.condition_number_variances.copy() if hasattr(obj, 'condition_number_variances') else [],
             'runtime': obj.runtime if hasattr(obj, 'runtime') else [],
             'steps': obj.step_counter if hasattr(obj, 'step_counter') else steps
            
@@ -1240,6 +1335,7 @@ def trial(
                     'test_accuracies': obj.test_accuracies.copy() if hasattr(obj, 'test_accuracies') else [],
                     'grad_variances': obj.grad_variances.copy() if hasattr(obj, 'grad_variances') else [],
                     'condition_numbers': obj.condition_numbers.copy() if hasattr(obj, 'condition_numbers') else [],
+                    'condition_number_variances': obj.condition_number_variances.copy() if hasattr(obj, 'condition_number_variances') else [],
                     'runtime': obj.runtime if hasattr(obj, 'runtime') else 0,
                     'steps': obj.step_counter if hasattr(obj, 'step_counter') else steps,
                 }
@@ -1255,11 +1351,12 @@ def trial(
         study.optimize(_optuna_objective, n_trials)
            
     else:
+        tuning_freq = False
         print("Using Quasi-random Sampling")
         best_test_accuracies = []
         # Specify exactly which parameter indices to tune - you can change this list
         # Example: tune learning_rate, one_minus_beta3, one_minus_shampoo_beta
-        if opt_name == "ExternalDistributedShampoo":
+        if tuning_freq and opt_name == "ExternalDistributedShampoo":
             tuned_indices = [0, 1, 2, 13, 5] 
             print("Tuning precond. freq. instead of beta2")
             search_ranges = {
@@ -1282,6 +1379,19 @@ def trial(
                 5: (1e-7, 1e-2, True),   # weight_decay (log scale)
             }
 
+        elif opt_name == "ExternalDistributedShampoo":
+            print("Using lr default ranges")
+            # Define search ranges for each parameter index
+            tuned_indices = [0, 1, 2, 5]  
+            search_ranges = {
+                0: (1e-4, 1e-2, True),   # learning_rate (log scale)
+                1: (1e-3, 0.5, True),    # one_minus_beta1 (log scale)
+                2: (1e-3, 0.5, True),    # one_minus_beta2 (log scale)
+                3: (1e-3, 0.5, True),    # one_minus_beta3 (log scale)
+                4: (1e-3, 0.5, True),      # one_minus_shampoo_beta (log scale)
+                5: (1e-5, 1e-0, True),   # weight_decay (log scale)
+            }
+        
         else:
             print("Using higher lr default ranges")
             # Define search ranges for each parameter index
@@ -1359,6 +1469,7 @@ def trial(
                     'test_accuracies': obj.test_accuracies.copy() if hasattr(obj, 'test_accuracies') else [],
                     'grad_variances': obj.grad_variances.copy() if hasattr(obj, 'grad_variances') else [],
                     'condition_numbers': obj.condition_numbers.copy() if hasattr(obj, 'condition_numbers') else [],
+                    'condition_number_variances': obj.condition_number_variances.copy() if hasattr(obj, 'condition_number_variances') else [],
                     'runtime': obj.runtime if hasattr(obj, 'runtime') else [],
                     'steps': obj.step_counter if hasattr(obj, 'step_counter') else steps,
                 }
@@ -1388,6 +1499,7 @@ def trial(
         final_test_accuracies = best_trial['test_accuracies']
         final_grad_variances = best_trial['grad_variances']
         final_condition_numbers = best_trial['condition_numbers']
+        final_condition_number_variances = best_trial['condition_number_variances']
         final_runtime = best_trial['runtime']
         final_steps = best_trial['steps']
         final_steps = best_trial['steps']
@@ -2168,12 +2280,11 @@ def estimate_condition_number_full_old(
         result['eigenvalues'] = evals_np
     return result
 
-
 def compute_true_minibatch_variance(model, trainloader, loss_fn=torch.nn.functional.cross_entropy, device=None):
     """
     Compute variance between minibatch gradients and the full-batch gradient.
 
-    Returns a dict with gradient noise variance and supporting stats.
+    Returns a dict with relative variance (normalized by the full gradient norm).
     """
     if device is None:
         device = next(model.parameters()).device
@@ -2193,6 +2304,7 @@ def compute_true_minibatch_variance(model, trainloader, loss_fn=torch.nn.functio
 
     full_grad = torch.cat([p.grad.detach().flatten() for p in model.parameters() if p.grad is not None]) / n_samples
     full_grad_np = full_grad.cpu().numpy()
+    full_grad_norm_sq = np.sum(full_grad_np ** 2)
 
     # ---- Step 2: compute minibatch gradient deviations ----
     deviations = []
@@ -2208,15 +2320,12 @@ def compute_true_minibatch_variance(model, trainloader, loss_fn=torch.nn.functio
 
     deviations = np.stack(deviations)  # shape [num_batches, num_params]
 
-    # ---- Step 3: compute variance metrics ----
-    var_per_param = np.mean(deviations**2, axis=0)   # E[(g_b - g_full)^2]
-    grad_noise_variance = float(np.mean(var_per_param))  # average across params
-    grad_norm_variance = float(np.mean([np.linalg.norm(d) for d in deviations]))
-    grad_noise_variance = float(np.mean(np.sum(deviations**2, axis=1)))
+    # ---- Step 3: compute relative variance ----
+    grad_noise_variance_total = float(np.mean(np.sum(deviations ** 2, axis=1)))
+    relative_variance = grad_noise_variance_total / (full_grad_norm_sq + 1e-12)
 
     result = {
-        "gradient_noise_variance": grad_noise_variance,
-        "gradient_norm_variance": grad_norm_variance,
+        "gradient_noise_variance": float(relative_variance),  # now normalized
         "num_batches": len(trainloader),
         "num_params": full_grad_np.shape[0],
     }
@@ -2242,6 +2351,8 @@ def estimate_condition_number_full(
     """
     results = []
     results_abs = []
+    results_threshold = []
+    results_abs_threshold = []
     max_eigs = []
     eigs_all = [] if return_eigs else None
 
@@ -2278,6 +2389,8 @@ def estimate_condition_number_full(
 
         results.append(res["condition_number"])
         results_abs.append(res["condition_number_abs"])
+        results_threshold.append(res["condition_number_threshold"])
+        results_abs_threshold.append(res["condition_number_abs_threshold"])
         max_eigs.append(res["lambda_max"])
         if return_eigs:
             eigs_all.extend(res.get("eigenvalues", []))
@@ -2288,10 +2401,17 @@ def estimate_condition_number_full(
     # aggregate
     avg_kappa = float(np.mean(results))
     avg_kappa_abs = float(np.mean(results_abs))
+    avg_kappa_threshold = float(np.mean(results_threshold))
+    avg_kappa_abs_threshold = float(np.mean(results_abs_threshold))
     avg_max = float(np.mean(max_eigs))
     out = {
         "condition_number": avg_kappa,
         "condition_number_abs": avg_kappa_abs,
+        "condition_number_threshold": avg_kappa_threshold,
+        "condition_number_abs_threshold": avg_kappa_abs_threshold,
+        "condition_numbers_all_samples": results,
+        "condition_number_variance": float(np.var(results)),
+        "condition_number_variance_threshold": float(np.var(results_threshold)),
         "lambda_max": avg_max,
         "num_batches": len(results),
         "per_batch": results,
@@ -2440,21 +2560,31 @@ def _estimate_condition_number_single_batch(
     # robust top-end estimate and requested lambda_min definition
     evals_pos = evals[evals > 0]
     evals_sorted = np.sort(evals_pos)
-    
+    evals_over_threshold = evals_sorted[evals_sorted>(10**(-6))]
+    ninetyth_percentile = int(0.9 * len(evals_sorted))
     lambda_max = float(np.max(evals_sorted)) 
-    lambda_min = float(np.median(evals_sorted))  # as requested
-    
-    kappa_pos_subspace = lambda_max / (lambda_min + weight_decay)
+    # Take the top 10 percent of eigenvalues to approximate the right hand tail of the distribution
+    lambda_min = float(np.median(evals_sorted[ninetyth_percentile : len(evals_sorted)]))  
+    lambda_min_threshold = float(np.median(evals_over_threshold)) 
 
-    abs_evals_sorted = np.sort(np.abs(evals))
-    lambda_max = float(np.max(abs_evals_sorted))
-    lambda_min = float(np.median(abs_evals_sorted))  # as requested
+    kappa_pos_subspace = lambda_max / lambda_min
+    kappa_pos_threshold = lambda_max / lambda_min_threshold
+
     
-    kappa_abs = lambda_max / (lambda_min + weight_decay)
+    abs_evals_sorted = np.sort(np.abs(evals))
+    abs_evals_threshold = np.sort(np.abs(evals[evals>(10**(-6))]))
+    lambda_max = float(np.max(abs_evals_sorted))
+    lambda_min = float(np.median(abs_evals_sorted))  
+    lambda_min_threshold = float(np.median(abs_evals_threshold))  
+    
+    kappa_abs = lambda_max / lambda_min
+    kappa_abs_threshold = lam_abs_max / lambda_min_threshold
 
     result = {
         "condition_number": kappa_pos_subspace,
         "condition_number_abs": kappa_abs,
+        "condition_number_threshold": kappa_pos_threshold,
+        "condition_number_abs_threshold": kappa_abs_threshold,
         "lambda_max": lambda_max,
         "lambda_min_pos": lambda_min,
         "num_params": n,
@@ -2539,7 +2669,7 @@ def _estimate_condition_number_single_batch_slq(
         grads = torch.autograd.grad(loss, theta0, create_graph=True)[0]
         grad_v = torch.dot(grads, v)
         Hv = torch.autograd.grad(grad_v, theta0, retain_graph=False)[0]
-        return Hv + weight_decay * v
+        return Hv
 
     # ---- Lanczos algorithm ----
     def lanczos(hvp_fn, dim, m):
@@ -2586,7 +2716,7 @@ def _estimate_condition_number_single_batch_slq(
     cutoff_index = -cutoff
     lambda_p = float(pos_vals[cutoff_index])
 
-    kappa_eff = (lambda_max) / (lambda_p + weight_decay)
+    kappa_eff = (lambda_max) / lambda_p 
 
     return {
         "condition_number": kappa_eff,
@@ -2604,7 +2734,7 @@ def estimate_effective_condition_number(
     loss_fn=None,
     device=None,
     weight_decay=1e-4,
-    lanczos_steps=50,
+    lanczos_steps=200,
     lanczos_topk=10,
     n_probes=20,
     n_samples=1,
@@ -2670,7 +2800,7 @@ def estimate_effective_condition_number(
         grads = torch.autograd.grad(loss, theta0, create_graph=True)[0]
         grad_v = torch.dot(grads, v)
         Hv = torch.autograd.grad(grad_v, theta0, retain_graph=False)[0]
-        return Hv + weight_decay * v
+        return Hv
 
     # ---- Lanczos ----
     def lanczos(hvp_fn, dim, m):
@@ -2698,9 +2828,9 @@ def estimate_effective_condition_number(
     if len(ritz_vals) == 0:
         return {"condition_number": float("nan"), "eigenvals_lanczos": [], "eigenvals_rayleigh": []}
 
-    topk_vals = np.sort(ritz_vals)[-lanczos_topk:]
+    topk_vals = np.sort(np.abs(ritz_vals))[-lanczos_topk:]
     lanczos_mean_topk = float(np.mean(topk_vals))
-
+    pos_lanczos_mean_topk = float(np.mean(np.sort(ritz_vals)[-lanczos_topk:]))
     # ---- Rayleigh estimates ----
     eigenvals_rayleigh = []
     for _ in range(n_samples):
@@ -2729,12 +2859,14 @@ def estimate_effective_condition_number(
         return {"condition_number": float("nan"), "eigenvals_lanczos": ritz_vals, "eigenvals_rayleigh": []}
 
     rayleigh_median = float(np.median(np.abs(eigenvals_rayleigh)))
+    pos_rayleigh_median = float(np.median(eigenvals_rayleigh[eigenvals_rayleigh > 0]))
 
     # effective condition number
-    kappa_eff = lanczos_mean_topk / (rayleigh_median + weight_decay)
-
+    kappa_eff = lanczos_mean_topk / rayleigh_median
+    pos_kappa_eff = pos_lanczos_mean_topk / pos_rayleigh_median 
     return {
-        "condition_number": kappa_eff,
+        "condition_number": pos_kappa_eff,
+        "condition_number_abs": kappa_eff,
         "lanczos_mean_topk": lanczos_mean_topk,
         "rayleigh_median": rayleigh_median,
         "eigenvals_lanczos": ritz_vals,
@@ -2742,12 +2874,6 @@ def estimate_effective_condition_number(
         "dtype_used": dtype_used,
         "num_params": n,
     }
-
-import time
-import numpy as np
-import torch
-from torch.nn.utils import parameters_to_vector
-from torch.func import functional_call
 
 @torch.no_grad()
 def _flatten_params(model):
@@ -2761,7 +2887,7 @@ def estimate_condition_lanczos_reorth(
     device=None,
     weight_decay=1e-4,
     lanczos_steps=200,     # you mentioned using ~200 vectors
-    n_probes=8,            # multiple random starts improve the bulk estimate
+    n_probes=1,            # multiple random starts improve the bulk estimate
     topk_for_lambda_max=10,
     tol_breakdown=1e-10,
     use_double=False,
@@ -2774,8 +2900,8 @@ def estimate_condition_lanczos_reorth(
     - For each probe, run m-step Lanczos with full reorthogonalization.
     - Collect all Ritz eigenvalues from the tridiagonal(s).
     - lambda_max := mean of top-K pooled Ritz eigenvalues (configurable).
-    - lambda_min := median of pooled Ritz eigenvalues (as requested).
-    - kappa := lambda_max / (lambda_min + weight_decay)
+    - lambda_min := median of pooled Ritz eigenvalues (bulk).
+    - kappa := lambda_max / lambda_min
 
     Returns:
       dict with kappa, lambda_max, lambda_min, pooled Ritz values, per-probe Ritz, etc.
@@ -2828,7 +2954,7 @@ def estimate_condition_lanczos_reorth(
         grads = torch.autograd.grad(loss, theta0, create_graph=True)[0]
         grad_v = torch.dot(grads, v)
         Hv = torch.autograd.grad(grad_v, theta0, retain_graph=False)[0]
-        return Hv + weight_decay * v
+        return Hv 
 
     # ---- FULL reorthogonalized Lanczos (single probe) ----
     def lanczos_full_reorth(hvp, dim, m, q0=None):
@@ -2934,14 +3060,14 @@ def estimate_condition_lanczos_reorth(
     lambda_max = float(np.mean(ritz_sorted[-k_top:])) if k_top > 0 else float("nan")
     lambda_min = float(np.median(ritz_sorted))  # as requested
     
-    kappa_pos_subspace = lambda_max / (lambda_min + weight_decay)
+    kappa_pos_subspace = lambda_max / lambda_min
 
     ritz_sorted = np.sort(np.abs(ritz_all))
     k_top = min(topk_for_lambda_max, len(ritz_sorted))
     lambda_max = float(np.mean(ritz_sorted[-k_top:])) if k_top > 0 else float("nan")
     lambda_min = float(np.median(ritz_sorted))  # as requested
     
-    kappa_abs = lambda_max / (lambda_min + weight_decay)
+    kappa_abs = lambda_max / lambda_min
 
     return {
         "condition_number": kappa_pos_subspace,
@@ -2957,4 +3083,202 @@ def estimate_condition_lanczos_reorth(
         "topk_for_lambda_max": topk_for_lambda_max,
         "weight_decay": weight_decay,
        
+    }
+def estimate_effective_condition_number_reorth(
+    model,
+    data_fn,
+    loss_fn=None,
+    device=None,
+    weight_decay=1e-4,
+    lanczos_steps=200,
+    lanczos_topk=10,
+    n_probes=1,
+    n_samples=1,
+    n_rayleigh_probes=200,
+    timeout=1800,
+    use_double=False,
+    seed=None,
+):
+    """
+    Hybrid estimator (batch-averaged):
+      - For each of n_samples batches:
+          * Run Lanczos (with n_probes) to get top eigenvalue estimates
+          * Run Rayleigh quotient probes (n_rayleigh_probes) to estimate small eigenvalues
+          * Compute per-batch condition number
+      - Return the mean and variance of condition numbers across batches.
+
+    Also records all Lanczos Ritz values and Rayleigh estimates.
+    """
+    start_time = time.time()
+    if device is None:
+        device = next(model.parameters(), torch.tensor([])).device
+        if device.type not in ("cuda", "mps"):
+            device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    params = [p for p in model.parameters() if p.requires_grad]
+    if len(params) == 0:
+        return {
+            "condition_number": float("nan"),
+            "condition_number_abs": float("nan"),
+            "condition_number_variance": float("nan"),
+            "eigenvals_lanczos": np.array([]),
+            "eigenvals_rayleigh": np.array([]),
+            "num_params": 0,
+        }
+    shapes = [p.shape for p in params]
+    numels = [p.numel() for p in params]
+    n = int(sum(numels))
+
+    dtype_used = torch.float64 if use_double else params[0].dtype
+    if use_double:
+        model = model.to(torch.float64)
+    model = model.to(device)
+
+    if seed is not None:
+        torch.manual_seed(seed)
+        np.random.seed(seed)
+
+    # helpers
+    names = [n for n, p in model.named_parameters() if p.requires_grad]
+
+    def unflatten(theta):
+        splits = list(torch.split(theta, numels))
+        tensors = [t.view(s) for t, s in zip(splits, shapes)]
+        return {name: t for name, t in zip(names, tensors)}
+
+    def lanczos_full_reorth(hvp, dim, m, q0=None, tol_breakdown=1e-12):
+        q = torch.randn(dim, device=device, dtype=dtype_used) if q0 is None else q0.to(device, dtype=dtype_used)
+        q = q / (q.norm() + 1e-32)
+        Q, alpha, beta = [], [], []
+        for j in range(m):
+            if time.time() - start_time > timeout:
+                break
+            z = hvp(q)
+            a = float(torch.dot(q, z))
+            alpha.append(a)
+            z = z - a * q
+            if Q:
+                for qi in Q:
+                    ci = float(torch.dot(z, qi))
+                    z = z - ci * qi
+            b = float(z.norm())
+            beta.append(b)
+            Q.append(q)
+            if b < tol_breakdown:
+                break
+            q = z / (b + 1e-32)
+        k = len(alpha)
+        if k == 0:
+            return np.array([])
+        T = np.diag(alpha)
+        if k >= 2:
+            off = np.array(beta[:k-1], dtype=np.float64)
+            T += np.diag(off, 1) + np.diag(off, -1)
+        return np.linalg.eigvalsh(T)
+
+    # containers
+    cond_pos_list, cond_abs_list, cond_lanczos_list = [], [], []
+    per_batch_stats = []
+    all_lanczos_eigs, all_rayleigh_eigs = [], []
+
+    for s in range(n_samples):
+        if time.time() - start_time > timeout:
+            break
+        x, y = data_fn()
+        x, y = x.to(device), y.to(device)
+
+        # flatten parameters
+        theta0 = parameters_to_vector(params).to(device=device, dtype=dtype_used)
+        theta0 = theta0.detach().clone().requires_grad_(True)
+
+        def closure_theta(theta):
+            pmap = unflatten(theta)
+            out = functional_call(model, pmap, (x,))
+            return loss_fn(out, y) if loss_fn is not None else torch.nn.functional.cross_entropy(out, y)
+
+        def hvp_fn(v):
+            loss = closure_theta(theta0)
+            grads = torch.autograd.grad(loss, theta0, create_graph=True)[0]
+            grad_v = torch.dot(grads, v)
+            Hv = torch.autograd.grad(grad_v, theta0, retain_graph=False)[0]
+            return Hv 
+
+        # Lanczos pooled Ritz values
+        pooled_ritz = []
+        for p in range(n_probes):
+            q0 = torch.randn(n, device=device, dtype=dtype_used)
+            q0 = q0 / (q0.norm() + 1e-32)
+            ritz = lanczos_full_reorth(hvp_fn, n, lanczos_steps, q0=q0)
+            if ritz.size > 0:
+                pooled_ritz.append(ritz)
+        if not pooled_ritz:
+            continue
+        ritz_all = np.concatenate(pooled_ritz, axis=0)
+        all_lanczos_eigs.append(ritz_all)
+
+        ritz_sorted_abs = np.sort(np.abs(ritz_all))
+        k_top = min(lanczos_topk, len(ritz_sorted_abs))
+        lanczos_mean_topk = float(np.mean(ritz_sorted_abs[-k_top:])) if k_top > 0 else float("nan")
+        ritz_pos = ritz_all[ritz_all > 0]
+        ritz_pos_sorted = np.sort(ritz_pos) if ritz_pos.size > 0 else np.array([])
+        k_top_pos = min(lanczos_topk, len(ritz_pos_sorted))
+        pos_lanczos_mean_topk = float(np.mean(ritz_pos_sorted[-k_top_pos:])) if k_top_pos > 0 else float("nan")
+        lanczos_median = float(np.median(ritz_pos))
+        # Rayleigh probes
+        eigenvals_rayleigh = []
+        out = model(x)
+        loss_batch = loss_fn(out, y) if loss_fn is not None else torch.nn.functional.cross_entropy(out, y)
+        grads = torch.autograd.grad(loss_batch, params, create_graph=True)
+        for _ in range(n_rayleigh_probes):
+            v_list = [torch.randn_like(p) for p in params]
+            v_norm = torch.sqrt(sum(torch.sum(v_i * v_i) for v_i in v_list))
+            v_list = [v_i / (v_norm + 1e-32) for v_i in v_list]
+            grad_v = sum(torch.sum(g * v_i) for g, v_i in zip(grads, v_list))
+            hvp = torch.autograd.grad(grad_v, params, retain_graph=True)
+            eig_est = sum(torch.sum(hv * v_i) for hv, v_i in zip(hvp, v_list))
+            eigenvals_rayleigh.append(float(eig_est))
+        eigenvals_rayleigh = np.array(eigenvals_rayleigh)
+        eigenvals_rayleigh = eigenvals_rayleigh[np.isfinite(eigenvals_rayleigh)]
+        all_rayleigh_eigs.append(eigenvals_rayleigh)
+
+        rayleigh_median = float(np.median(np.abs(eigenvals_rayleigh))) if eigenvals_rayleigh.size > 0 else float("nan")
+        pos_vals = eigenvals_rayleigh[eigenvals_rayleigh > 0]
+        pos_rayleigh_median = float(np.median(pos_vals)) if pos_vals.size > 0 else float("nan")
+
+        kappa_abs = lanczos_mean_topk / rayleigh_median
+        kappa_pos = pos_lanczos_mean_topk / pos_rayleigh_median
+        
+        kappa_lanczos = lanczos_mean_topk / lanczos_median
+        cond_abs_list.append(kappa_abs)
+        cond_pos_list.append(kappa_pos)
+        cond_lanczos_list.append(kappa_lanczos)
+
+        per_batch_stats.append({
+            "lanczos_mean_topk": lanczos_mean_topk,
+            "pos_lanczos_mean_topk": pos_lanczos_mean_topk,
+            "rayleigh_median": rayleigh_median,
+            "pos_rayleigh_median": pos_rayleigh_median,
+            "condition_number_abs": kappa_abs,
+            "condition_number": kappa_pos,
+        })
+
+    cond_abs_arr, cond_pos_arr, cond_lanczos_arr = np.array(cond_abs_list), np.array(cond_pos_list), np.array(cond_lanczos_list)
+    return {
+        "condition_number": float(np.mean(cond_pos_arr)) if cond_pos_arr.size else float("nan"),
+        "condition_number_abs": float(np.mean(cond_abs_arr)) if cond_abs_arr.size else float("nan"),
+        "condition_numbers_all_samples": cond_pos_arr,
+        "condition_number_variance": float(np.var(cond_pos_arr, ddof=1)) if cond_pos_arr.size > 1 else float("nan"),
+        "lanczos_condition_number": float(np.mean(cond_lanczos_arr)) if cond_lanczos_arr.size else float("nan"),
+        "lanczos_condition_number_variance": float(np.var(cond_lanczos_arr, ddof=1)) if cond_lanczos_arr.size > 1 else float("nan"),
+        "per_batch": per_batch_stats,
+        "dtype_used": dtype_used,
+        "num_params": n,
+        "lanczos_steps": lanczos_steps,
+        "n_probes": n_probes,
+        "n_samples": n_samples,
+        "n_rayleigh_probes": n_rayleigh_probes,
+        "weight_decay": weight_decay,
+        "eigenvals_lanczos": np.concatenate(all_lanczos_eigs, axis=0) if all_lanczos_eigs else np.array([]),
+        "eigenvals_rayleigh": np.concatenate(all_rayleigh_eigs, axis=0) if all_rayleigh_eigs else np.array([]),
+        "timeout_reached": (time.time() - start_time) > timeout,
     }

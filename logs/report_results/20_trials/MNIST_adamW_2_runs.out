@@ -1,0 +1,27 @@
+/var/spool/slurmd/job21502/slurm_script: line 15: cd: HeavyBall: No such file or directory
+Current directory /home/tomjodrell/HeavyBall
+CUDA_VISIBLE_DEVICES 1
+/home/tomjodrell/HeavyBall/benchmark/benchmark_runner.py:289: UserWarning: No artists with labels found to put in legend.  Note that artists whose label start with an underscore are ignored when legend() is called with no argument.
+  plt.legend()
+Running comparison for MNIST
+Optimizers: AdamW
+Runs per optimizer: 2
+Steps per run: 27000
+Optuna trials per run: 20
+
+=== Running AdamW ===
+Run 1/2
+running AdamW
+Running: python -m benchmark.MNIST --opt AdamW --steps 27000 --trials 20 --runtime-limit 99744 --step-hint 27000
+{'runtime': 7680.752526283264, 'attempts': 1, 'best_loss': 0.9865, 'loss_trajectory': [2.286970853805542, 0.11944130063056946, 0.057516615837812424, 0.024860257282853127, 0.05256815627217293, 0.13044096529483795, 0.013645370490849018, 0.11076247692108154, 0.03177369758486748, 0.013349183835089207, 0.0003309362509753555, 0.004620422143489122, 0.059930846095085144, 0.004984091501682997, 0.0022161405067890882, 0.0010576994391158223, 1.653515028010588e-05, 0.00019376295676920563, 5.46385272173211e-05, 4.4981661631027237e-05, 7.491126598324627e-05, 1.899611197586637e-05, 0.00017442811804357916, 9.846791363088414e-05, 3.58786855940707e-05, 3.960655885748565e-05, 0.00011146504402859136], 'test_accuracies': [0.137, 0.948, 0.9639, 0.9663, 0.9656, 0.9712, 0.9742, 0.9708, 0.9736, 0.9734, 0.9774, 0.9788, 0.9768, 0.9802, 0.9821, 0.984, 0.9854, 0.9861, 0.9859, 0.9862, 0.9864, 0.9865, 0.9864, 0.9863, 0.9864, 0.9864, 0.9864], 'grad_variances': [], 'config_str': '', 'mean_cond': 0.0, 'std_err_cond': None, 'memory_usage': None, 'steps': 27000, 'optimizer': 'AdamW', 'seed': 42, 'trials': 20, 'log_file': 'comparison_results/run_AdamW_42_1756996938735.log', 'success': True}
+  ✓ Success - Loss: 0.9865
+Run 2/2
+running AdamW
+Running: python -m benchmark.MNIST --opt AdamW --steps 27000 --trials 20 --runtime-limit 99744 --step-hint 27000
+{'runtime': 2656.4249556064606, 'attempts': 1, 'best_loss': 0.9863, 'loss_trajectory': [2.334315776824951, 0.14283867180347443, 0.09484970569610596, 0.12919579446315765, 0.04577871412038803, 0.051103804260492325, 0.04216541722416878, 0.07429953664541245, 0.022820740938186646, 0.02716798521578312, 0.0715215727686882, 0.025046221911907196, 0.03861744701862335, 0.015006664209067822, 0.0284682959318161, 0.004457104951143265, 0.036086857318878174, 0.013234098441898823, 0.014448348432779312, 0.00902531947940588, 0.015640053898096085, 0.009136032313108444, 0.011688988655805588, 0.0034510286059230566, 0.0026513386983424425, 0.005062795244157314, 0.004878675565123558], 'test_accuracies': [0.1173, 0.9525, 0.97, 0.973, 0.9676, 0.9718, 0.9728, 0.9712, 0.9704, 0.9744, 0.9721, 0.9769, 0.9759, 0.9784, 0.9699, 0.972, 0.9749, 0.9751, 0.9808, 0.9805, 0.9815, 0.9844, 0.9858, 0.9863, 0.9862, 0.9853, 0.9857], 'grad_variances': [], 'config_str': '', 'mean_cond': 0.0, 'std_err_cond': None, 'memory_usage': None, 'steps': 27000, 'optimizer': 'AdamW', 'seed': 43, 'trials': 20, 'log_file': 'comparison_results/run_AdamW_43_1757004623841.log', 'success': True}
+  ✓ Success - Loss: 0.9863
+
+=== Aggregating Results ===
+
+Results saved to: comparison_results
+Plots: comparison_results/MNIST_*.png

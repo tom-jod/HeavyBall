@@ -1,0 +1,22 @@
+/var/spool/slurmd/job21730/slurm_script: line 15: cd: HeavyBall: No such file or directory
+Current directory /home/tomjodrell/HeavyBall
+CUDA_VISIBLE_DEVICES 1
+/home/tomjodrell/HeavyBall/benchmark/benchmark_runner.py:289: UserWarning: No artists with labels found to put in legend.  Note that artists whose label start with an underscore are ignored when legend() is called with no argument.
+  plt.legend()
+Running comparison for MNIST
+Optimizers: ExternalDistributedShampoo
+Runs per optimizer: 1
+Steps per run: 27000
+Optuna trials per run: 5
+
+=== Running ExternalDistributedShampoo ===
+Run 1/1
+running ExternalDistributedShampoo
+Running: python -m benchmark.MNIST --opt ExternalDistributedShampoo --steps 27000 --trials 5 --runtime-limit 992500 --step-hint 27000
+{'runtime': 3066.8009672164917, 'attempts': 1, 'best_loss': 0.9824, 'loss_trajectory': [2.3105216026306152, 0.04874018207192421, 0.021397694945335388, 0.006291783414781094, 0.006948813796043396, 0.027148131281137466, 0.0074035669676959515, 0.0030563040636479855, 0.0341634675860405, 0.004994507879018784, 0.010491928085684776, 0.023847686126828194, 0.034237731248140335, 0.0034501750487834215, 0.0028609081637114286, 0.0033659166656434536, 0.043725352734327316, 0.01670512557029724, 0.014177811332046986, 0.015558156184852123, 0.045971766114234924, 0.0030998080037534237, 0.0021722058299928904, 0.011484788730740547, 0.0019303730223327875, 0.014437604695558548, 0.005489950068295002], 'test_accuracies': [0.0897, 0.9728, 0.9774, 0.9772, 0.9756, 0.9753, 0.9757, 0.9757, 0.9765, 0.9789, 0.9782, 0.976, 0.9784, 0.9822, 0.9756, 0.9807, 0.9734, 0.9778, 0.9799, 0.9824, 0.976, 0.9813, 0.9785, 0.979, 0.9799, 0.9799, 0.9812], 'grad_variances': [], 'config_str': '', 'mean_cond': 0.0, 'std_err_cond': None, 'memory_usage': None, 'steps': 27000, 'optimizer': 'ExternalDistributedShampoo', 'seed': 42, 'trials': 5, 'log_file': 'comparison_results/run_ExternalDistributedShampoo_42_1757421264844.log', 'success': True}
+  ✓ Success - Loss: 0.9824
+
+=== Aggregating Results ===
+
+Results saved to: comparison_results
+Plots: comparison_results/MNIST_*.png
