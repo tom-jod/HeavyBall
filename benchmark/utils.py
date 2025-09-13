@@ -545,7 +545,7 @@ class Objective:
                             axes[0].set_xscale("log")
                             axes[0].set_xlabel("Absolute value of estimated eigenvalues")
                             axes[0].set_ylabel("Count")
-                            axes[0].legend()
+                            #axes[0].legend()
                             
 
                         # Right: raw eigenvalues
@@ -582,7 +582,7 @@ class Objective:
                                 neg_lambda_min, neg_lambda_max, pos_neg_ratio, condition_number['condition_numbers_all_samples'],
                                 condition_number['lanczos_condition_number'], condition_number['lanczos_condition_number_variance']
                             ])
-                    elif visualisation:
+                    elif visualisation and i == 19:
                         # Full caculation of the eigenvalues of the Hessian
                         condition_number = estimate_condition_number_full(self.m, self.data, num_batches=1, loss_fn=self.loss_fn, weight_decay=weight_decay)
                         condition_number_approx = estimate_effective_condition_number_reorth(self.m, self.data, loss_fn=self.loss_fn, weight_decay=weight_decay, lanczos_steps=200, n_samples=1)
@@ -620,7 +620,7 @@ class Objective:
                         neg_lambda_max = np.max(neg_eigs) if len(neg_eigs) > 0 else np.nan
                         pos_neg_ratio = len(pos_eigs) / len(neg_eigs)
                         # --- Save directory ---
-                        save_dir = "eigenspectrum_true_vs_approx_visualisation_SVHN"
+                        save_dir = "eigenspectrum_true_vs_approx_visualisation_MNIST_deep_sig_no_legend"
                         os.makedirs(save_dir, exist_ok=True)
 
                         # --- Plot both histograms side by side ---
@@ -642,7 +642,7 @@ class Objective:
                             axes[0].set_yscale("log")
                             axes[0].set_xlabel("Absolute value of eigenvalues")
                             axes[0].set_ylabel("Count")
-                            axes[0].legend()
+                            #axes[0].legend()
                             
 
                         # Right: raw eigenvalues
@@ -687,7 +687,7 @@ class Objective:
                             ])
 
 
-                    else:
+                    elif i == 19 or i ==0:
                         # Full caculation of the eigenvalues of the Hessian
                         condition_number = estimate_condition_number_full(self.m, self.data, num_batches=5, loss_fn=self.loss_fn, weight_decay=weight_decay)
                         
@@ -695,7 +695,7 @@ class Objective:
                         self.condition_number_variances.append(condition_number['condition_number_variance'])
                         true_eigs = np.array(condition_number["eigenvalues"])
                         true_eigs = true_eigs[np.isfinite(true_eigs)]  
-                        eigs_abs = np.abs(true_eigs[true_eigs>10**(-10)])
+                        eigs_abs = true_eigs[true_eigs > 0]
                         eigs_abs = eigs_abs[np.isfinite(eigs_abs)]
                         print(f"length of eigs: {len(true_eigs)}")
                         # Split into pos/neg subspaces
@@ -708,7 +708,7 @@ class Objective:
                         neg_lambda_max = np.max(neg_eigs) if len(neg_eigs) > 0 else np.nan
                         pos_neg_ratio = len(pos_eigs) / len(neg_eigs)
                         # --- Save directory ---
-                        save_dir = "eigenspectrum_true_SVHN_less_p_CNN_threshold_6"
+                        save_dir = "eigenspectrum_true_SVHN_less_p_CNN_new"
                         os.makedirs(save_dir, exist_ok=True)
 
                         # --- Plot both histograms side by side ---
@@ -1036,7 +1036,7 @@ def trial(
     opt_name = opt
     use_fixed_hyperparams = False
    
-    if opt in ["AdamW","mars-AdamW"]:
+    if opt in ["AdamW"]:
         
         print("using_list")
         use_fixed_hyperparams = True

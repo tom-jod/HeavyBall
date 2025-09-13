@@ -1,0 +1,27 @@
+/var/spool/slurmd/job21516/slurm_script: line 15: cd: HeavyBall: No such file or directory
+Current directory /home/tomjodrell/HeavyBall
+CUDA_VISIBLE_DEVICES 1
+/home/tomjodrell/HeavyBall/benchmark/benchmark_runner.py:289: UserWarning: No artists with labels found to put in legend.  Note that artists whose label start with an underscore are ignored when legend() is called with no argument.
+  plt.legend()
+Running comparison for MNIST
+Optimizers: SGD
+Runs per optimizer: 2
+Steps per run: 0
+Optuna trials per run: 20
+
+=== Running SGD ===
+Run 1/2
+running SGD
+Running: python -m benchmark.MNIST --opt SGD --steps 0 --trials 20 --runtime-limit 472 --step-hint 27000
+{'runtime': 9116.290672779083, 'attempts': 1, 'best_loss': 0.9852, 'loss_trajectory': [2.307102918624878, 0.16194802522659302, 0.11436445266008377, 0.05983305349946022, 0.03429016098380089, 0.09100545197725296, 0.0593821220099926, 0.03235524147748947, 0.02439671754837036, 0.10748539119958878, 0.04496897757053375, 0.01891348883509636, 0.08563544601202011, 0.06318198889493942, 0.01669192686676979, 0.06123518943786621, 0.01677316054701805, 0.013598802499473095, 0.019595451653003693, 0.036778468638658524, 0.017056787386536598, 0.056881386786699295, 0.014967348426580429, 0.024355541914701462, 0.016577741131186485, 0.015199437737464905, 0.009744924493134022, 0.008032774552702904], 'test_accuracies': [0.0616, 0.9608, 0.9679, 0.9677, 0.9698, 0.9698, 0.9701, 0.9691, 0.9773, 0.9736, 0.9741, 0.9772, 0.9788, 0.9759, 0.9786, 0.9732, 0.9809, 0.9816, 0.9807, 0.9837, 0.9804, 0.9826, 0.9835, 0.9845, 0.9843, 0.9852, 0.985, 0.9851], 'grad_variances': [], 'config_str': '', 'mean_cond': 0.0, 'std_err_cond': None, 'memory_usage': None, 'steps': 0, 'optimizer': 'SGD', 'seed': 42, 'trials': 20, 'log_file': 'comparison_results/run_SGD_42_1757024019947.log', 'success': True}
+  ✓ Success - Loss: 0.9852
+Run 2/2
+running SGD
+Running: python -m benchmark.MNIST --opt SGD --steps 0 --trials 20 --runtime-limit 472 --step-hint 27000
+{'runtime': 9125.414655923843, 'attempts': 1, 'best_loss': 0.9851, 'loss_trajectory': [2.3128981590270996, 0.13808441162109375, 0.03562621399760246, 0.02459801360964775, 0.013809631578624249, 0.009103748016059399, 0.005276940297335386, 0.004325041081756353, 0.0023961705155670643, 0.0034672131296247244, 0.0022759409621357918, 0.005236726254224777, 0.003430051263421774, 0.0036926851607859135, 0.0029971462208777666, 0.001752304146066308, 0.003521332051604986, 0.0075448909774422646, 0.0014396902406588197, 0.001612229854799807, 0.002489630598574877, 0.004468620754778385, 0.002486669458448887, 0.0014996471581980586, 0.002177066868171096, 0.0015038688434287906, 0.0018402432324364781, 0.0052397968247532845], 'test_accuracies': [0.1086, 0.9562, 0.9706, 0.9744, 0.9748, 0.9769, 0.9797, 0.9811, 0.9823, 0.9847, 0.9839, 0.9842, 0.9828, 0.9832, 0.9839, 0.9844, 0.9844, 0.9839, 0.9848, 0.9847, 0.984, 0.984, 0.9845, 0.9844, 0.9851, 0.9851, 0.985, 0.9849], 'grad_variances': [], 'config_str': '', 'mean_cond': 0.0, 'std_err_cond': None, 'memory_usage': None, 'steps': 0, 'optimizer': 'SGD', 'seed': 43, 'trials': 20, 'log_file': 'comparison_results/run_SGD_43_1757033140718.log', 'success': True}
+  ✓ Success - Loss: 0.9851
+
+=== Aggregating Results ===
+
+Results saved to: comparison_results
+Plots: comparison_results/MNIST_*.png

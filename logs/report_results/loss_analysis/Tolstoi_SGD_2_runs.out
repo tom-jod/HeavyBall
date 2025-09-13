@@ -1,0 +1,125 @@
+/var/spool/slurmd/job21514/slurm_script: line 15: cd: HeavyBall: No such file or directory
+Current directory /home/tomjodrell/HeavyBall
+CUDA_VISIBLE_DEVICES 1
+/home/tomjodrell/HeavyBall/benchmark/benchmark_runner.py:289: UserWarning: No artists with labels found to put in legend.  Note that artists whose label start with an underscore are ignored when legend() is called with no argument.
+  plt.legend()
+Running comparison for Tolstoi_RNN
+Optimizers: SGD
+Runs per optimizer: 2
+Steps per run: 0
+Optuna trials per run: 20
+
+=== Running SGD ===
+Run 1/2
+running SGD
+Running: python -m benchmark.Tolstoi_RNN --opt SGD --steps 0 --trials 20 --runtime-limit 717 --step-hint 27000
+{'runtime': 14973.472853422165, 'attempts': 1, 'best_loss': 0.5774666513802688, 'loss_trajectory': [4.717291355133057, 2.1968395709991455, 1.7977303266525269, 1.7050150632858276, 1.6749716997146606, 1.694049596786499, 1.656373381614685, 1.6081242561340332, 1.554762840270996, 1.543109655380249, 1.5732558965682983, 1.6107529401779175, 1.4861729145050049, 1.4790457487106323, 1.4790689945220947, 1.5379908084869385, 1.4580696821212769, 1.493161678314209], 'test_accuracies': [0.0060887375397782025, 0.4043490938161356, 0.48956864470589695, 0.5186685031001435, 0.5340870147214208, 0.5419570101045156, 0.5499802309692092, 0.5558107316710409, 0.5584634381381167, 0.5625695092136698, 0.5655101680367617, 0.5675321246750349, 0.5704193327487319, 0.5722122413061194, 0.5737698426224023, 0.5752951565874562, 0.5763492363514673, 0.5774666513802688], 'grad_variances': [], 'config_str': '', 'mean_cond': 0.0, 'std_err_cond': None, 'memory_usage': None, 'steps': 0, 'optimizer': 'SGD', 'seed': 42, 'trials': 20, 'log_file': 'comparison_results/run_SGD_42_1757023660160.log', 'success': True}
+  ✓ Success - Loss: 0.5774666513802688
+Run 2/2
+running SGD
+Running: python -m benchmark.Tolstoi_RNN --opt SGD --steps 0 --trials 20 --runtime-limit 717 --step-hint 27000
+{'runtime': 14768.350466012955, 'attempts': 1, 'best_loss': 0.5778297756307963, 'loss_trajectory': [4.716028690338135, 2.1492297649383545, 1.8158588409423828, 1.7302521467208862, 1.6603115797042847, 1.6497087478637695, 1.6235802173614502, 1.5941115617752075, 1.6364727020263672, 1.5411664247512817, 1.5840208530426025, 1.571967363357544, 1.5583453178405762, 1.5797092914581299, 1.5423052310943604, 1.4512008428573608, 1.5048754215240479, 1.4758161306381226], 'test_accuracies': [0.013709729895546391, 0.4085191198753126, 0.49034586508101274, 0.5180305335469297, 0.5344422375568205, 0.5409877078769363, 0.5502736678369023, 0.555664137180961, 0.5588668750987676, 0.5635848255646413, 0.5659467289690667, 0.5691020583961057, 0.5704736820904356, 0.5726627768981213, 0.5746390912443025, 0.5758129936447833, 0.5775452007424232, 0.5778297756307963], 'grad_variances': [], 'config_str': '', 'mean_cond': 0.0, 'std_err_cond': None, 'memory_usage': None, 'steps': 0, 'optimizer': 'SGD', 'seed': 43, 'trials': 20, 'log_file': 'comparison_results/run_SGD_43_1757038638496.log', 'success': True}
+  ✓ Success - Loss: 0.5778297756307963
+
+=== Aggregating Results ===
+
+Results saved to: comparison_results
+Plots: comparison_results/Tolstoi_RNN_*.png
+slurmstepd: error: xgetaddrinfo: getaddrinfo(ml2:6817) failed: Name or service not known
+slurmstepd: error: slurm_set_addr: Unable to resolve "ml2"
+slurmstepd: error: xgetaddrinfo: getaddrinfo(ml2:6817) failed: Name or service not known
+slurmstepd: error: slurm_set_addr: Unable to resolve "ml2"
+slurmstepd: error: xgetaddrinfo: getaddrinfo(ml2:6817) failed: Name or service not known
+slurmstepd: error: slurm_set_addr: Unable to resolve "ml2"
+slurmstepd: error: xgetaddrinfo: getaddrinfo(ml2:6817) failed: Name or service not known
+slurmstepd: error: slurm_set_addr: Unable to resolve "ml2"
+slurmstepd: error: xgetaddrinfo: getaddrinfo(ml2:6817) failed: Name or service not known
+slurmstepd: error: slurm_set_addr: Unable to resolve "ml2"
+slurmstepd: error: xgetaddrinfo: getaddrinfo(ml2:6817) failed: Name or service not known
+slurmstepd: error: slurm_set_addr: Unable to resolve "ml2"
+slurmstepd: error: xgetaddrinfo: getaddrinfo(ml2:6817) failed: Name or service not known
+slurmstepd: error: slurm_set_addr: Unable to resolve "ml2"
+slurmstepd: error: xgetaddrinfo: getaddrinfo(ml2:6817) failed: Name or service not known
+slurmstepd: error: slurm_set_addr: Unable to resolve "ml2"
+slurmstepd: error: xgetaddrinfo: getaddrinfo(ml2:6817) failed: Name or service not known
+slurmstepd: error: slurm_set_addr: Unable to resolve "ml2"
+slurmstepd: error: xgetaddrinfo: getaddrinfo(ml2:6817) failed: Name or service not known
+slurmstepd: error: slurm_set_addr: Unable to resolve "ml2"
+slurmstepd: error: xgetaddrinfo: getaddrinfo(ml2:6817) failed: Name or service not known
+slurmstepd: error: slurm_set_addr: Unable to resolve "ml2"
+slurmstepd: error: xgetaddrinfo: getaddrinfo(ml2:6817) failed: Name or service not known
+slurmstepd: error: slurm_set_addr: Unable to resolve "ml2"
+slurmstepd: error: xgetaddrinfo: getaddrinfo(ml2:6817) failed: Name or service not known
+slurmstepd: error: slurm_set_addr: Unable to resolve "ml2"
+slurmstepd: error: xgetaddrinfo: getaddrinfo(ml2:6817) failed: Name or service not known
+slurmstepd: error: slurm_set_addr: Unable to resolve "ml2"
+slurmstepd: error: xgetaddrinfo: getaddrinfo(ml2:6817) failed: Name or service not known
+slurmstepd: error: slurm_set_addr: Unable to resolve "ml2"
+slurmstepd: error: xgetaddrinfo: getaddrinfo(ml2:6817) failed: Name or service not known
+slurmstepd: error: slurm_set_addr: Unable to resolve "ml2"
+slurmstepd: error: xgetaddrinfo: getaddrinfo(ml2:6817) failed: Name or service not known
+slurmstepd: error: slurm_set_addr: Unable to resolve "ml2"
+slurmstepd: error: xgetaddrinfo: getaddrinfo(ml2:6817) failed: Name or service not known
+slurmstepd: error: slurm_set_addr: Unable to resolve "ml2"
+slurmstepd: error: xgetaddrinfo: getaddrinfo(ml2:6817) failed: Name or service not known
+slurmstepd: error: slurm_set_addr: Unable to resolve "ml2"
+slurmstepd: error: xgetaddrinfo: getaddrinfo(ml2:6817) failed: Name or service not known
+slurmstepd: error: slurm_set_addr: Unable to resolve "ml2"
+slurmstepd: error: xgetaddrinfo: getaddrinfo(ml2:6817) failed: Name or service not known
+slurmstepd: error: slurm_set_addr: Unable to resolve "ml2"
+slurmstepd: error: xgetaddrinfo: getaddrinfo(ml2:6817) failed: Name or service not known
+slurmstepd: error: slurm_set_addr: Unable to resolve "ml2"
+slurmstepd: error: xgetaddrinfo: getaddrinfo(ml2:6817) failed: Name or service not known
+slurmstepd: error: slurm_set_addr: Unable to resolve "ml2"
+slurmstepd: error: xgetaddrinfo: getaddrinfo(ml2:6817) failed: Name or service not known
+slurmstepd: error: slurm_set_addr: Unable to resolve "ml2"
+slurmstepd: error: xgetaddrinfo: getaddrinfo(ml2:6817) failed: Name or service not known
+slurmstepd: error: slurm_set_addr: Unable to resolve "ml2"
+slurmstepd: error: xgetaddrinfo: getaddrinfo(ml2:6817) failed: Name or service not known
+slurmstepd: error: slurm_set_addr: Unable to resolve "ml2"
+slurmstepd: error: xgetaddrinfo: getaddrinfo(ml2:6817) failed: Name or service not known
+slurmstepd: error: slurm_set_addr: Unable to resolve "ml2"
+slurmstepd: error: xgetaddrinfo: getaddrinfo(ml2:6817) failed: Name or service not known
+slurmstepd: error: slurm_set_addr: Unable to resolve "ml2"
+slurmstepd: error: xgetaddrinfo: getaddrinfo(ml2:6817) failed: Name or service not known
+slurmstepd: error: slurm_set_addr: Unable to resolve "ml2"
+slurmstepd: error: xgetaddrinfo: getaddrinfo(ml2:6817) failed: Name or service not known
+slurmstepd: error: slurm_set_addr: Unable to resolve "ml2"
+slurmstepd: error: xgetaddrinfo: getaddrinfo(ml2:6817) failed: Name or service not known
+slurmstepd: error: slurm_set_addr: Unable to resolve "ml2"
+slurmstepd: error: xgetaddrinfo: getaddrinfo(ml2:6817) failed: Name or service not known
+slurmstepd: error: slurm_set_addr: Unable to resolve "ml2"
+slurmstepd: error: xgetaddrinfo: getaddrinfo(ml2:6817) failed: Name or service not known
+slurmstepd: error: slurm_set_addr: Unable to resolve "ml2"
+slurmstepd: error: xgetaddrinfo: getaddrinfo(ml2:6817) failed: Name or service not known
+slurmstepd: error: slurm_set_addr: Unable to resolve "ml2"
+slurmstepd: error: xgetaddrinfo: getaddrinfo(ml2:6817) failed: Name or service not known
+slurmstepd: error: slurm_set_addr: Unable to resolve "ml2"
+slurmstepd: error: xgetaddrinfo: getaddrinfo(ml2:6817) failed: Name or service not known
+slurmstepd: error: slurm_set_addr: Unable to resolve "ml2"
+slurmstepd: error: xgetaddrinfo: getaddrinfo(ml2:6817) failed: Name or service not known
+slurmstepd: error: slurm_set_addr: Unable to resolve "ml2"
+slurmstepd: error: xgetaddrinfo: getaddrinfo(ml2:6817) failed: Name or service not known
+slurmstepd: error: slurm_set_addr: Unable to resolve "ml2"
+slurmstepd: error: xgetaddrinfo: getaddrinfo(ml2:6817) failed: Name or service not known
+slurmstepd: error: slurm_set_addr: Unable to resolve "ml2"
+slurmstepd: error: xgetaddrinfo: getaddrinfo(ml2:6817) failed: Name or service not known
+slurmstepd: error: slurm_set_addr: Unable to resolve "ml2"
+slurmstepd: error: xgetaddrinfo: getaddrinfo(ml2:6817) failed: Name or service not known
+slurmstepd: error: slurm_set_addr: Unable to resolve "ml2"
+slurmstepd: error: xgetaddrinfo: getaddrinfo(ml2:6817) failed: Name or service not known
+slurmstepd: error: slurm_set_addr: Unable to resolve "ml2"
+slurmstepd: error: xgetaddrinfo: getaddrinfo(ml2:6817) failed: Name or service not known
+slurmstepd: error: slurm_set_addr: Unable to resolve "ml2"
+slurmstepd: error: xgetaddrinfo: getaddrinfo(ml2:6817) failed: Name or service not known
+slurmstepd: error: slurm_set_addr: Unable to resolve "ml2"
+slurmstepd: error: xgetaddrinfo: getaddrinfo(ml2:6817) failed: Name or service not known
+slurmstepd: error: slurm_set_addr: Unable to resolve "ml2"
+slurmstepd: error: xgetaddrinfo: getaddrinfo(ml2:6817) failed: Name or service not known
+slurmstepd: error: slurm_set_addr: Unable to resolve "ml2"
+slurmstepd: error: xgetaddrinfo: getaddrinfo(ml2:6817) failed: Name or service not known
+slurmstepd: error: slurm_set_addr: Unable to resolve "ml2"
+slurmstepd: error: xgetaddrinfo: getaddrinfo(ml2:6817) failed: Name or service not known
+slurmstepd: error: slurm_set_addr: Unable to resolve "ml2"
+slurmstepd: error: xgetaddrinfo: getaddrinfo(ml2:6817) failed: Name or service not known
+slurmstepd: error: slurm_set_addr: Unable to resolve "ml2"

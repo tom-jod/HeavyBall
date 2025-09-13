@@ -166,6 +166,7 @@ def main(
         trials=trials,
         estimate_condition_number=estimate_condition_number,
         test_loader=test_loader,
+        train_loader=trainloader,
         track_variance=track_variance,
         runtime_limit=runtime_limit,
         step_hint=step_hint

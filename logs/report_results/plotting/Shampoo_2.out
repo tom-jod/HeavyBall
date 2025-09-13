@@ -1,0 +1,22 @@
+/var/spool/slurmd/job21741/slurm_script: line 15: cd: HeavyBall: No such file or directory
+Current directory /home/tomjodrell/HeavyBall
+CUDA_VISIBLE_DEVICES 1
+/home/tomjodrell/HeavyBall/benchmark/benchmark_runner.py:289: UserWarning: No artists with labels found to put in legend.  Note that artists whose label start with an underscore are ignored when legend() is called with no argument.
+  plt.legend()
+Running comparison for MNIST
+Optimizers: ExternalDistributedShampoo
+Runs per optimizer: 1
+Steps per run: 27000
+Optuna trials per run: 20
+
+=== Running ExternalDistributedShampoo ===
+Run 1/1
+running ExternalDistributedShampoo
+Running: python -m benchmark.MNIST --opt ExternalDistributedShampoo --steps 27000 --trials 20 --runtime-limit 992500 --step-hint 27000
+{'runtime': 14113.366458654404, 'attempts': 1, 'best_loss': 0.9837, 'loss_trajectory': [2.2986509799957275, 0.11358992755413055, 0.014084838330745697, 0.002552866702899337, 0.0040726447477936745, 0.01364369597285986, 0.0031613598112016916, 0.0013550479197874665, 0.02840058133006096, 0.0010123810498043895, 0.00038200474227778614, 0.00032772161648608744, 0.0010931954020634294, 0.0002864249108824879, 0.00016324846365023404, 0.00019705398881342262, 0.005825381726026535, 0.0006502707838080823, 0.0008572172373533249, 0.00031529940315522254, 0.00037012313259765506, 0.00029263022588565946, 0.00025263242423534393, 0.0072707547806203365, 0.002837446518242359, 0.0006468819337897003, 0.0006444684695452452], 'test_accuracies': [0.0929, 0.9742, 0.9771, 0.9787, 0.9792, 0.9785, 0.9795, 0.9793, 0.9752, 0.9809, 0.9808, 0.9809, 0.9819, 0.9823, 0.9827, 0.9812, 0.9787, 0.9827, 0.9821, 0.9816, 0.982, 0.9824, 0.9828, 0.9765, 0.9829, 0.9837, 0.983], 'grad_variances': [], 'config_str': '', 'mean_cond': 0.0, 'std_err_cond': None, 'memory_usage': None, 'steps': 27000, 'optimizer': 'ExternalDistributedShampoo', 'seed': 42, 'trials': 20, 'log_file': 'comparison_results/run_ExternalDistributedShampoo_42_1757426761839.log', 'success': True}
+  ✓ Success - Loss: 0.9837
+
+=== Aggregating Results ===
+
+Results saved to: comparison_results
+Plots: comparison_results/MNIST_*.png

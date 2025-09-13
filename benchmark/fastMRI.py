@@ -22,95 +22,103 @@ torch._dynamo.config.disable = True
 
 # Import AlgoPerf fastMRI workload utilities
 from benchmark.algoperf.model import UNet
-
 app = typer.Typer(pretty_exceptions_enable=False)
 
+
 def _process_example(kspace, kspace_shape, target, target_shape, volume_max, seed):
-    """Generate a single example (slice from mri image)."""
+    """Preprocess one MRI slice (adapted from AlgoPerf)."""
     with tf.device('/CPU:0'):
-        # sample_mask
         num_cols = kspace_shape[1]
-        num_cols_float = tf.cast(num_cols, dtype=tf.float32)
-        
-        # choose_acceleration
-        center_fraction = tf.convert_to_tensor(0.08, dtype=tf.float32)
-        acceleration = tf.convert_to_tensor(4.0, dtype=tf.float32)
-        
-        num_low_frequencies = tf.cast(
-            num_cols_float * center_fraction, dtype=tf.int32)
-        
-        # calculate_center_mask
+
+        # --------------------------
+        # 1. Create sampling mask
+        # --------------------------
+        center_fraction = 0.08
+        acceleration = 4
+
+        num_low_frequencies = int(round(num_cols * center_fraction))
+        prob = (num_cols / acceleration - num_low_frequencies) / (
+            num_cols - num_low_frequencies
+        )
+
+        # Center mask
         mask = tf.zeros(num_cols, dtype=tf.float32)
         pad = (num_cols - num_low_frequencies + 1) // 2
         mask = tf.tensor_scatter_nd_update(
             mask,
             tf.reshape(tf.range(pad, pad + num_low_frequencies), (-1, 1)),
-            tf.ones(num_low_frequencies))
-        
-        # reshape_mask
+            tf.ones(num_low_frequencies),
+        )
         center_mask = tf.reshape(mask, (1, num_cols))
-        
-        # calculate_acceleration_mask
-        num_low_frequencies_float = tf.cast(num_low_frequencies, dtype=tf.float32)
-        prob = (num_cols_float / acceleration - num_low_frequencies_float) / (
-            num_cols_float - num_low_frequencies_float)
-        
+
+        # Acceleration mask (stateless RNG per-seed)
         mask = tf.cast(
-            tf.random.stateless_uniform((num_cols,), seed) < prob, dtype=tf.float32)
-        acceleration_mask = tf.reshape(mask, (1, num_cols))
-        
-        mask = tf.math.maximum(center_mask, acceleration_mask)
+            tf.random.stateless_uniform((num_cols,), seed) < prob,
+            dtype=tf.float32,
+        )
+        accel_mask = tf.reshape(mask, (1, num_cols))
+
+        mask = tf.math.maximum(center_mask, accel_mask)
         mask = tf.cast(mask, dtype=tf.complex64)
-        
-        # apply_mask
-        masked_kspace = kspace * mask + 0.0
-        
-        # ifft2c
-        shifted_kspace = tf.signal.ifftshift(masked_kspace, axes=(0, 1))
-        shifted_image = tf.signal.ifft2d(shifted_kspace)
-        image = tf.signal.fftshift(shifted_image, axes=(0, 1))
-        scaling_norm = tf.cast(
-            tf.math.sqrt(
-                tf.cast(tf.math.reduce_prod(tf.shape(kspace)[-2:]), 'float32')),
-            kspace.dtype)
+
+        # --------------------------
+        # 2. Apply mask in k-space
+        # --------------------------
+        masked_kspace = kspace * mask
+
+        shifted = tf.signal.ifftshift(masked_kspace, axes=(0, 1))
+        image = tf.signal.ifft2d(shifted)
+        image = tf.signal.fftshift(image, axes=(0, 1))
+
+        scaling_norm = tf.sqrt(
+            tf.cast(tf.reduce_prod(tf.shape(kspace)[-2:]), tf.float32)
+        )
+        scaling_norm = tf.cast(scaling_norm, image.dtype)
         image = image * scaling_norm
+
+        # Convert complex -> 2 channels
         image = tf.stack((tf.math.real(image), tf.math.imag(image)), axis=-1)
-        
-        # complex_center_crop
+
+        # --------------------------
+        # 3. Center crop to target shape
+        # --------------------------
         w_from = (kspace_shape[0] - target_shape[0]) // 2
         h_from = (kspace_shape[1] - target_shape[1]) // 2
         w_to = w_from + target_shape[0]
         h_to = h_from + target_shape[1]
-        
-        image = image[..., w_from:w_to, h_from:h_to, :]
-        
-        # complex_abs
-        abs_image = tf.math.sqrt(tf.math.reduce_sum(image**2, axis=-1))
-        
-        # normalize_instance
-        mean = tf.math.reduce_mean(abs_image)
-        std = tf.math.reduce_std(abs_image)
-        norm_image = (abs_image - mean) / std
-        
-        # clip_image
-        image = tf.clip_by_value(norm_image, -6, 6)
-        
-        # process target
-        norm_target = (target - mean) / std
-        target = tf.clip_by_value(norm_target, -6, 6)
-        
 
+        image = image[w_from:w_to, h_from:h_to, :]
+
+        # --------------------------
+        # 4. Convert to magnitude image
+        # --------------------------
+        input_image = tf.sqrt(tf.reduce_sum(tf.square(image), axis=-1))
+
+        # --------------------------
+        # 5. Normalize input and target separately
+        # --------------------------
+        # Input normalization
+        mean = tf.reduce_mean(input_image)
+        std = tf.math.reduce_std(input_image)
+        norm_input = (input_image - mean) / (std + 1e-8)
+        norm_input = tf.clip_by_value(norm_input, -6, 6)
+
+        # Target normalization (independent)
+        target_mean = tf.reduce_mean(target)
+        target_std = tf.math.reduce_std(target)
+        norm_target = (target - target_mean) / (target_std + 1e-8)
+
+        # --------------------------
+        # Final dict
+        # --------------------------
         result = {
-            'inputs': image,
-            'targets': target,
-            'mean': mean,
-            'std': std,
-            'volume_max': volume_max,
+            "inputs": norm_input,
+            "targets": norm_target,
+            "mean": mean,
+            "std": std,
+            "volume_max": volume_max,
         }
-        # Clean up intermediate tensors
-        del kspace, target, mask, masked_kspace, shifted_kspace, shifted_image
-        del image, abs_image, norm_image, norm_target
-        
+
         return result
 
 def _h5_to_examples(path, log=False):
@@ -220,11 +228,10 @@ def tf_to_torch_batch_efficient(tf_batch):
     return inputs, targets
 
 class FastMRITestDataset:
-    """Wrapper to make the test iterator compatible with the evaluation function - DEBUG VERSION"""
+    """Iterator wrapper for FastMRI test set that preserves normalization stats."""
     def __init__(self, test_iterator):
         self.test_iterator = test_iterator
         self.count = 0
-        print(f"DEBUG: FastMRITestDataset initialized with iterator type: {type(test_iterator)}")
     
     def __iter__(self):
         self.count = 0
@@ -234,47 +241,49 @@ class FastMRITestDataset:
         self.count += 1
         try:
             batch_data = next(self.test_iterator)
-    
         except StopIteration:
-            print("DEBUG: StopIteration in FastMRITestDataset")
             raise StopIteration
         except Exception as e:
-
             import traceback
             traceback.print_exc()
             raise
         
-        # Convert efficiently
-        try:
-            if isinstance(batch_data, dict):
-                inputs, targets = tf_to_torch_batch_efficient(batch_data)
-           
-            else:
-                # Handle non-dict case
-                inputs = batch_data
-                if hasattr(inputs, 'numpy'):
-                    inputs = torch.from_numpy(inputs.numpy()).float()
-                
-                # Fix dimension handling here too
-                if inputs.ndim == 2:  # [H, W]
-                    inputs = inputs.unsqueeze(0).unsqueeze(0)  # [1, 1, H, W]
-                elif inputs.ndim == 3:  # [B, H, W] or [H, W, C]
-                    if inputs.shape[-1] == 1:  # [H, W, 1] -> [1, 1, H, W]
-                        inputs = inputs.squeeze(-1).unsqueeze(0).unsqueeze(0)
-                    else:  # [B, H, W] -> [B, 1, H, W]
-                        inputs = inputs.unsqueeze(1)
-                
-                targets = inputs.clone()  # For unsupervised case
-               
-            
-            
-            return inputs, targets
-            
-        except Exception as e:
-            print(f"DEBUG: Error in data conversion: {e}")
-            import traceback
-            traceback.print_exc()
-            raise
+        if isinstance(batch_data, dict):
+            # Convert inputs and targets to torch tensors
+            inputs, targets = tf_to_torch_batch_efficient(batch_data)
+
+            # Keep normalization info
+            mean = batch_data["mean"]
+            std = batch_data["std"]
+            volume_max = batch_data["volume_max"]
+
+            # Convert scalars to torch tensors
+            if not torch.is_tensor(mean):
+                mean = torch.tensor(mean, dtype=torch.float32)
+            if not torch.is_tensor(std):
+                std = torch.tensor(std, dtype=torch.float32)
+            if not torch.is_tensor(volume_max):
+                volume_max = torch.tensor(volume_max, dtype=torch.float32)
+
+            return inputs, targets, mean, std, volume_max
+
+        else:
+            # Fallback: treat inputs as numpy/tensor, assume no stats
+            inputs = batch_data
+            if hasattr(inputs, "numpy"):
+                inputs = torch.from_numpy(inputs.numpy()).float()
+            if inputs.ndim == 2:  # [H, W]
+                inputs = inputs.unsqueeze(0).unsqueeze(0)
+            elif inputs.ndim == 3:  # [B, H, W]
+                inputs = inputs.unsqueeze(1)
+
+            targets = inputs.clone()
+            mean = torch.tensor(0.0)
+            std = torch.tensor(1.0)
+            volume_max = torch.tensor(1.0)
+
+            return inputs, targets, mean, std, volume_max
+
     
 @app.command()
 def main(

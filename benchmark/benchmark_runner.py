@@ -45,7 +45,7 @@ def run_single_benchmark(script_path, optimizer, steps, trials, seed, output_dir
             capture_output=True,
             text=True,
             timeout=72*3600,  # 24 hour timeout
-            env={**os.environ, "CUDA_VISIBLE_DEVICES": "1"}  # Ensure single GPU
+            env={**os.environ, "CUDA_VISIBLE_DEVICES": "0"}  # Ensure single GPU
         )
         
         # Save the full output
@@ -220,7 +220,7 @@ def aggregate_and_plot(results, benchmark_name, output_dir):
     # Save summary to CSV
     summary_df = pd.DataFrame(summary_stats)
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    summary_df.to_csv(f"{output_dir}/{benchmark_name}_summary_{timestamp}.csv", index=False)
+ #   summary_df.to_csv(f"{output_dir}/{benchmark_name}_summary_{timestamp}.csv", index=False)
     
     # Plot loss trajectories
     plt.figure(figsize=(12, 8))
@@ -330,7 +330,7 @@ def aggregate_and_plot(results, benchmark_name, output_dir):
     
     # Save detailed results
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    df.to_csv(f"{output_dir}/{benchmark_name}_detailed_results_{timestamp}.csv", index=False)
+ #   df.to_csv(f"{output_dir}/{benchmark_name}_detailed_results_{timestamp}.csv", index=False)
     
 @app.command()
 def main(

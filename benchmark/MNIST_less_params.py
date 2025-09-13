@@ -47,6 +47,20 @@ class ModelLogReg(nn.Module):
         x = self.flatten(x)
         x = self.fc(x)
         return F.log_softmax(x, dim=1)
+    
+class ModelWide(nn.Module):
+    """ lower condition number: single linear classifier."""
+    def __init__(self):
+        super().__init__()
+        self.flatten = nn.Flatten()
+        self.fc1 = nn.Linear(28 * 28, 20)
+        self.fc2 = nn.Linear(20, 10)
+
+    def forward(self, x):
+        x = self.flatten(x)
+        x = F.relu(self.fc1(x))
+        x = F.relu(self.fc2(x))
+        return F.log_softmax(x, dim=1)
 
 
 class ModelDeepSigmoid(nn.Module):
@@ -65,6 +79,21 @@ class ModelDeepSigmoid(nn.Module):
         x = self.net(x)
         return F.log_softmax(x, dim=1)
 
+class ModelDeeperSigmoid(nn.Module):
+    """Much higher condition number: deep narrow sigmoid MLP."""
+    def __init__(self, hidden_size: int = 16, depth: int = 10):
+        super().__init__()
+        self.flatten = nn.Flatten()
+        layers = [nn.Linear(28 * 28, hidden_size), nn.Sigmoid()]
+        for _ in range(depth - 2):
+            layers += [nn.Linear(hidden_size, hidden_size), nn.Sigmoid()]
+        layers += [nn.Linear(hidden_size, 10)]
+        self.net = nn.Sequential(*layers)
+
+    def forward(self, x):
+        x = self.flatten(x)
+        x = self.net(x)
+        return F.log_softmax(x, dim=1)
 
 def set_deterministic_weights(model, seed=42):
     """Initialize model with deterministic weights using a fixed seed"""
@@ -97,7 +126,7 @@ def main(
     track_variance: bool = False,
     runtime_limit: int = 3600 * 24,
     step_hint: int = 317000,
-    model_type: str = "logreg" # "Choose: mlp | logreg | deepsigmoid")
+    model_type: str = "deepsigmoid" # "Choose: mlp | logreg | deepsigmoid | deepersigmoid | wide")
 ):
     dtype = [getattr(torch, d) for d in dtype]
 
@@ -108,6 +137,10 @@ def main(
         model = ModelLogReg().cuda()
     elif model_type == "deepsigmoid":
         model = ModelDeepSigmoid(hidden_size=hidden_size).cuda()
+    elif model_type == "deepersigmoid":
+        model = ModelDeeperSigmoid(hidden_size=8).cuda()
+    elif model_type == "wide":
+        model = ModelWide().cuda()
     else:
         raise ValueError(f"Unknown model_type: {model_type}")
     

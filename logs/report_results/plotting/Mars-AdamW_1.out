@@ -1,0 +1,27 @@
+/var/spool/slurmd/job21648/slurm_script: line 15: cd: HeavyBall: No such file or directory
+Current directory /home/tomjodrell/HeavyBall
+CUDA_VISIBLE_DEVICES 1
+/home/tomjodrell/HeavyBall/benchmark/benchmark_runner.py:289: UserWarning: No artists with labels found to put in legend.  Note that artists whose label start with an underscore are ignored when legend() is called with no argument.
+  plt.legend()
+Running comparison for MNIST
+Optimizers: mars-AdamW
+Runs per optimizer: 2
+Steps per run: 27000
+Optuna trials per run: 20
+
+=== Running mars-AdamW ===
+Run 1/2
+running mars-AdamW
+Running: python -m benchmark.MNIST --opt mars-AdamW --steps 27000 --trials 20 --runtime-limit 992500 --step-hint 27000
+{'runtime': 15019.826828241348, 'attempts': 1, 'best_loss': 0.9851, 'loss_trajectory': [2.3119068145751953, 0.2029906064271927, 0.08656400442123413, 0.03328616917133331, 0.040118295699357986, 0.049398329108953476, 0.038574378937482834, 0.11610831320285797, 0.104490727186203, 0.11826984584331512, 0.03110661916434765, 0.03810429200530052, 0.1491280496120453, 0.09880159795284271, 0.025360053405165672, 0.12085136771202087, 0.02524159662425518, 0.027437441051006317, 0.014040782116353512, 0.011038310825824738, 0.023891184478998184, 0.0036147520877420902, 0.010455964133143425, 0.00777839682996273, 0.0031303949654102325, 0.003084798576310277, 0.00514952652156353], 'test_accuracies': [0.0977, 0.9541, 0.9599, 0.9727, 0.9683, 0.9679, 0.9697, 0.9721, 0.9652, 0.9664, 0.9714, 0.9745, 0.9743, 0.972, 0.9767, 0.9777, 0.9804, 0.9806, 0.9786, 0.9806, 0.9816, 0.9842, 0.9842, 0.9844, 0.9849, 0.985, 0.9851], 'grad_variances': [], 'config_str': '', 'mean_cond': 0.0, 'std_err_cond': None, 'memory_usage': None, 'steps': 27000, 'optimizer': 'mars-AdamW', 'seed': 42, 'trials': 20, 'log_file': 'comparison_results/run_mars-AdamW_42_1757284343787.log', 'success': True}
+  ✓ Success - Loss: 0.9851
+Run 2/2
+running mars-AdamW
+Running: python -m benchmark.MNIST --opt mars-AdamW --steps 27000 --trials 20 --runtime-limit 992500 --step-hint 27000
+{'runtime': 14006.915192604065, 'attempts': 1, 'best_loss': 0.9863, 'loss_trajectory': [2.305312395095825, 0.08468078821897507, 0.07493767142295837, 0.10599335283041, 0.013915825635194778, 0.04397551715373993, 0.039067592471838, 0.062216866761446, 0.06577521562576294, 0.06830105930566788, 0.015300458297133446, 0.01725100912153721, 0.009509281255304813, 0.02376079559326172, 0.0008851177408359945, 0.0003243161481805146, 0.0011924223508685827, 2.8328528060228564e-05, 0.00016112955927383155, 4.547433854895644e-05, 5.267254891805351e-05, 7.13045010343194e-05, 4.395741052576341e-05, 0.0001331825042143464, 0.00010828994709299877, 5.3673837101086974e-05, 6.875080725876614e-05], 'test_accuracies': [0.0879, 0.9556, 0.9593, 0.964, 0.9697, 0.9728, 0.9728, 0.969, 0.9746, 0.9761, 0.9761, 0.9735, 0.9792, 0.9826, 0.9796, 0.9835, 0.9855, 0.986, 0.9858, 0.9858, 0.9859, 0.9861, 0.9856, 0.9863, 0.9862, 0.9861, 0.9861], 'grad_variances': [], 'config_str': '', 'mean_cond': 0.0, 'std_err_cond': None, 'memory_usage': None, 'steps': 27000, 'optimizer': 'mars-AdamW', 'seed': 43, 'trials': 20, 'log_file': 'comparison_results/run_mars-AdamW_43_1757299368367.log', 'success': True}
+  ✓ Success - Loss: 0.9863
+
+=== Aggregating Results ===
+
+Results saved to: comparison_results
+Plots: comparison_results/MNIST_*.png

@@ -20,9 +20,8 @@ app = typer.Typer()
 torch._dynamo.config.disable = True
 
 
-# A very deep plain CNN for SVHN (no BatchNorm, no residuals)
 class DeepCNN(nn.Module):
-    def __init__(self, num_classes: int = 10, channels: int = 32, depth: int = 12):
+    def __init__(self, num_classes: int = 10, channels: int = 16, depth: int = 5):
         super().__init__()
         layers = []
         in_channels = 3  # SVHN has 3-channel RGB input
@@ -40,7 +39,38 @@ class DeepCNN(nn.Module):
         x = torch.flatten(x, 1)
         x = self.fc(x)
         return F.log_softmax(x, dim=1)
+    
+class SVHNGrayMLP(nn.Module):
+    def __init__(self, hidden_size: int = 128):
+        super().__init__()
+        self.flatten = nn.Flatten()
+        self.fc1 = nn.Linear(32 * 32, hidden_size)  # one channel
+        self.fc2 = nn.Linear(hidden_size, hidden_size)
+        self.fc3 = nn.Linear(hidden_size, 10)
 
+    def forward(self, x):
+        # average RGB to grayscale: shape [B, 1, 32, 32]
+        x = x.mean(dim=1, keepdim=True)
+        x = self.flatten(x)
+        x = F.relu(self.fc1(x))
+        x = F.relu(self.fc2(x))
+        x = self.fc3(x)
+        return F.log_softmax(x, dim=1)
+
+class SVHNFlatMLP(nn.Module):
+    def __init__(self, hidden_size: int = 128):
+        super().__init__()
+        self.flatten = nn.Flatten()
+        self.fc1 = nn.Linear(3 * 32 * 32, hidden_size)  # 3 channels
+        self.fc2 = nn.Linear(hidden_size, hidden_size)
+        self.fc3 = nn.Linear(hidden_size, 10)
+
+    def forward(self, x):
+        x = self.flatten(x)
+        x = F.relu(self.fc1(x))
+        x = F.relu(self.fc2(x))
+        x = self.fc3(x)
+        return F.log_softmax(x, dim=1)
 
 def set_deterministic_weights(model, seed=42):
     """Initialize model with deterministic weights using a fixed seed"""
@@ -60,7 +90,7 @@ def set_deterministic_weights(model, seed=42):
 def main(
     method: List[str] = typer.Option(["qr"], help="Eigenvector method to use (for SOAP)"),
     dtype: List[str] = typer.Option(["float32"], help="Data type to use"),
-    channels: int = 32,
+    channels: int = 12,
     depth: int = 12,
     batch: int = 128,
     steps: int = 0,
@@ -68,7 +98,7 @@ def main(
     opt: List[str] = typer.Option(["ForeachSOAP"], help="Optimizers to use"),
     win_condition_multiplier: float = 1.0,
     trials: int = 10,
-    estimate_condition_number: bool = False,
+    estimate_condition_number: bool = True,
     test_loader: bool = None,
     track_variance: bool = False,
     runtime_limit: int = 3600 * 24,
@@ -76,8 +106,8 @@ def main(
 ):
     dtype = [getattr(torch, d) for d in dtype]
 
-    model = DeepCNN(num_classes=10, channels=channels, depth=depth).cuda()
-
+   # model = DeepCNN(num_classes=10, channels=channels, depth=depth).cuda()
+    model = SVHNFlatMLP(hidden_size=16).cuda()
     # SVHN normalization (roughly like CIFAR)
     transform = transforms.Compose(
         [

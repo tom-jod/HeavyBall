@@ -2,13 +2,13 @@ import os
 import pandas as pd
 import matplotlib.pyplot as plt
 
-plt.rcParams['font.size'] = 15
+plt.rcParams['font.size'] = 10
 plt.rcParams['font.family'] = 'serif'
 
 # path to your folder of CSVs
-folder = "eigenspectrum_csvs/lanczos_only"
+folder = "eigenspectrum_csvs/benchmarks"
 
-plt.figure()
+plt.figure(figsize=(8, 5))
 color_map = {
     "Linear Regression": "C0",   # blue 
     "MNIST Small MLP": "C1",                 # orange
@@ -16,10 +16,11 @@ color_map = {
     "Deeper Sigmoid": "C3",        # green
     "MNIST": "C4",
     "SVHN Pooled": "C5",
+    "SVHN CNN": "C0",
     "SVHN ": "C5",
     "Tolstoi": "C2",
-    "CIFAR10-wide": "C7",
-    "CIFAR100": "C3",
+    "C10-wide": "C7",
+    "C100": "C3",
 
 }
 
@@ -45,9 +46,10 @@ for file in os.listdir(folder):
 
 plt.xlabel("Steps (x1000)")
 plt.ylabel("Effective condition number")
-#plt.legend()
+plt.legend(loc = "lower center", ncols=5)
 plt.yscale("log")
 plt.xlim((0, 9))
+#plt.ylim((1,600))
 #plt.ylim((50,100000))
 plt.tight_layout()
-plt.savefig("compare_effective_condition_numbers_lanczos_thresh", dpi=500)
+plt.savefig("compare_effective_condition_numbers_benchmarks", dpi=500)

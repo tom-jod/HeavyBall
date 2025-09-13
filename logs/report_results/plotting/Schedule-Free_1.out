@@ -1,0 +1,27 @@
+/var/spool/slurmd/job21649/slurm_script: line 15: cd: HeavyBall: No such file or directory
+Current directory /home/tomjodrell/HeavyBall
+CUDA_VISIBLE_DEVICES 1
+/home/tomjodrell/HeavyBall/benchmark/benchmark_runner.py:289: UserWarning: No artists with labels found to put in legend.  Note that artists whose label start with an underscore are ignored when legend() is called with no argument.
+  plt.legend()
+Running comparison for MNIST
+Optimizers: SFAdamW
+Runs per optimizer: 2
+Steps per run: 27000
+Optuna trials per run: 20
+
+=== Running SFAdamW ===
+Run 1/2
+running SFAdamW
+Running: python -m benchmark.MNIST --opt SFAdamW --steps 27000 --trials 20 --runtime-limit 992500 --step-hint 27000
+{'runtime': 15812.436317205429, 'attempts': 1, 'best_loss': 0.9831, 'loss_trajectory': [2.2860445976257324, 0.1607416570186615, 0.09778117388486862, 0.02536960318684578, 0.022193463519215584, 0.005099177360534668, 0.011366580612957478, 0.020662736147642136, 0.004035460762679577, 0.005684703588485718, 0.0024318192154169083, 0.00027294375468045473, 0.003013401059433818, 0.002055628225207329, 0.0005765586975030601, 0.0007604671409353614, 0.0004256073443684727, 0.00013406587822828442, 0.00023289842647500336, 0.00011371430446160957, 0.00017761669005267322, 0.000107458712591324, 5.933816282777116e-05, 4.611166878021322e-05, 2.9551241823355667e-05, 2.236868385807611e-05, 1.9402499674470164e-05], 'test_accuracies': [0.0928, 0.952, 0.9721, 0.9771, 0.9781, 0.9795, 0.9783, 0.9793, 0.9805, 0.9798, 0.9812, 0.9819, 0.9801, 0.9803, 0.9813, 0.9827, 0.9831, 0.9827, 0.9831, 0.9824, 0.9822, 0.9818, 0.9823, 0.9825, 0.9825, 0.9825, 0.9827], 'grad_variances': [], 'config_str': '', 'mean_cond': 0.0, 'std_err_cond': None, 'memory_usage': None, 'steps': 27000, 'optimizer': 'SFAdamW', 'seed': 42, 'trials': 20, 'log_file': 'comparison_results/run_SFAdamW_42_1757284351786.log', 'success': True}
+  ✓ Success - Loss: 0.9831
+Run 2/2
+running SFAdamW
+Running: python -m benchmark.MNIST --opt SFAdamW --steps 27000 --trials 20 --runtime-limit 992500 --step-hint 27000
+{'runtime': 16237.669922351837, 'attempts': 1, 'best_loss': 0.9831, 'loss_trajectory': [2.3049697875976562, 0.12033332884311676, 0.13879773020744324, 0.037280891090631485, 0.023640044033527374, 0.08354555815458298, 0.010870806872844696, 0.013083172962069511, 0.00526867900043726, 0.006004400551319122, 0.0024795641656965017, 0.002289524767547846, 0.0010547284036874771, 0.00047028958215378225, 0.0004553101898636669, 0.0005180720472708344, 0.0007451893179677427, 0.00011370201536919922, 0.00028188416035845876, 8.671227988088503e-05, 1.4225468476070091e-05, 0.00010727638436947018, 5.6462882639607415e-05, 1.7441196177969687e-05, 2.226142169092782e-05, 1.9014829376828857e-05, 4.323047505749855e-06], 'test_accuracies': [0.0798, 0.95, 0.972, 0.9771, 0.9793, 0.9808, 0.9797, 0.9795, 0.9819, 0.9826, 0.9823, 0.9809, 0.9815, 0.9824, 0.9819, 0.9826, 0.9824, 0.9831, 0.9829, 0.9825, 0.9829, 0.9827, 0.9821, 0.9821, 0.9824, 0.9824, 0.9825], 'grad_variances': [], 'config_str': '', 'mean_cond': 0.0, 'std_err_cond': None, 'memory_usage': None, 'steps': 27000, 'optimizer': 'SFAdamW', 'seed': 43, 'trials': 20, 'log_file': 'comparison_results/run_SFAdamW_43_1757300169023.log', 'success': True}
+  ✓ Success - Loss: 0.9831
+
+=== Aggregating Results ===
+
+Results saved to: comparison_results
+Plots: comparison_results/MNIST_*.png

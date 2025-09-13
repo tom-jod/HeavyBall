@@ -87,6 +87,38 @@ class Model(nn.Module):
         out = self.linear(out)
         return out
 
+class FlatMLP(nn.Module):
+    def __init__(self, hidden_size: int = 128):
+        super().__init__()
+        self.flatten = nn.Flatten()
+        self.fc1 = nn.Linear(3 * 32 * 32, hidden_size)  # 3 channels
+        self.fc2 = nn.Linear(hidden_size, hidden_size)
+        self.fc3 = nn.Linear(hidden_size, 10)
+
+    def forward(self, x):
+        x = self.flatten(x)
+        x = F.relu(self.fc1(x))
+        x = F.relu(self.fc2(x))
+        x = self.fc3(x)
+        return F.log_softmax(x, dim=1)
+
+class GrayMLP(nn.Module):
+    def __init__(self, hidden_size: int = 128):
+        super().__init__()
+        self.flatten = nn.Flatten()
+        self.fc1 = nn.Linear(32 * 32, hidden_size)  # one channel
+        self.fc2 = nn.Linear(hidden_size, hidden_size)
+        self.fc3 = nn.Linear(hidden_size, 10)
+
+    def forward(self, x):
+        # average RGB to grayscale: shape [B, 1, 32, 32]
+        x = x.mean(dim=1, keepdim=True)
+        x = self.flatten(x)
+        x = F.relu(self.fc1(x))
+        x = F.relu(self.fc2(x))
+        x = self.fc3(x)
+        return F.log_softmax(x, dim=1)
+
 
 @app.command()
 def main(
@@ -104,13 +136,13 @@ def main(
     trials: int = 10,
     estimate_condition_number: bool = False,
     test_loader: bool = None,
-    track_variance: bool = False,
+    track_variance: bool = True,
     runtime_limit: int = 3600 * 24,
     step_hint: int = 67000
 ):
     dtype = [getattr(torch, d) for d in dtype]
-    model = Model(depth, widen_factor, dropout_rate, num_classes).cuda()
-
+   # model = Model(depth, widen_factor, dropout_rate, num_classes).cuda()
+    model = GrayMLP(16).cuda()
     # CIFAR-100 data loading with enhanced augmentation
     transform_train = transforms.Compose([
         transforms.RandomCrop(32, padding=4),

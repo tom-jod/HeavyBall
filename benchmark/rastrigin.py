@@ -9,9 +9,9 @@ import torch
 import torch.backends.opt_einsum
 import typer
 from torch import nn
-from utils import Plotter
+#from utils import Plotter
 
-from benchmark.utils import SkipConfig, loss_win_condition, trial
+from benchmark.utils import SkipConfig, loss_win_condition, trial, Plotter
 from heavyball.utils import set_torch
 
 app = typer.Typer(pretty_exceptions_enable=False)
@@ -50,6 +50,11 @@ def main(
     win_condition_multiplier: float = 1.0,
     size: int = 2,
     config: Optional[str] = None,
+    estimate_condition_number: bool = True,
+    test_loader: bool = None,
+    track_variance: bool = False,
+    runtime_limit: int = 3600 * 24,
+    step_hint: int = 317000
 ):
     if config is not None and config != "trivial":
         raise SkipConfig("'config' must be 'trivial'.")
@@ -100,6 +105,12 @@ def main(
         base_lr=1e-4,
         trials=trials,
         return_best=show_image,
+        estimate_condition_number=estimate_condition_number,
+        test_loader=test_loader,
+        train_loader=None,
+        track_variance=track_variance,
+        runtime_limit=runtime_limit,
+        step_hint=step_hint
     )
 
     if not show_image:

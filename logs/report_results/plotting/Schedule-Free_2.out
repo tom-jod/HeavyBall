@@ -1,0 +1,22 @@
+/var/spool/slurmd/job20849/slurm_script: line 15: cd: HeavyBall: No such file or directory
+Current directory /home/tomjodrell/HeavyBall
+CUDA_VISIBLE_DEVICES 2
+/home/tomjodrell/HeavyBall/benchmark/benchmark_runner.py:289: UserWarning: No artists with labels found to put in legend.  Note that artists whose label start with an underscore are ignored when legend() is called with no argument.
+  plt.legend()
+Running comparison for MNIST
+Optimizers: SFAdamW
+Runs per optimizer: 1
+Steps per run: 27000
+Optuna trials per run: 20
+
+=== Running SFAdamW ===
+Run 1/1
+running SFAdamW
+Running: python -m benchmark.MNIST --opt SFAdamW --steps 27000 --trials 20 --runtime-limit 7200 --step-hint 27000
+{'runtime': 8148.021554708481, 'attempts': 1, 'best_loss': 0.9812, 'loss_trajectory': [2.3233377933502197, 0.06466042250394821, 0.08440054953098297, 0.016325220465660095, 0.009288475848734379, 0.0018640458583831787, 0.008712679147720337, 0.000347490597050637, 0.0011718301102519035, 0.0018253957387059927, 0.0003134900180157274, 5.759671694249846e-05, 0.002553977770730853, 1.4919345630914904e-05, 7.546063716290519e-05, 3.983083661296405e-05, 0.000277873215964064, 7.939746865304187e-06, 3.6658807403000537e-06, 0.00010330812074244022, 6.267709409257805e-07, 0.00019322572916280478, 7.766900580463698e-07, 1.6298101002121257e-07, 1.9557749197929297e-08, 1.9557759856070334e-08, 8.754398805876917e-08], 'test_accuracies': [0.0956, 0.9597, 0.9724, 0.9734, 0.9793, 0.9806, 0.9791, 0.9771, 0.9762, 0.9788, 0.9775, 0.9785, 0.9791, 0.9798, 0.9792, 0.9792, 0.9799, 0.9804, 0.9812, 0.9809, 0.9798, 0.9796, 0.9803, 0.9793, 0.9791, 0.9787, 0.9797], 'grad_variances': [], 'config_str': '', 'mean_cond': 0.0, 'std_err_cond': None, 'memory_usage': None, 'steps': 27000, 'optimizer': 'SFAdamW', 'seed': 42, 'trials': 20, 'log_file': 'comparison_results/run_SFAdamW_42_1755719324788.log', 'success': True}
+  ✓ Success - Loss: 0.9812
+
+=== Aggregating Results ===
+
+Results saved to: comparison_results
+Plots: comparison_results/MNIST_*.png
