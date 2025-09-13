@@ -6,7 +6,7 @@
 pip install heavyball
 ```
 
-**Basic usage:**
+**Basic optimizer usage:**
 ```python
 import torch
 from torch import nn
