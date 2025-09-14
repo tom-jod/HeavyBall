@@ -8,7 +8,7 @@ import typer
 from torch.nn import functional as F
 from torchvision import datasets, transforms
 
-from benchmark.utils import loss_win_condition, trial
+from benchmark.utils_real_world_benchmarks import loss_win_condition, trial
 from heavyball.utils import set_torch
 
 app = typer.Typer(pretty_exceptions_enable=False)
@@ -24,17 +24,13 @@ class Model(nn.Module):
         super().__init__()
         self.flatten = nn.Flatten()
         self.fc1 = nn.Linear(28 * 28, hidden_size)
-        #self.dropout1 = nn.Dropout(0.25)
         self.fc2 = nn.Linear(hidden_size, hidden_size)
-        #self.dropout2 = nn.Dropout(0.5)
         self.fc3 = nn.Linear(hidden_size, 10)
     
     def forward(self, x):
         x = self.flatten(x)
         x = F.relu(self.fc1(x))
-        #x = self.dropout1(x)
         x = F.relu(self.fc2(x))
-        #x = self.dropout2(x)
         x = self.fc3(x)
         return F.log_softmax(x, dim=1)
 
@@ -68,7 +64,8 @@ def main(
     test_loader: bool = None,
     track_variance: bool = False,
     runtime_limit: int = 3600 * 24,
-    step_hint: int = 317000
+    step_hint: int = 27000,
+    use_fixed_hypers: bool = False
 ):
     
     dtype = [getattr(torch, d) for d in dtype]
@@ -121,12 +118,10 @@ def main(
         
         return batch_data.cuda(), batch_targets.cuda()
     
- 
-    # Custom loss function that matches the expected signature
+
     def loss_fn(output, target):
         return F.nll_loss(output, target)
     
-    win_target = 1 - 0.9851
 
     trial(
         model,
@@ -140,8 +135,8 @@ def main(
         batch,
         weight_decay,
         method[0],
-        128,  # sequence parameter (not really applicable for MNIST, but required)
-        1,    # some other parameter
+        128,  
+        1,    
         failure_threshold=10,
         base_lr=1e-3,
         trials=trials,
@@ -150,10 +145,10 @@ def main(
         train_loader=train_loader,
         track_variance=track_variance,
         runtime_limit=runtime_limit,
-        step_hint=step_hint
+        step_hint=step_hint,
+        use_fixed_hyperparams=use_fixed_hypers
     )
 
 if __name__ == "__main__":
     app()
 
-# steps per epoch: int(60000/64)

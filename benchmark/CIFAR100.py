@@ -10,7 +10,7 @@ import torchvision.transforms as transforms
 from torch.nn import functional as F
 from torch.utils.data import DataLoader
 
-from benchmark.utils import loss_win_condition, trial
+from benchmark.utils_real_world_benchmarks import loss_win_condition, trial
 from heavyball.utils import set_torch
 
 app = typer.Typer(pretty_exceptions_enable=False)
@@ -94,7 +94,8 @@ def main(
     test_loader: bool = None,
     track_variance: bool = False,
     runtime_limit: int = 3600 * 24,
-    step_hint: int = 67000
+    step_hint: int = 78000,
+    use_fixed_hypers: bool = True
 ):
     dtype = [getattr(torch, d) for d in dtype]
     model = Model(num_classes).cuda()
@@ -142,11 +143,6 @@ def main(
         return inputs.cuda(), targets.cuda()
 
 
-    #0.5576767921447754
-    test_target = 1 - 0.7415 # 1 - target_test_accuracy as loss_win_condition checks if we are below a threshold
-    # line 952 of CIFAR target setting
-    test_target = 1 - 0.7415 # 1 - target_test_accuracy as loss_win_condition checks if we are below a threshold
-    # line 952 of CIFAR target setting
     trial(
         model,
         data,
@@ -168,11 +164,11 @@ def main(
         test_loader=test_loader,
         track_variance=track_variance,
         runtime_limit=runtime_limit,
-        step_hint=step_hint
+        step_hint=step_hint,
+        use_fixed_hyperparams=use_fixed_hypers
     )
 
 
 if __name__ == "__main__":
     app()
 
-# steps per epoch int(50000/128)

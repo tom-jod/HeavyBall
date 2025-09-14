@@ -1365,8 +1365,10 @@ class ChainOpt(utils.StatefulOptimizer):
         self._lr_schedule_fn = create_warmup_cosine_schedule_fn(
             self.total_steps, self.warmup_ratio, self.min_lr_ratio
         )
-        # Step decay
-       # self._lr_schedule_fn = create_step_schedule_fn(self.total_steps, self.warmup_ratio, decay_points, decay_gamma)
+        
+        step_decay = False
+        if step_decay:
+            self._lr_schedule_fn = create_step_schedule_fn(self.total_steps, self.warmup_ratio, decay_points, decay_gamma)
         # Keep existing scheduler initialization for backward compatibility
         self.lr_scheduler = None
         self._scheduler_initialized = False
@@ -1451,14 +1453,9 @@ class ChainOpt(utils.StatefulOptimizer):
                     self.lr_scheduler.step()
                     current_lr = self.lr_scheduler.get_last_lr()[0]
         
-       # if step%1000==0:
-        #    print(current_lr)    
         group["lr"] = current_lr
         group["prev_lr"] = current_lr
-        # Apply optimization step
-        
-        
-        
+
         if external_optimizer_type is not None:
             if external_optimizer_type.lower() == "distributedshampoo":
                 # Just assign gradients
@@ -1614,11 +1611,6 @@ class ChainOpt(utils.StatefulOptimizer):
                 use_normalized_grafting=group.get("use_normalized_grafting", False),
                 use_merge_dims=True,
                 use_pytorch_compile=False,
-            #    distributed_config=DDPShampooConfig(
-            #        communication_dtype=CommunicationDType.FP32,
-            #        num_trainers_per_group=1,
-            #        communicate_params=False,
-            #    ),
                 preconditioner_dtype=torch.float32,
                 use_protected_eigh=True,
                 track_root_inv_residuals=False,
@@ -1630,12 +1622,6 @@ class ChainOpt(utils.StatefulOptimizer):
             print(f"Failed to create AlgoPerf-style DistributedShampoo: {e}")
             return torch.optim.AdamW(params, lr=lr, weight_decay=weight_decay, eps=eps)
         
-    def step_lbfgs(self):
-        """Step method specifically for L-BFGS"""
-        if not hasattr(self, '_lbfgs_closure'):
-            raise ValueError("L-BFGS closure not set. Call from _inner method.")
-    
-        return self.step(self._lbfgs_closure)
     
     def _use_external_optimizer(self, group, optimizer_type, param_tensors, grads, closure=None):
         """Handle external PyTorch optimizers using AlgoPerf approach"""
@@ -1647,59 +1633,6 @@ class ChainOpt(utils.StatefulOptimizer):
             for param, grad in zip(param_tensors, grads):
                 param.grad = grad
             return
-                
-        elif optimizer_type.lower() == "lbfgs":
-            optimizer = self._get_or_create_global_external_optimizer(optimizer_type)
-            
-            for param, grad in zip(param_tensors, grads):
-                param.grad = grad
-            
-            self._update_optimizer_params(optimizer, group)
-            
-            if closure is None:
-                raise ValueError("L-BFGS requires a closure function")
-            
-            # L-BFGS calls closure multiple times - don't interfere with gradients
-            def lbfgs_closure():
-                # Don't zero gradients - L-BFGS manages this
-                loss = closure()
-                # Verify gradients exist
-                for param_group in optimizer.param_groups:
-                    for param in param_group['params']:
-                        if param.requires_grad and param.grad is None:
-                            print("Warning: Parameter missing gradient in L-BFGS closure")
-                            param.grad = torch.zeros_like(param)
-                
-                return loss
-            
-            try:
-                optimizer.step(lbfgs_closure)
-            except Exception as e:
-                print(f"Error in L-BFGS optimizer: {e}")
-                
-                # Complete state reset on any error
-                optimizer.state.clear()
-                
-                # Try once more with clean state
-                try:
-                    optimizer.step(lbfgs_closure)
-                except Exception as e2:
-                    print(f"L-BFGS failed after reset: {e2}")
-                    # Create entirely new optimizer
-                    if optimizer_type.lower() in self._global_external_optimizers:
-                        del self._global_external_optimizers[optimizer_type.lower()]
-                    
-                    # Get fresh optimizer and try once more
-                    optimizer = self._get_or_create_global_external_optimizer(optimizer_type)
-                    self._update_optimizer_params(optimizer, group)
-                    
-                    try:
-                        optimizer.step(lbfgs_closure)
-                    except Exception as e3:
-                        print(f"L-BFGS completely failed: {e3}")
-
-                for param in param_tensors:
-                    param.grad = None
             
         else:
             # Get the global optimizer (created once with all parameters)
@@ -1716,12 +1649,11 @@ class ChainOpt(utils.StatefulOptimizer):
                 optimizer.step()
             except KeyError as e:
                 print(f"KeyError in external optimizer {optimizer_type}: {e}")
-                # Try to initialize missing state and retry
-                self._fix_missing_state(optimizer, param_tensors, str(e))
-                #optimizer.step()
+
             # Clear gradients for parameters in this group
             for param in param_tensors:
                 param.grad = None
+
 
     def _initialize_lr_scheduler(self):
         """Initialize LR scheduler based on the first parameter group that needs it"""
@@ -2006,31 +1938,9 @@ class ChainOpt(utils.StatefulOptimizer):
                 weight_decay=weight_decay
             )
         
-        elif optimizer_type.lower() == "lbfgs":
-            # L-BFGS specific parameters with proper defaults
-            max_iter = group.get("max_iter", 20)
-            max_eval = group.get("max_eval", max_iter * 2)  
-            tolerance_grad = group.get("tolerance_grad", 1e-7)
-            tolerance_change = group.get("tolerance_change", 1e-9)
-            history_size = group.get("history_size", 100)
-            line_search_fn = group.get("line_search_fn", "strong_wolfe")
-            
-            # Ensure no None values that could cause comparison errors
-            if max_eval is None:
-                max_eval = max_iter * 2
-            
-            return torch.optim.LBFGS(
-                params,
-                lr=lr,
-                max_iter=max_iter,
-                max_eval=max_eval,  
-                tolerance_grad=tolerance_grad,
-                tolerance_change=tolerance_change,
-                history_size=history_size,
-                line_search_fn=line_search_fn
-            )
         else:
             raise ValueError(f"Unsupported external optimizer: {optimizer_type}")
+
 
     def _update_optimizer_params(self, optimizer, group):
         """Update optimizer hyperparameters to match current group settings"""

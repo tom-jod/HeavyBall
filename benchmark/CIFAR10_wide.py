@@ -10,7 +10,7 @@ import torchvision.transforms as transforms
 from torch.nn import functional as F
 from torch.utils.data import DataLoader
 
-from benchmark.utils import loss_win_condition, trial
+from benchmark.utils_real_world_benchmarks import loss_win_condition, trial
 from heavyball.utils import set_torch
 
 app = typer.Typer(pretty_exceptions_enable=False)
@@ -35,11 +35,10 @@ class WideBasicBlock(nn.Module):
             self.shortcut = nn.Conv2d(in_planes, planes, kernel_size=1, stride=stride, bias=False)
 
     def forward(self, x):
-        # Pre-activation: BN → ReLU → Conv (following Lua version exactly)
         out = F.relu(self.bn1(x))
         out = self.conv1(out)
         out = F.relu(self.bn2(out))
-        if self.dropout.p > 0:  # Only apply dropout if rate > 0
+        if self.dropout.p > 0:  
             out = self.dropout(out)
         out = self.conv2(out)
         
@@ -56,7 +55,6 @@ class Model(nn.Module):
         n = int((depth-4) / 6)  # For depth=16: n=2
         k = widen_factor
 
-        # Channel progression matching Lua version
         nStages = [16, 16*k, 32*k, 64*k]  # [16, 128, 256, 512] for k=8
 
         self.conv1 = nn.Conv2d(3, nStages[0], kernel_size=3, stride=1, padding=1, bias=False)
@@ -106,7 +104,8 @@ def main(
     test_loader: bool = None,
     track_variance: bool = False,
     runtime_limit: int = 3600 * 24,
-    step_hint: int = 67000
+    step_hint: int = 78000,
+    use_fixed_hypers: bool = True
 ):
     dtype = [getattr(torch, d) for d in dtype]
     model = Model(depth, widen_factor, dropout_rate, num_classes).cuda()
@@ -154,7 +153,7 @@ def main(
         model,
         data,
         F.cross_entropy,
-        loss_win_condition(win_condition_multiplier * 0.0),  # Adjusted for CIFAR-100 difficulty
+        loss_win_condition(win_condition_multiplier * 0.0),  
         steps,
         opt[0],
         dtype[0],
@@ -172,6 +171,7 @@ def main(
         track_variance=track_variance,
         runtime_limit=runtime_limit,
         step_hint=step_hint,
+        use_fixed_hyperparams=use_fixed_hypers
     )
 
 

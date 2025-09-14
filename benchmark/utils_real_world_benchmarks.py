@@ -16,6 +16,7 @@ import torch
 from torch import nn
 from torch._dynamo import config
 import functools
+from datetime import datetime
 import torch
 import torch.nn.functional as F
 from torchvision.transforms.functional import pad as pad_fn
@@ -473,6 +474,7 @@ class Objective:
         self.start_time = time.time()
         self.end_time = self.runtime_limit + time.time() # was 3600 * 4
         self._last_loss = float('inf')
+        timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
         # iterate through each epoch
         for i in range(self.steps // self.group):
            
@@ -499,7 +501,7 @@ class Objective:
                 with torch.backends.cudnn.flags(enabled=False):
                     x, y = self.data()
 
-                    estimate = False
+                    estimate = True
                     visualisation = True
             
                     if estimate:
@@ -509,8 +511,8 @@ class Objective:
                         # Extract eigenvalues
                         true_eigs_l = np.array(condition_number["eigenvals_lanczos"])
                         true_eigs_r = np.array(condition_number["eigenvals_rayleigh"])
-                        true_eigs_l = true_eigs_l[np.isfinite(true_eigs_l)]  # clean
-                        true_eigs_r = true_eigs_r[np.isfinite(true_eigs_r)]  # clean
+                        true_eigs_l = true_eigs_l[np.isfinite(true_eigs_l)]  
+                        true_eigs_r = true_eigs_r[np.isfinite(true_eigs_r)]  
                         eigs_abs_l = np.abs(true_eigs_l)
                         eigs_abs_r = np.abs(true_eigs_r)
                        
@@ -526,9 +528,9 @@ class Objective:
                         neg_lambda_max = np.max(neg_eigs_l) if len(neg_eigs_l) > 0 else np.nan
                         
                         pos_neg_ratio = len(pos_eigs_l) / (len(neg_eigs_l) + 1e-8)
-                       
+                        
                         # --- Save directory ---
-                        save_dir = "eigenspectrum_estimate_lanczos_SVHN_less_p_CNN"
+                        save_dir = "Condition_number_estimates/timestamp"
                         os.makedirs(save_dir, exist_ok=True)
 
                         # --- Plot both histograms side by side ---
@@ -603,12 +605,6 @@ class Objective:
                         eigs_abs_l = np.abs(true_eigs_l)
                         eigs_abs_r = np.abs(true_eigs_r)
 
-                        # Clone approximations to make the scale similar in the histogram
-                     #   true_eigs_l = np.repeat(true_eigs_l, 100)  
-                     #   true_eigs_r = np.repeat(true_eigs_r, 100)  
-                     #   eigs_abs_l = np.repeat(np.abs(true_eigs_l), 100)
-                     #   eigs_abs_r = np.repeat(np.abs(true_eigs_r), 100)
-
 
                         # Split into pos/neg subspaces
                         pos_eigs = true_eigs[true_eigs > 0]
@@ -619,8 +615,9 @@ class Objective:
                         neg_lambda_min = np.min(neg_eigs) if len(neg_eigs) > 0 else np.nan
                         neg_lambda_max = np.max(neg_eigs) if len(neg_eigs) > 0 else np.nan
                         pos_neg_ratio = len(pos_eigs) / len(neg_eigs)
+
                         # --- Save directory ---
-                        save_dir = "eigenspectrum_true_vs_approx_visualisation_SVHN"
+                        save_dir = "eigenspectrum_visualisation/timestamp"
                         os.makedirs(save_dir, exist_ok=True)
 
                         # --- Plot both histograms side by side ---
@@ -707,8 +704,9 @@ class Objective:
                         neg_lambda_min = np.min(neg_eigs) if len(neg_eigs) > 0 else np.nan
                         neg_lambda_max = np.max(neg_eigs) if len(neg_eigs) > 0 else np.nan
                         pos_neg_ratio = len(pos_eigs) / len(neg_eigs)
+
                         # --- Save directory ---
-                        save_dir = "eigenspectrum_true_SVHN_less_p_CNN_threshold_6"
+                        save_dir = "true_eigenspectrum/timestamp"
                         os.makedirs(save_dir, exist_ok=True)
 
                         # --- Plot both histograms side by side ---
@@ -724,7 +722,6 @@ class Objective:
                             axes[0].set_xlabel("Absolute value of eigenvalues")
                             axes[0].set_ylabel("Count")
                             
-
                         # Right: raw eigenvalues
                         axes[1].hist(true_eigs, bins=200, color="navy")
                         axes[1].set_xlabel("Eigenvalues")
@@ -764,13 +761,9 @@ class Objective:
     
             if self.track_variance:
                 # track variance at every 1000 steps through training
-                #grad_variance = estimate_minibatch_variance_detailed(self.m, self.data, n_samples=500, loss_fn=self.loss_fn)[0]
-                #grad_variance = estimate_minibatch_variance_grid_search(self.m, self.data, loss_fn=self.loss_fn, timout=30)
-                #self.grad_variances.append(grad_variance["gradient_variance"])
                 grad_variance = compute_true_minibatch_variance(self.m, self.train_loader, loss_fn=self.loss_fn)
                 self.grad_variances.append(grad_variance["gradient_noise_variance"])
                 
-            
             if hasattr(o, "train"):
                 o.train()
             
@@ -879,10 +872,6 @@ class Objective:
                                         for name, param in self.m.named_parameters()}
                 
                 try:
-                    if is_lbfgs:
-                        # Store closure on the chainable optimizer for L-BFGS
-                        o._lbfgs_closure = _closure
-                        
                     # Always use the same step methods
                     if self.requires_prev_model(o):
                         loss = o.step_with_prev(_closure, _prev_closure)
@@ -938,9 +927,6 @@ class Objective:
         self.step_counter = step_counter
         self.runtime = runtime
 
-        #if self.best_at * 100 < self.attempt and self.attempt - self.best_at > self.warmup_trials:  # no improvements
-        #    raise Stop
-        
         return target
     
     def reset(self):
@@ -1032,14 +1018,10 @@ def trial(
     test_optimizer_implementation=False,
     runtime_limit: int = 3600 * 24, # Default runtime limit is a day
     step_hint: int = 0,
+    use_fixed_hyperparams: bool = False
 ):
     opt_name = opt
-    use_fixed_hyperparams = False
-   
-    if opt in ["AdamW","mars-AdamW"]:
-        
-        print("using_list")
-        use_fixed_hyperparams = True
+    
 
     if test_optimizer_implementation:
         group = 10

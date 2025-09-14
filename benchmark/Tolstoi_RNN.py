@@ -9,7 +9,7 @@ from torch.nn import functional as F
 from torch.utils.data import Dataset, DataLoader
 import numpy as np
 
-from benchmark.utils import loss_win_condition, trial
+from benchmark.utils_real_world_benchmarks import loss_win_condition, trial
 from heavyball.utils import set_torch
 
 app = typer.Typer(pretty_exceptions_enable=False)
@@ -144,7 +144,8 @@ def main(
     test_loader: bool = None,
     track_variance: bool = False,
     runtime_limit: int = 3600 * 24,
-    step_hint: int = 27000
+    step_hint: int = 27000,
+    use_fixed_hypers: bool = False
 ):  
     dtype = [getattr(torch, d) for d in dtype]
     
@@ -214,10 +215,6 @@ def main(
         output = output.view(-1, vocab_size)  # (batch_size * seq_length, vocab_size)
         target = target.view(-1)  # (batch_size * seq_length,)
         return F.cross_entropy(output, target)
-    
-    
-    test_target = 1 - 0.6056 # 1 - target_test_accuracy as loss_win_condition checks if we are below a threshold
-
 
     trial(
         model,
@@ -241,7 +238,8 @@ def main(
         train_loader=train_loader,
         track_variance=track_variance,
         runtime_limit=runtime_limit,
-        step_hint=step_hint
+        step_hint=step_hint,
+        use_fixed_hyperparams=use_fixed_hypers
     )
 
 if __name__ == "__main__":
