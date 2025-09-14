@@ -14,6 +14,7 @@ from heavyball.utils import set_torch
 app = typer.Typer(pretty_exceptions_enable=False)
 set_torch()
 import torch._dynamo
+
 torch._dynamo.config.suppress_errors = True
 app = typer.Typer()
 
@@ -73,28 +74,22 @@ def main(
     track_variance: bool = False,
     runtime_limit: int = 3600 * 24,
     step_hint: int = 86000,
-    use_fixed_hypers: bool = False  
+    use_fixed_hypers: bool = False,
 ):
     dtype = [getattr(torch, d) for d in dtype]
 
     model = DeepCNN(num_classes=10, channels=channels, depth=depth).cuda()
 
-    transform = transforms.Compose(
-        [
-            transforms.ToTensor(),
-            transforms.Normalize((0.4377, 0.4438, 0.4728), (0.1980, 0.2010, 0.1970)),
-        ]
-    )
+    transform = transforms.Compose([
+        transforms.ToTensor(),
+        transforms.Normalize((0.4377, 0.4438, 0.4728), (0.1980, 0.2010, 0.1970)),
+    ])
 
     data_dir = Path(__file__).parent / "data"
     data_dir.mkdir(exist_ok=True)
 
-    train_dataset = datasets.SVHN(
-        root=data_dir, split="train", download=True, transform=transform
-    )
-    test_dataset = datasets.SVHN(
-        root=data_dir, split="test", download=True, transform=transform
-    )
+    train_dataset = datasets.SVHN(root=data_dir, split="train", download=True, transform=transform)
+    test_dataset = datasets.SVHN(root=data_dir, split="test", download=True, transform=transform)
 
     train_loader = torch.utils.data.DataLoader(
         train_dataset, batch_size=batch, shuffle=False, num_workers=0, pin_memory=True
@@ -105,6 +100,7 @@ def main(
 
     data_iter = iter(train_loader)
     print(len(train_dataset))
+
     def data():
         nonlocal data_iter
         try:
@@ -141,7 +137,7 @@ def main(
         track_variance=track_variance,
         runtime_limit=runtime_limit,
         step_hint=step_hint,
-        use_fixed_hyperparams=use_fixed_hypers
+        use_fixed_hyperparams=use_fixed_hypers,
     )
 
 

@@ -16,10 +16,12 @@ from heavyball.utils import set_torch
 app = typer.Typer(pretty_exceptions_enable=False)
 set_torch()
 import torch._dynamo
+
 torch._dynamo.config.suppress_errors = True
 app = typer.Typer()
 
 torch._dynamo.config.disable = True
+
 
 class BasicBlock(nn.Module):
     expansion = 1
@@ -35,7 +37,7 @@ class BasicBlock(nn.Module):
         if stride != 1 or in_planes != self.expansion * planes:
             self.shortcut = nn.Sequential(
                 nn.Conv2d(in_planes, self.expansion * planes, kernel_size=1, stride=stride, bias=False),
-                nn.BatchNorm2d(self.expansion * planes)
+                nn.BatchNorm2d(self.expansion * planes),
             )
 
     def forward(self, x):
@@ -95,11 +97,10 @@ def main(
     track_variance: bool = False,
     runtime_limit: int = 3600 * 24,
     step_hint: int = 78000,
-    use_fixed_hypers: bool = True
+    use_fixed_hypers: bool = True,
 ):
     dtype = [getattr(torch, d) for d in dtype]
     model = Model(num_classes).cuda()
-
 
     # CIFAR-100 data loading with enhanced augmentation
     transform_train = transforms.Compose([
@@ -109,7 +110,7 @@ def main(
         transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1),
         transforms.ToTensor(),
         transforms.Normalize((0.5071, 0.4867, 0.4408), (0.2675, 0.2565, 0.2761)),
-        transforms.RandomErasing(p=0.1)
+        transforms.RandomErasing(p=0.1),
     ])
 
     transform_test = transforms.Compose([
@@ -118,21 +119,17 @@ def main(
     ])
 
     # Load datasets
-    trainset = torchvision.datasets.CIFAR100(
-        root='./data', train=True, download=True, transform=transform_train
-    )
+    trainset = torchvision.datasets.CIFAR100(root="./data", train=True, download=True, transform=transform_train)
     trainloader = DataLoader(trainset, batch_size=batch, shuffle=True, num_workers=0, pin_memory=True)
     trainloader = DataLoader(trainset, batch_size=batch, shuffle=True, num_workers=0, pin_memory=True)
-    
-    testset = torchvision.datasets.CIFAR100(
-        root='./data', train=False, download=True, transform=transform_test
-    )
+
+    testset = torchvision.datasets.CIFAR100(root="./data", train=False, download=True, transform=transform_test)
     test_loader = DataLoader(testset, batch_size=batch, shuffle=False, num_workers=0, pin_memory=True)
     test_loader = DataLoader(testset, batch_size=batch, shuffle=False, num_workers=0, pin_memory=True)
 
     # Create data iterator that matches the expected format
     train_iter = iter(trainloader)
-    
+
     def data():
         nonlocal train_iter
         try:
@@ -142,12 +139,11 @@ def main(
             inputs, targets = next(train_iter)
         return inputs.cuda(), targets.cuda()
 
-
     trial(
         model,
         data,
         F.cross_entropy,
-        loss_win_condition(win_condition_multiplier * 0.0), 
+        loss_win_condition(win_condition_multiplier * 0.0),
         steps,
         opt[0],
         dtype[0],
@@ -156,7 +152,7 @@ def main(
         weight_decay,
         method[0],
         32,  # image_size parameter (CIFAR-10 is 32x32)
-        3,   # channels parameter (RGB)
+        3,  # channels parameter (RGB)
         failure_threshold=10,
         base_lr=1e-3,
         trials=trials,
@@ -165,10 +161,9 @@ def main(
         track_variance=track_variance,
         runtime_limit=runtime_limit,
         step_hint=step_hint,
-        use_fixed_hyperparams=use_fixed_hypers
+        use_fixed_hyperparams=use_fixed_hypers,
     )
 
 
 if __name__ == "__main__":
     app()
-
