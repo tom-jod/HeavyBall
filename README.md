@@ -48,6 +48,12 @@ for data, target in dataloader:
 > ```bash
 > python3 benchmark/benchmark_runner.py MNIST.py "AdamW, SFAdamW" --runs-per-optimizer=3 --runtime-limit=472 --trials=20 --step-hint=27000 --steps=0
 > ```
+> To calculate the minibatch variance trajectory use the flag: --track-variance
+> 
+> To estimate the effective condition number using Sotchastic Lanczos Quadrature add the flag: --estimate-condition-number
+>
+> This can be changed to produce the full true eigenspectrum by changing the estimate flag within the body of the objective's inner method to False and setting the visualisation flag to False.
+> Similarly, a visualisation comparing the true spectrum to the Rayleigh and Lanczos estimates can be created by setting the estimate flag to false and visualisation flag to True.
 > 
 
 
