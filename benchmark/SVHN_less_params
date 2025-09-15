@@ -90,8 +90,9 @@ def set_deterministic_weights(model, seed=42):
 def main(
     method: List[str] = typer.Option(["qr"], help="Eigenvector method to use (for SOAP)"),
     dtype: List[str] = typer.Option(["float32"], help="Data type to use"),
-    channels: int = 12,
-    depth: int = 12,
+    channels: int = 16,
+    hidden_size: int = 16,
+    depth: int = 5,
     batch: int = 128,
     steps: int = 0,
     weight_decay: float = 0,
@@ -102,13 +103,25 @@ def main(
     test_loader: bool = None,
     track_variance: bool = False,
     runtime_limit: int = 3600 * 24,
-    step_hint: int = 73257 // 128,  # SVHN has ~73k training samples
+    step_hint: int = 10000
+    model_type: str = "deep_cnn" # "Choose: deep_cnn | flat_mlp | pooled_mlp 
 ):
     dtype = [getattr(torch, d) for d in dtype]
 
+    # Pick model
+    if model_type == "flat_mlp":
+        model = SVHNFlatMLP(hidden_size).cuda()
+    elif model_type == "deep_cnn":
+        model = DeepCNN().cuda()
+    elif model_type == "pooled_mlp":
+        model = SVHNGrayMLP(hidden_size).cuda()
+    else:
+        raise ValueError(f"Unknown model_type: {model_type}")
+
    # model = DeepCNN(num_classes=10, channels=channels, depth=depth).cuda()
     model = SVHNFlatMLP(hidden_size=16).cuda()
-    # SVHN normalization (roughly like CIFAR)
+   
+    # SVHN normalization 
     transform = transforms.Compose(
         [
             transforms.ToTensor(),
@@ -147,8 +160,6 @@ def main(
 
     def loss_fn(output, target):
         return F.nll_loss(output, target)
-
-    win_target = 1 - 0.9851
 
     trial(
         model,
