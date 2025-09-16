@@ -1,7 +1,7 @@
 
 ## Quickstart
 After cloning the repository, activate the virtual environment using conda:
-**Install:**
+
 ```bash
 conda env create -f environment.yml
 conda activate HeavyBall
