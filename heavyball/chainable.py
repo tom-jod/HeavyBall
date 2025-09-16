@@ -19,7 +19,7 @@ from torch.optim import SGD
 from . import utils
 import sys
 import os
-from optimizers.nadamw import NAdamW
+
 
 use_default = utils.use_default
 

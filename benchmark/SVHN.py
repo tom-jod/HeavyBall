@@ -69,7 +69,7 @@ def main(
     opt: List[str] = typer.Option(["ForeachSOAP"], help="Optimizers to use"),
     win_condition_multiplier: float = 1.0,
     trials: int = 10,
-    estimate_condition_number: bool = True,
+    estimate_condition_number: bool = False,
     test_loader: bool = None,
     track_variance: bool = False,
     runtime_limit: int = 3600 * 24,
@@ -99,7 +99,6 @@ def main(
     )
 
     data_iter = iter(train_loader)
-    print(len(train_dataset))
 
     def data():
         nonlocal data_iter
@@ -118,7 +117,7 @@ def main(
         model,
         data,
         loss_fn,
-        loss_win_condition(win_condition_multiplier * 0),
+        loss_win_condition(win_condition_multiplier * 0), # No win condition, just run for a set number of steps
         steps,
         opt[0],
         dtype[0],

@@ -60,52 +60,38 @@ class CharRNN(nn.Module):
         self.num_layers = num_layers
         self.seq_length = seq_length
         self.vocab_size = vocab_size
-
         # Embedding layer
         self.embedding = nn.Embedding(vocab_size, hidden_size)
-
         # LSTM layers with dropout
         self.lstm = nn.LSTM(
             hidden_size, hidden_size, num_layers, dropout=0.2 if num_layers > 1 else 0, batch_first=True
         )
-
         # Dropout layers
         self.dropout = nn.Dropout(0.2)
-
         # Output layer
         self.fc = nn.Linear(hidden_size, vocab_size)
-
         # Initialize hidden state
         self.hidden = None
 
     def forward(self, x):
         batch_size = x.size(0)
-
         # Initialize hidden state if None or batch size changed
         if self.hidden is None or self.hidden[0].size(1) != batch_size:
             self.hidden = self.init_hidden(batch_size)
-
         # Embedding
         embedded = self.embedding(x)
-
         # LSTM forward pass
         lstm_out, self.hidden = self.lstm(embedded, self.hidden)
-
         # Detach hidden state to prevent backprop through entire sequence
         self.hidden = tuple([h.detach() for h in self.hidden])
-
         # Apply dropout
         lstm_out = self.dropout(lstm_out)
-
         # Reshape for linear layer
         lstm_out = lstm_out.contiguous().view(-1, self.hidden_size)
-
         # Output layer
         output = self.fc(lstm_out)
-
         # Reshape back to (batch_size, seq_length, vocab_size)
         output = output.view(batch_size, self.seq_length, self.vocab_size)
-
         return output
 
     def init_hidden(self, batch_size):
@@ -206,16 +192,16 @@ def main(
         model,
         data,
         loss_fn,
-        loss_win_condition(win_condition_multiplier * 0.0),
+        loss_win_condition(win_condition_multiplier * 0.0), # No win condition, just run for a set number of steps
         steps,
         opt[0],
         dtype[0],
-        hidden_size,  # features parameter
+        hidden_size,  
         batch,
         weight_decay,
         method[0],
-        seq_length,  # sequence parameter
-        vocab_size,  # vocab size parameter
+        seq_length, 
+        vocab_size,  
         failure_threshold=10,
         base_lr=1e-3,
         trials=trials,

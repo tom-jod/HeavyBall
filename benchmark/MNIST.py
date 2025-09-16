@@ -114,7 +114,7 @@ def main(
         model,
         data,
         loss_fn,
-        loss_win_condition(win_condition_multiplier * 0),
+        loss_win_condition(win_condition_multiplier * 0), # No win condition, just run for a set number of steps
         steps,
         opt[0],
         dtype[0],

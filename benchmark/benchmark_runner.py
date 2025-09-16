@@ -45,7 +45,7 @@ def run_single_benchmark(script_path, optimizer, steps, trials, seed, output_dir
             capture_output=True,
             text=True,
             timeout=72*3600,  # 24 hour timeout
-            env={**os.environ, "CUDA_VISIBLE_DEVICES": "1"}  # Ensure single GPU
+            env={**os.environ, "CUDA_VISIBLE_DEVICES": "0"}  # Ensure single GPU
         )
         
         # Save the full output

@@ -103,7 +103,7 @@ def main(
     test_loader: bool = None,
     track_variance: bool = False,
     runtime_limit: int = 3600 * 24,
-    step_hint: int = 10000
+    step_hint: int = 10000,
     model_type: str = "deep_cnn" # "Choose: deep_cnn | flat_mlp | pooled_mlp 
 ):
     dtype = [getattr(torch, d) for d in dtype]
@@ -112,14 +112,11 @@ def main(
     if model_type == "flat_mlp":
         model = SVHNFlatMLP(hidden_size).cuda()
     elif model_type == "deep_cnn":
-        model = DeepCNN().cuda()
+        model = DeepCNN(channels=channels, depth=depth).cuda()
     elif model_type == "pooled_mlp":
         model = SVHNGrayMLP(hidden_size).cuda()
     else:
         raise ValueError(f"Unknown model_type: {model_type}")
-
-   # model = DeepCNN(num_classes=10, channels=channels, depth=depth).cuda()
-    model = SVHNFlatMLP(hidden_size=16).cuda()
    
     # SVHN normalization 
     transform = transforms.Compose(
@@ -165,7 +162,7 @@ def main(
         model,
         data,
         loss_fn,
-        loss_win_condition(win_condition_multiplier * 0),
+        loss_win_condition(win_condition_multiplier * 0), # No win condition, just run for a set number of steps
         steps,
         opt[0],
         dtype[0],
