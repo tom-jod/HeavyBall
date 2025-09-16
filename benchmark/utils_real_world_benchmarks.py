@@ -590,8 +590,8 @@ class Objective:
                                 writer = csv.writer(f)
                                 writer.writerow([
                                     "iteration",
-                                    "condition_number",
-                                    "condition_number_abs",
+                                    "Rayleigh_condition_number",
+                                    "Rayleigh_condition_number_abs",
                                     "condition_number_variance",
                                     "pos_lambda_min",
                                     "pos_lambda_max",
