@@ -2,7 +2,6 @@ from pathlib import Path
 from typing import List
 
 import torch
-import torch._dynamo
 import torch.backends.opt_einsum
 import torch.nn as nn
 import typer
@@ -65,11 +64,7 @@ def main(
     opt: List[str] = typer.Option(["ForeachSOAP"], help="Optimizers to use"),
     win_condition_multiplier: float = 1.0,
     trials: int = 10,
-    estimate_condition_number: bool = False,
     test_loader: bool = None,
-    track_variance: bool = False,
-    runtime_limit: int = 3600 * 24,
-    step_hint: int = 317000,
 ):
     dtype = [getattr(torch, d) for d in dtype]
 
