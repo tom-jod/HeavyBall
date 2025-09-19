@@ -517,11 +517,12 @@ class Objective:
             if self.estimate_condition_number:
                 with torch.backends.cudnn.flags(enabled=False):
                     x, y = self.data()
-
+                    # Alter these flags to choose how the condition number estimation is performed 
                     estimate = True
                     visualisation = True
 
                     if estimate:
+                        print("Using the Lanczos approximation")
                         condition_number = estimate_effective_condition_number_reorth(
                             self.m,
                             self.data,
@@ -530,8 +531,8 @@ class Objective:
                             lanczos_steps=200,
                             n_samples=5,
                         )
-                        self.condition_numbers.append(condition_number["condition_number"])
-                        self.condition_number_variances.append(condition_number["condition_number_variance"])
+                        self.condition_numbers.append(condition_number["lanczos_condition_number"])
+                        self.condition_number_variances.append(condition_number["lanczos_condition_number_variance"])
                         # Extract eigenvalues
                         true_eigs_l = np.array(condition_number["eigenvals_lanczos"])
                         true_eigs_r = np.array(condition_number["eigenvals_rayleigh"])
@@ -541,8 +542,6 @@ class Objective:
                         eigs_abs_r = np.abs(true_eigs_r)
 
                         # Split into pos/neg subspaces
-                        pos_eigs_r = true_eigs_r[true_eigs_r > 0]
-                        neg_eigs_r = true_eigs_r[true_eigs_r < 0]
                         pos_eigs_l = true_eigs_l[true_eigs_l > 0]
                         neg_eigs_l = true_eigs_l[true_eigs_l < 0]
 
@@ -590,6 +589,8 @@ class Objective:
                                 writer = csv.writer(f)
                                 writer.writerow([
                                     "iteration",
+                                    "Lanczos_condition_number",
+                                    "Lanczos_condition_number_variance",
                                     "Rayleigh_condition_number",
                                     "Rayleigh_condition_number_abs",
                                     "condition_number_variance",
@@ -598,9 +599,6 @@ class Objective:
                                     "neg_lambda_min",
                                     "neg_lambda_max",
                                     "pos_neg_ratio_Lanczos",
-                                    "condition_numbers_all_samples",
-                                    "Lanczos_condition_number",
-                                    "Lanczos_condition_number_variance",
                                 ])
 
                         # Append row
@@ -608,6 +606,8 @@ class Objective:
                             writer = csv.writer(f)
                             writer.writerow([
                                 i,
+                                condition_number["lanczos_condition_number"],
+                                condition_number["lanczos_condition_number_variance"],
                                 condition_number["condition_number"],
                                 condition_number["condition_number_abs"],
                                 condition_number["condition_number_variance"],
@@ -616,9 +616,6 @@ class Objective:
                                 neg_lambda_min,
                                 neg_lambda_max,
                                 pos_neg_ratio,
-                                condition_number["condition_numbers_all_samples"],
-                                condition_number["lanczos_condition_number"],
-                                condition_number["lanczos_condition_number_variance"],
                             ])
                     elif visualisation:
                         # Full caculation of the eigenvalues of the Hessian
@@ -723,7 +720,7 @@ class Objective:
                                 writer = csv.writer(f)
                                 writer.writerow([
                                     "iteration",
-                                    "condition_number",
+                                    "True_condition_number",
                                     "condition_number_abs",
                                     "condition_number_variance",
                                     "condition_number_threshold",
@@ -1616,7 +1613,6 @@ def trial(
         final_runtime = best_trial["runtime"]
         final_steps = best_trial["steps"]
         final_steps = best_trial["steps"]
-        print("Successfully found the minimum runtime")
 
     if all_trial_results:
         most_accurate_trial = max(

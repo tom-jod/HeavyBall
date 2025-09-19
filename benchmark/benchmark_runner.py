@@ -217,11 +217,6 @@ def aggregate_and_plot(results, benchmark_name, output_dir):
         }
         summary_stats.append(stats)
     
-    # Save summary to CSV
-    summary_df = pd.DataFrame(summary_stats)
-    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    summary_df.to_csv(f"{output_dir}/{benchmark_name}_summary_{timestamp}.csv", index=False)
-    
     # Plot loss trajectories
     plt.figure(figsize=(12, 8))
     
@@ -255,77 +250,6 @@ def aggregate_and_plot(results, benchmark_name, output_dir):
     plt.grid(True, alpha=0.3)
     plt.yscale('log')  # Often helpful for loss curves
     plt.savefig(f"{output_dir}/{benchmark_name}_loss_curves.png", dpi=300, bbox_inches='tight')
-    plt.close()
-    
-    # Plot gradient variances
-    plt.figure(figsize=(12, 8))
-    
-    for optimizer, group in optimizer_groups:
-        # Get all loss trajectories for this optimizer
-        trajectories = [traj for traj in group['grad_variances'] if traj]
-        
-        if not trajectories:
-            continue
-        
-        # Find minimum length
-        min_length = min(len(traj) for traj in trajectories)
-        
-        # Truncate all trajectories
-        truncated = [traj[:min_length] for traj in trajectories]
-        
-        if truncated:
-            # Calculate statistics
-            mean_traj = np.mean(truncated, axis=0)
-            std_traj = np.std(truncated, axis=0)
-            se_traj = std_traj / np.sqrt(len(truncated))
-            
-            # Plot
-            x = np.arange(min_length)
-            plt.plot(x, mean_traj, label=f"{optimizer} (n={len(truncated)})", linewidth=2)
-            plt.fill_between(x, mean_traj - se_traj, mean_traj + se_traj, alpha=0.3)
-    
-    plt.xlabel('Iteration (x1000)')
-    plt.ylabel('Gradient Variance')
-    plt.legend()
-    plt.grid(True, alpha=0.3)
-    plt.yscale('log')  # Often helpful for loss curves
-    plt.savefig(f"{output_dir}/{benchmark_name}_grad_variances_{timestamp}.png", dpi=300, bbox_inches='tight')
-    plt.close()
-
-
-    # Plot test accuracies if available
-    plt.figure(figsize=(12, 8))
-    
-    for optimizer, group in optimizer_groups:
-        # Get all test accuracy trajectories for this optimizer
-        acc_trajectories = [acc for acc in group['test_accuracies'] if acc]
-        
-        if not acc_trajectories:
-            continue
-        
-        # Find minimum length
-        min_length = min(len(acc) for acc in acc_trajectories)
-        
-        # Truncate all trajectories
-        truncated = [acc[:min_length] for acc in acc_trajectories]
-        
-        if truncated:
-            # Calculate statistics
-            mean_acc = np.mean(truncated, axis=0)
-            std_acc = np.std(truncated, axis=0)
-            se_acc = std_acc / np.sqrt(len(truncated))
-            
-            # Plot
-            x = np.arange(min_length)
-            plt.plot(x, mean_acc, label=f"{optimizer} (n={len(truncated)})", linewidth=2)
-            plt.fill_between(x, mean_acc - se_acc, mean_acc + se_acc, alpha=0.3)
-    
-    plt.xlabel('`Steps (x1000)')
-    plt.ylabel('Test loss')
-    plt.legend()
-    plt.grid(True, alpha=0.3)
-    plt.yscale('log')
-    plt.savefig(f"{output_dir}/{benchmark_name}_test_loss.png", dpi=300, bbox_inches='tight')
     plt.close()
     
     # Save detailed results
