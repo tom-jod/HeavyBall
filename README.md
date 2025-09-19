@@ -1,3 +1,15 @@
+## What is this repository?
+This is a fork of the original HeavyBall repo that adds in support for benchmarking optimizers on real-world tasks. The added functionality is as follows:
+
+* Added 5 small benchmarks using real datasets and common models (mainly in the image classification domain)
+* Added functionality to utils.py within the benchmark folder to allow for test accuracy tracking
+* For each of the 5 scripts runtime based stopping can be used instead of step based stopping
+* Quasi-random tuning added as a hyperparameter tuning option
+* Distributed Shampoo algorithm added to the array of optimizers
+* It is now possible to specify sets of hyperparameters and cycle through them (as in AlgoPerf)
+* Calculation of the true condition number and normalised minibatch variance of problems possible
+* The Stochastic Lanczos Quadrature approximation can be used to estimate the condition number of large problems
+* Added a linear warmup (step_ratio = 0.05) and cosine decay by default to all optimizers
 
 ## Quickstart
 After cloning the repository, ensure that you are on the tom_pr branch by running:
@@ -7,7 +19,7 @@ git checkout tom_pr
 git pull
 ```
 
-Then activate the virtual environment using conda:
+Then from the HeavyBall directory (run cd HeavyBall) activate the virtual environment using conda:
 
 ```bash
 conda env create -f environment.yml
