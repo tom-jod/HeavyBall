@@ -1,9 +1,0 @@
-[
-    {
-        "learning_rate": 0.001,
-        "one_minus_beta1": 0.1,
-        "one_minus_beta2": 0.001,
-        "epsilon": 1e-8,
-        "weight_decay":1e-2
-    }
-]
