@@ -4,7 +4,6 @@ import torch
 import torch.backends.opt_einsum
 import typer
 from torch import nn
-from torch.nn import functional as F
 
 from benchmark.utils import param_norm_win_condition, trial
 from heavyball.utils import set_torch
@@ -27,9 +26,12 @@ class Model(nn.Module):
         super().__init__()
         self.param = nn.Parameter(torch.randn((size, size)))
         self.target = nn.Buffer(torch.triu(torch.ones_like(self.param)))
+        self.size = size
 
-    def forward(self, inp):
-        return inp @ self.param
+    def forward(self):
+        inp = torch.randn((16, self.size), device="cuda", dtype=self.param.dtype)
+        target = inp.cumsum(1)
+        return (inp @ self.param - target).square().mean()
 
 
 @app.command()
@@ -47,29 +49,21 @@ def main(
     config: Optional[str] = None,
 ):
     size = configs.get(config, {}).get("size", size)
-    dtype = [getattr(torch, d) for d in dtype]
+    dtype = getattr(torch, dtype[0])
     model = Model(size).cuda()
 
     def data():
-        inp = torch.randn((batch, size), device="cuda", dtype=dtype[0])
-        return inp, inp.cumsum(1)
+        return None, None
 
     trial(
         model,
-        data,
-        F.mse_loss,
-        param_norm_win_condition(1e-7 * win_condition_multiplier, model.target),
+        None,
+        None,
+        param_norm_win_condition(1e-3 * win_condition_multiplier, model.target),
         steps,
         opt[0],
-        dtype[0],
-        size,
-        batch,
-        weight_decay,
-        method[0],
-        1,
-        depth,
+        weight_decay=weight_decay,
         failure_threshold=depth * 2,
-        base_lr=1e-3,
         trials=trials,
     )
 

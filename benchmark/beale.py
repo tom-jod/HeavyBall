@@ -7,16 +7,13 @@ import torch
 import torch.backends.opt_einsum
 import typer
 from torch import nn
+import torch._dynamo
 
 from benchmark.utils import Plotter, SkipConfig, loss_win_condition, trial
 from heavyball.utils import set_torch
 
 app = typer.Typer(pretty_exceptions_enable=False)
-set_torch()
-import torch._dynamo
 torch._dynamo.config.suppress_errors = True
-app = typer.Typer()
-
 torch._dynamo.config.disable = True
 
 def objective(x, y):
@@ -65,24 +62,14 @@ def main(
         model = Model(coords)
     model.double()
 
-    def data():
-        return None, None
-
     model = trial(
         model,
-        data,
+        None,
         None,
         loss_win_condition(win_condition_multiplier * 1e-8 * (not show_image)),
         steps,
         opt[0],
-        dtype[0],
-        1,
-        1,
         weight_decay,
-        method[0],
-        1,
-        1,
-        base_lr=1e-4,
         trials=trials,
         return_best=show_image,
     )

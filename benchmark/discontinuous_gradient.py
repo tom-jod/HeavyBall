@@ -39,28 +39,17 @@ def main(
 ):
     if config is not None and config != "trivial":
         raise SkipConfig("'config' must be 'trivial'.")
-    dtype = [getattr(torch, d) for d in dtype]
-    model = Model().cuda().double()
-
-    def data():
-        return None, None
+    model = Model().cuda()
 
     trial(
         model,
-        data,
+        None,
         None,
         param_norm_win_condition(win_condition_multiplier * 1e-4, 0),
         steps,
         opt[0],
-        dtype[0],
-        1,
-        1,
         weight_decay,
-        method[0],
-        1,
-        1,
         failure_threshold=3,
-        base_lr=1e-3,
         trials=trials,
     )
 

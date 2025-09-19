@@ -44,29 +44,18 @@ def main(
     win_condition_multiplier: float = 1.0,
     config: Optional[str] = None,
 ):
-    size = configs.get(config, {}).get("size", size)
-    dtype = [getattr(torch, d) for d in dtype]
-    model = Model(size).cuda()
-
-    def data():
-        return None, None
+    kwargs = configs[config or "trivial"]
+    model = Model(**kwargs).cuda()
 
     trial(
         model,
-        data,
+        None,
         None,
         param_norm_win_condition(win_condition_multiplier * 1e-7, 0),
         steps,
         opt[0],
-        dtype[0],
-        size,
-        batch,
-        weight_decay,
-        method[0],
-        1,
-        1,
+        weight_decay=weight_decay,
         failure_threshold=2,
-        base_lr=1e-3,
         trials=trials,
     )
 

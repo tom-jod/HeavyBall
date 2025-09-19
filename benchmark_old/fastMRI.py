@@ -291,7 +291,7 @@ def main(
     test_loader: bool = None,
     track_variance: bool = False,
     runtime_limit: int = 3600 * 24,
-    step_hint: int = 317000
+    step_hint: int = 27000
 ):
     dtype = [getattr(torch, d) for d in dtype]
     model = UNet().cuda().to(dtype[0])

@@ -11,11 +11,6 @@ from heavyball.utils import set_torch
 
 app = typer.Typer(pretty_exceptions_enable=False)
 set_torch()
-import torch._dynamo
-torch._dynamo.config.suppress_errors = True
-app = typer.Typer()
-
-torch._dynamo.config.disable = True
 
 configs = {
     "trivial": {"depth": 1},
@@ -71,15 +66,8 @@ def main(
         param_norm_win_condition(1e-7 * win_condition_multiplier, model.offset),
         steps,
         opt[0],
-        dtype[0],
-        size,
-        batch,
         weight_decay,
-        method[0],
-        1,
-        depth,
         failure_threshold=depth * 2,
-        base_lr=1e-3,
         trials=trials,
     )
 
