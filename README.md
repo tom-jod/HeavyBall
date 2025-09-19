@@ -41,7 +41,7 @@ conda activate HeavyBall
 > ```bash
 > python3 benchmark/benchmark_runner.py MNIST.py "AdamW, SFAdamW" --runs-per-optimizer=3 --runtime-limit=99999 --trials=20 --step-hint=27000 --steps=27000
 > ```
-> Alternatively to use time based stopping rather than step based stopping, set steps to 0 and specify the runtime and step hint:
+> Alternatively to use time based stopping rather than step based stopping, set steps to 0 and specify the runtime and step hint (this script has used "CUDA_VISIBLE_DEVICES": "0" to select the first available GPU, change this as needed):
 > ```bash
 > python3 benchmark/benchmark_runner.py MNIST.py "AdamW, SFAdamW" --runs-per-optimizer=3 --runtime-limit=472 --trials=20 --step-hint=27000 --steps=0
 > ```
@@ -49,9 +49,6 @@ conda activate HeavyBall
 > 
 > To estimate the effective condition number using Stochastic Lanczos Quadrature add the flag: --estimate-condition-number
 > (Both these flags add on a considerable amount of time for a trial to run)
-> 
-> The condition number estimation can be changed to produce the full true eigenspectrum by changing the estimate flag within the body of the objective's inner method (within benchmark/utils.py) to False and setting the visualisation flag to False.
-> Similarly, a visualisation comparing the true spectrum to the Rayleigh and Lanczos estimates can be created by setting the estimate flag to False and visualisation flag to True.
 >
 >  Reproduce all the original HeavyBall toy problem benchmarks with:
 > ```bash
