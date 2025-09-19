@@ -1,6 +1,13 @@
 
 ## Quickstart
-After cloning the repository, activate the virtual environment using conda:
+After cloning the repository, ensure that you are on the tom_pr branch by running:
+
+```bash
+git checkout tom_pr
+git pull
+```
+
+Then activate the virtual environment using conda:
 
 ```bash
 conda env create -f environment.yml
